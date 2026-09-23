@@ -1,0 +1,38 @@
+# Two containers from the same image sharing the index and PDFs:
+#   app           - the Streamlit UI
+#   ingest-worker - rescans data/pdfs and re-ingests on a schedule, so new PDFs reach the app
+#                   without a restart (the app hot-reloads its caches when the index changes)
+#
+#   docker compose up -d
+#
+# Mounts (host paths are examples; adjust to where .env, the index, PDFs and model cache live):
+#   ./.env            secrets: Gemini key + SQL Server credentials
+#   ./data/index      Chroma + BM25 + registry (shared writer = worker, readers = app)
+#   ./data/pdfs       source documents
+#   ~/.cache/huggingface -> /models   bge-m3 + reranker weights (~6.5 GB), so neither container re-downloads
+services:
+  app:
+    build: .
+    image: bitopi-assistant:1.0
+    ports:
+      - "8501:8501"
+    env_file: .env
+    volumes:
+      - ./data/index:/app/data/index
+      - ./data/pdfs:/app/data/pdfs
+      - ${HF_CACHE:-~/.cache/huggingface}:/models
+    mem_limit: 8g
+    restart: unless-stopped
+
+  ingest-worker:
+    image: bitopi-assistant:1.0
+    depends_on:
+      - app
+    command: ["python", "scripts/ingest_worker.py"]
+    env_file: .env
+    volumes:
+      - ./data/index:/app/data/index
+      - ./data/pdfs:/app/data/pdfs
+      - ${HF_CACHE:-~/.cache/huggingface}:/models
+    mem_limit: 8g
+    restart: unless-stopped

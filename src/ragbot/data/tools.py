@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,9 +26,15 @@ from .virtual import rewrite_virtual
 
 # ---------------------------------------------------------------- fixed tools
 def load_fixed_tools(path: Path | None = None) -> list[dict[str, Any]]:
+    """Cached on the file's mtime — this is read on every data question (and now on every route)."""
     path = path or settings().path("fixed_tools")
     if not path.exists():
         return []
+    return list(_load_fixed_tools(path, path.stat().st_mtime_ns))
+
+
+@lru_cache(maxsize=2)
+def _load_fixed_tools(path: Path, _mtime: int) -> list[dict[str, Any]]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or []
 
 

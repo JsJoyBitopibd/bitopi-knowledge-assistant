@@ -7,25 +7,50 @@ from datetime import datetime
 from typing import Any, Optional
 
 from ..config import log_dir, prompt, settings
+from ..data.errors import friendly_llm
 from ..llm import get_chat
+from ..llm.base import LLMError
 from ..models import Answer, Chunk, QueryResult, Usage
 from ..retrieve.retriever import retrieve
 from .citations import normalize_markers, sources_block, verify
 from .rewrite import standalone_question
-from .router import route
+from .router import _DOC_HINT, route
 
 _MARK = re.compile(r"\[([PD]\d+)\]")
 
 
+def _route(q: str, user: str) -> str:
+    """A fixed tool matching the question is proof it is a database query, so skip the routing LLM call
+    (unless a document noun is also present, where the model should still decide documents-vs-both)."""
+    from ..data.tools import load_fixed_tools, match_fixed_tool  # lazy: DB deps optional at import time
+    if match_fixed_tool(q, load_fixed_tools()) and not _DOC_HINT.search(q):
+        return "data"
+    return route(q, user)
+
+
 def answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
            user: str = "") -> Answer:
+    """Public entry point. Translates a provider failure (quota, timeout, auth) into a soft answer the
+    UI can show instead of a traceback; the raw cause stays in warnings and the call log."""
+    try:
+        return _answer(question, history, where, user)
+    except LLMError as e:
+        out = Answer(text=friendly_llm(e.kind), question=question, error_kind=e.kind, not_found=True)
+        out.warnings.append(f"llm {e.kind}: {e}")
+        return _log(out, user)
+
+
+def _answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
+            user: str = "") -> Answer:
+    from ..index_version import refresh_if_changed
+    refresh_if_changed()   # pick up a background ingest without a restart (cheap: one stat)
     s = settings()
     nf = s["answer.not_found_text"]
     usage = Usage()
     history = history or []
 
     q = standalone_question(question, history, user) if history else question
-    r = route(q, user)
+    r = _route(q, user)
     out = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
 
     if r == "refuse":
@@ -134,7 +159,8 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str) -> None:
                     "", "", "", f"thumb={thumb} | {answer_text[:200]}"])
 
 
-_CHAT_HEADER = ["ts", "user", "route", "question", "rewritten", "not_found", "refs", "in_tokens", "out_tokens", "warnings"]
+_CHAT_HEADER = ["ts", "user", "route", "question", "rewritten", "not_found", "refs", "in_tokens", "out_tokens",
+                "warnings", "error_kind"]
 
 
 def _log(a: Answer, user: str) -> Answer:
@@ -146,7 +172,7 @@ def _log(a: Answer, user: str) -> Answer:
             w.writerow(_CHAT_HEADER)
         w.writerow([datetime.now().isoformat(timespec="seconds"), user, a.route, a.question, a.rewritten_question,
                     a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
-                    a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings)])
+                    a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind])
     return a
 
 

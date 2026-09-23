@@ -27,9 +27,13 @@ class OpenAICompatChat(ChatModel):
         self.tokens_param = tokens_param or "max_tokens"
         # max_retries generous: the free tier of some providers (e.g. Gemini) allows as few as
         # 5 requests/minute, and the SDK's own backoff honors a 429's Retry-After when present.
+        # Retries/timeout kept modest: on the free tier a 429 carries a long Retry-After, so the old
+        # max_retries=8 x 90 s meant a quota failure hung for many minutes before surfacing. Two
+        # retries and a 30 s timeout fail fast enough for the UI to show a friendly message.
         self.client = OpenAI(base_url=base_url or os.getenv("LLM_BASE_URL") or None,
-                             api_key=api_key or env("LLM_API_KEY"), max_retries=8,
-                             timeout=timeout or float(os.getenv("LLM_TIMEOUT", "90")))
+                             api_key=api_key or env("LLM_API_KEY"),
+                             max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+                             timeout=timeout or float(os.getenv("LLM_TIMEOUT", "30")))
 
     def _chat(self, messages, system, max_tokens, temperature) -> ChatReply:
         msgs = ([{"role": "system", "content": system}] if system else []) + messages
@@ -45,3 +49,13 @@ class OpenAICompatChat(ChatModel):
         return ChatReply(text=text, input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
                          output_tokens=getattr(usage, "completion_tokens", 0) or 0,
                          model=r.model or self.model, stop_reason=c.finish_reason or "", raw=None)
+
+    def _classify(self, exc: Exception) -> str:
+        import openai
+        if isinstance(exc, openai.RateLimitError):
+            return "quota"
+        if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
+            return "timeout"
+        if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
+            return "auth"
+        return "other"

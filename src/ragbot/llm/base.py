@@ -16,6 +16,18 @@ from pydantic import BaseModel
 from ..config import log_dir
 
 
+class LLMError(RuntimeError):
+    """A provider call that failed for a reason the UI should explain, not a raw traceback.
+
+    `kind` is one of quota | timeout | auth | other. Adapters map their vendor SDK's exceptions to a
+    kind via their own `_classify()` so that no vendor exception type leaks past src/ragbot/llm/
+    (non-negotiable #5)."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 class ChatReply(BaseModel):
     text: str
     input_tokens: int = 0
@@ -33,11 +45,24 @@ class ChatModel(ABC):
     @abstractmethod
     def _chat(self, messages: list[dict], system: str, max_tokens: int, temperature: float) -> ChatReply: ...
 
+    def _classify(self, exc: Exception) -> str:
+        """Map a vendor SDK exception to an LLMError kind. Overridden per adapter; the base default
+        treats everything as 'other'."""
+        return "other"
+
     def chat(self, messages: list[dict], system: str = "", max_tokens: int = 700, temperature: float = 0.0,
              *, purpose: str = "answer", sent_chunk_ids: list[str] | None = None, sent_rows: int = 0,
              user: str = "") -> ChatReply:
         t0 = time.perf_counter()
-        reply = self._chat(messages, system, max_tokens, temperature)
+        try:
+            reply = self._chat(messages, system, max_tokens, temperature)
+        except LLMError:
+            raise
+        except Exception as e:
+            kind = self._classify(e)
+            _log_call(self.name, ChatReply(stop_reason=f"error:{kind}"), time.perf_counter() - t0,
+                      purpose, sent_chunk_ids or [], sent_rows, user)
+            raise LLMError(kind, str(e)[:300]) from e
         _log_call(self.name, reply, time.perf_counter() - t0, purpose, sent_chunk_ids or [], sent_rows, user)
         return reply
 

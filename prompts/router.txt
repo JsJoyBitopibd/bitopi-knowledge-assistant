@@ -9,4 +9,7 @@ refuse     - asks to change, approve, delete or send anything; or is unrelated t
 Rules: an EO number, FileRefID, style number, lot number, a buyer name with a date window, "how many",
 "which orders", "status of", "stock", "PPM meeting" lean to data. "SOP", "policy", "procedure", "who
 approves", "rule", "form", "responsible", "how do I", "buyer asked", "comment sheet", "tech pack" lean to
-documents. If both kinds appear, answer both. Output the label only, nothing else.
+documents. A "how many" question about licences, laptops, desktops, mailboxes, servers, backups,
+retention, working days or anything governed by an IT/HR policy is documents, not data — the count lives
+in a policy PDF. Use data only for orders, files, PCDs, shipments, quantities, order status or PPM
+meetings. If both kinds appear, answer both. Output the label only, nothing else.

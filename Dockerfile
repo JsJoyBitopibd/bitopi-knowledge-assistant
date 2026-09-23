@@ -33,9 +33,15 @@ COPY pytest.ini ./
 
 ENV HF_HOME=/models \
     PYTHONPATH=/app/src \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TOKENIZERS_PARALLELISM=false
 
 EXPOSE 8501
+
+# start-period is generous: the app loads ~6.5 GB of models before it serves the health endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+  CMD curl -fsS http://localhost:8501/_stcore/health || exit 1
+
 CMD ["streamlit", "run", "src/ragbot/app.py", \
      "--server.port", "8501", "--server.address", "0.0.0.0", \
      "--server.headless", "true", "--browser.gatherUsageStats", "false"]

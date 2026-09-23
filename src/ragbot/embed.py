@@ -13,6 +13,10 @@ import numpy as np
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
 RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 EMBED_BACKEND = os.getenv("EMBED_BACKEND", "sentence_transformers")
+# Cross-encoder cost grows with the square of the sequence length, so 512 instead of the model's
+# 1024 roughly quarters the CPU time. Chunks are ~600 tokens, so a 512-token window covers the
+# question plus most of the chunk; raise it only if scripts/hit_rate.py regresses.
+RERANK_MAX_LENGTH = int(os.getenv("RERANK_MAX_LENGTH", "512"))
 
 
 class Embedder:
@@ -25,6 +29,7 @@ class Embedder:
             self._impl = self._ollama
         else:
             from sentence_transformers import SentenceTransformer
+            _use_all_cpu_threads()
             self._st = SentenceTransformer(EMBED_MODEL)
             self._impl = self._st_embed
 
@@ -49,12 +54,28 @@ class Reranker:
 
     def __init__(self) -> None:
         from sentence_transformers import CrossEncoder
-        self._ce = CrossEncoder(RERANK_MODEL, max_length=1024)
+        _use_all_cpu_threads()
+        self._ce = CrossEncoder(RERANK_MODEL, max_length=RERANK_MAX_LENGTH)
 
     def score(self, question: str, texts: list[str]) -> list[float]:
         if not texts:
             return []
-        return [float(s) for s in self._ce.predict([(question, t) for t in texts])]
+        # One batch: the candidate list is small (retrieval.rerank_candidates) and splitting it
+        # into the default batches of 32 only adds overhead.
+        pairs = [(question, t) for t in texts]
+        return [float(s) for s in self._ce.predict(pairs, batch_size=len(pairs), show_progress_bar=False)]
+
+
+def _use_all_cpu_threads() -> None:
+    """torch defaults to a conservative thread count inside containers; the box has no GPU, so
+    the reranker and the embedder should use every core."""
+    try:
+        import torch
+        n = os.cpu_count() or 1
+        if torch.get_num_threads() < n:
+            torch.set_num_threads(n)
+    except Exception:  # torch missing (ollama backend) or thread count already fixed by a run
+        pass
 
 
 @lru_cache(maxsize=1)

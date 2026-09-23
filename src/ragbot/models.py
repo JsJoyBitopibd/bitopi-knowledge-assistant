@@ -106,3 +106,4 @@ class Answer(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     warnings: list[str] = Field(default_factory=list)
     sources_text: str = ""       # the <sources> block sent to the model (for eval judging; never logged)
+    error_kind: str = ""         # "" on success; else quota|timeout|auth|db|other — UI shows a soft message

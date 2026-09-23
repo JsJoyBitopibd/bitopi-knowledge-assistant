@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +69,19 @@ class Catalog:
 
 
 def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
-    """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded. Definitions are validated."""
-    from .virtual import validate_definition  # lazy: avoids a cycle at import time
+    """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded. Definitions are validated.
+
+    Cached on the folder's file mtimes: parsing the YAML and re-validating every definition with
+    sqlglot used to run on every data question. Editing a catalog file invalidates the cache.
+    """
     folder = folder or settings().path("catalog_dir")
+    stamp = tuple(sorted((f.name, f.stat().st_mtime_ns) for f in folder.glob("*.yaml")))
+    return dict(_load_catalogs(folder, stamp))   # copy: callers must not mutate the cached mapping
+
+
+@lru_cache(maxsize=4)
+def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
+    from .virtual import validate_definition  # lazy: avoids a cycle at import time
     cats: dict[str, Catalog] = {}
     for f in sorted(folder.glob("*.yaml")):
         if f.name.endswith(".example.yaml"):

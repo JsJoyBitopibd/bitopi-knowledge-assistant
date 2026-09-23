@@ -9,5 +9,7 @@ for p in ("chroma", "registry.db", "bm25.pkl"):
     target = idx / p
     if target.is_dir(): shutil.rmtree(target)
     elif target.exists(): target.unlink()
+from ragbot.store import get_store
+get_store.cache_clear()   # the cached client still points at the directory just deleted
 from ragbot.ingest.pipeline import ingest_folder
 print(ingest_folder())

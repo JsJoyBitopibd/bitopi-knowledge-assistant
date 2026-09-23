@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -160,5 +161,8 @@ class Registry:
         }
 
 
+@lru_cache(maxsize=1)
 def get_store() -> VectorStore:
+    """One ChromaStore per process: opening a PersistentClient costs ~100 ms, and retrieve()
+    used to pay that on every question. scripts/reindex.py clears this after deleting the index."""
     return ChromaStore()

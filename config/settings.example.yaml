@@ -11,6 +11,7 @@ ingest:
   chunk_min_chars: 400
   chunk_overlap_chars: 250
   embed_batch_size: 32
+  watch_interval_seconds: 300  # scripts/ingest_worker.py rescans data/pdfs this often
   ocr_min_text_chars: 50       # below this a page is treated as scanned
   header_footer_min_share: 0.5 # a line in the top/bottom 3 lines of >= this share of pages is a header/footer
 
@@ -18,7 +19,7 @@ retrieval:
   vector_top_k: 20
   keyword_top_k: 20
   rrf_k: 60
-  rerank_candidates: 20
+  rerank_candidates: 10   # CPU cross-encoder cost is linear in candidates; final_top_k is 6
   final_top_k: 6
   default_filters:
     superseded: false
@@ -43,3 +44,8 @@ answer:
 
 ui:
   title: "Bitopi Knowledge Assistant · pilot"
+  suggestions:
+    - "What is the PCD approval SOP?"
+    - "Which export orders ship this month?"
+    - "How many Kaspersky licences does the Group have?"
+    - "What is the password change policy?"
