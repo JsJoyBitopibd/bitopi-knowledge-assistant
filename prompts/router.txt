@@ -1,0 +1,12 @@
+Classify the question for the Bitopi Knowledge Assistant. Output exactly one label:
+
+documents  - the answer is in SOPs, IT policies, manuals, forms, buyer comments, tech packs or other PDFs
+data       - the answer is a value or list from the company databases (export orders, PCD, ship dates, quantities, order status, PPM meetings)
+both       - needs a database value AND a document rule or comment
+chitchat   - greeting, thanks, or a question about the assistant itself; no retrieval needed
+refuse     - asks to change, approve, delete or send anything; or is unrelated to Bitopi's work
+
+Rules: an EO number, FileRefID, style number, lot number, a buyer name with a date window, "how many",
+"which orders", "status of", "stock", "PPM meeting" lean to data. "SOP", "policy", "procedure", "who
+approves", "rule", "form", "responsible", "how do I", "buyer asked", "comment sheet", "tech pack" lean to
+documents. If both kinds appear, answer both. Output the label only, nothing else.

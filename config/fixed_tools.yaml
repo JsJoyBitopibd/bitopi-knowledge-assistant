@@ -1,0 +1,138 @@
+# Hand-written parameterised SQL for the most common data questions.
+# Matched by regex against the (rewritten) question, tried IN THIS ORDER — the first match wins
+# (see match_fixed_tool in src/ragbot/data/tools.py), so more specific tools are listed before the
+# broad catch-alls (eo_by_id, eo_by_po) that would otherwise shadow them (a real bug this ordering
+# fixes: "PCD history for TAL-17-382-1" contains both an order code and the word "pcd", so it used
+# to match the generic eo_by_id before ever reaching pcd_history_by_eo).
+# Params are extracted by regex groups or by type: date_window (resolved by tools._date_window:
+# today / this week / next week / next N days). Every tool declares its `database:` — validated
+# against the loaded catalog list at run time.
+
+- name: pcd_history_by_eo
+  database: BitopiSplint
+  description: History of PCD and ship-date changes for one export order.
+  match: '(?i)\b(pcd|cut\s*date|ship\s*date)\b.*\b(history|change|changes|changed)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b|\bhistory\b.*\b(pcd|ship\s*date)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'
+  params:
+    eo: { from_group: [3, 5] }
+  sql: |
+    SELECT TOP (50)
+      ExportOrderID, VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated
+    FROM rag.vw_PCDChangeHistory
+    WHERE ExportOrderID = @eo
+    ORDER BY VersionNo
+
+- name: orders_count_by_factory_ship_window
+  database: BitopiSplint
+  description: Count of orders with ship date in a date window for one factory.
+  match: '(?i)\bhow many\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(ship|shipping|shipment)\b.*\b(this week|next week|next \d+ days)\b'
+  params:
+    factory: { from_group: 1, upper: true }
+    window:  { from_group: 3, type: date_window }
+  sql: |
+    SELECT COUNT(*) AS Orders
+    FROM rag.vw_ExportOrder
+    WHERE Factory = @factory AND ShipDate >= @from AND ShipDate < @to
+
+- name: ppm_meetings_count_by_factory_window
+  database: Production
+  description: Count of PPM meetings for one factory in a date window.
+  match: '(?i)\bhow many\b.*\bppm\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(today|this week|next week|next \d+ days)\b'
+  params:
+    factory: { from_group: 1, upper: true }
+    window:  { from_group: 2, type: date_window }
+  sql: |
+    SELECT COUNT(*) AS Meetings
+    FROM rag.vw_PPMMeeting
+    WHERE FactoryID = @factory AND PPMDate >= @from AND PPMDate < @to
+
+- name: orders_by_factory_pcd_window
+  database: BitopiSplint
+  description: Confirmed orders with PCD in a date window for one factory (TAL / RHL / BGL / KTL).
+  match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\bPCD\b.*\b(this week|next week|next \d+ days)\b|\b(this week|next week|next \d+ days)\b.*\bPCD\b.*\b(TAL|RHL|BGL|KTL)\b'
+  params:
+    factory: { from_group: [1, 4], upper: true }
+    window:  { from_group: [2, 3], type: date_window }
+  sql: |
+    SELECT TOP (200)
+      ExportOrderID, ExportPONo, Buyer, StyleName, OrderQty,
+      PCD, ShipDate, ExportOrderStatus, ShipmentStatus
+    FROM rag.vw_ExportOrder
+    WHERE Factory = @factory AND PCD >= @from AND PCD < @to
+    ORDER BY PCD, ExportOrderID
+
+- name: orders_by_factory_ship_window
+  database: BitopiSplint
+  description: Orders with ship date in a date window for one factory.
+  match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\b(ship(?:ment|ping|-|\s+)?date|shipping)\b.*\b(this week|next week|next \d+ days)\b'
+  params:
+    factory: { from_group: 1, upper: true }
+    window:  { from_group: 3, type: date_window }
+  sql: |
+    SELECT TOP (200)
+      ExportOrderID, ExportPONo, Buyer, StyleName, OrderQty,
+      PCD, ShipDate, ShipmentStatus
+    FROM rag.vw_ExportOrder
+    WHERE Factory = @factory AND ShipDate >= @from AND ShipDate < @to
+    ORDER BY ShipDate, ExportOrderID
+
+- name: ppm_meetings_by_factory_window
+  database: Production
+  description: PPM meetings for one factory in a date window.
+  match: '(?i)\bppm(?:\s+meetings?)?\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(today|this week|next week|next \d+ days)\b'
+  params:
+    factory: { from_group: 1, upper: true }
+    window:  { from_group: 2, type: date_window }
+  sql: |
+    SELECT TOP (200)
+      MeetingId, FileRefID, ExportPONumber, StyleID, OrderQuantity,
+      PPMDate, PPMTime, LastPCD, LastShipmentDate, Status, Location
+    FROM rag.vw_PPMMeeting
+    WHERE FactoryID = @factory AND PPMDate >= @from AND PPMDate < @to
+    ORDER BY PPMDate, MeetingId
+
+- name: orders_by_fileref
+  database: BitopiSplint
+  description: >
+    All export orders under a file reference. FileRefNo is free text in this data (e.g.
+    "121394 SS17", "FKS27DDRAYE//KIABI") rather than a structured code, so this only fires when
+    the question quotes the value explicitly; anything else is left to generated SQL.
+  match: "(?i)\\bfile\\s*ref(?:erence)?(?:\\s*(?:no\\.?|number))?\\s*[:#]?\\s*['\"“]([^'\"”]{2,60})['\"”]"
+  params:
+    fr: { from_group: 1 }
+  sql: |
+    SELECT TOP (100)
+      ExportOrderID, ExportPONo, Buyer, StyleName, OrderQty,
+      PCD, ShipDate, ExportOrderStatus, ShipmentStatus, Factory
+    FROM rag.vw_ExportOrder
+    WHERE FileRefNo = @fr
+    ORDER BY PCD, ExportOrderID
+
+- name: eo_by_po
+  database: BitopiSplint
+  description: PCD, ship date, buyer and status for an export order by buyer PO number.
+  match: '(?i)\b(?:PO|Export\s*PO|Buyer\s*PO)\s*(?:number\s*)?([A-Z0-9][A-Z0-9/_-]{2,30})\b'
+  requires: ['(?i)\b(pcd|ship\s*date|status|order|buyer|factory)\b']
+  params:
+    po: { from_group: 1 }
+  sql: |
+    SELECT TOP (10)
+      ExportOrderID, ExportPONo, Buyer, StyleName, OrderQty,
+      PCD, ShipDate, ExportOrderStatus, ShipmentStatus, Factory
+    FROM rag.vw_ExportOrder
+    WHERE ExportPONo = @po
+    ORDER BY PCD
+
+- name: eo_by_id
+  database: BitopiSplint
+  description: PCD, ship date, buyer and status for one export order (by ExportOrderID like TAL-17-382-1).
+  match: '(?i)\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'
+  requires: ['(?i)\b(pcd|ship\s*date|status|order|buyer|factory|style)\b']
+  params:
+    eo: { from_group: 1 }
+  sql: |
+    SELECT TOP (1)
+      ExportOrderID, ExportPONo, Buyer, BuyerStyleNo, StyleName, OrderQty,
+      PCD, PlanCutOffDate, ShipDate, ExfactoryDate,
+      ExportOrderStatus, ShipmentStatus, Factory, Merchandiser
+    FROM rag.vw_ExportOrder
+    WHERE ExportOrderID = @eo

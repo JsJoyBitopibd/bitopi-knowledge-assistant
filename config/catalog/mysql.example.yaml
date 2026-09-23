@@ -1,0 +1,24 @@
+# Copy to mysql.yaml. Describe the MySQL system's rag.* views here. Fill in once the system is known.
+database: inventory
+dialect: mysql
+connection_env: MYSQL_CONN
+rules:
+  - Use LIMIT n, never TOP. Dates as half-open ranges: col >= :from AND col < :to.
+  - Today is {today}.
+  - Only reference views listed below, always with the rag. prefix.
+views:
+  - name: rag.vw_fabric_stock
+    grain: one row per fabric lot per warehouse
+    description: Current fabric stock by lot.
+    key_columns: [LotNo, Warehouse]
+    columns:
+      LotNo: fabric lot number, e.g. 88
+      Warehouse: store code
+      Article: fabric article/description
+      QtyOnHand: metres or kg on hand
+      Unit: m or kg
+      LastReceiptDate: date of the last GRN for this lot
+examples:
+  - question: What is the stock of fabric lot 88?
+    sql: |
+      SELECT LotNo, Warehouse, Article, QtyOnHand, Unit FROM rag.vw_fabric_stock WHERE LotNo = :lot LIMIT 200

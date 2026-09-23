@@ -1,0 +1,148 @@
+# Production: Pre-Production Meeting (PPM) data. Virtual views over Production.PPM.* tables — no DDL
+# is run on the server. See docs/DATA_ACCESS.md.
+database: Production
+description: Pre-Production Meeting (PPM) records, reschedule history and department completion checklists.
+dialect: tsql
+connection_env: SQLSERVER_CONN_PRODUCTION
+keywords: [ppm, meeting, meetings, preproduction, pre-production, cutting, technical, sample, gpq,
+           reschedule, checklist, department, factory, unit]
+rules:
+  - Use TOP (n), never LIMIT. Use half-open date ranges (col >= @from AND col < @to).
+  - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.
+  - Reference views only as rag.<name> (rag.vw_PPMMeeting, rag.vw_PPMMeetingReschedule, rag.vw_PPMDepartmentChecklist).
+  - If a question needs a column not listed here, return "System doesn't have the data."
+
+views:
+  - name: rag.vw_PPMMeeting
+    grain: one row per PPM meeting; MeetingId is unique.
+    description: >
+      Pre-Production Meeting (PPM) records with the factory, unit, style, file, PO number, order quantity,
+      meeting date, first/last PCD, first/last shipment date, meeting status and cut-approval status.
+    key_columns: [MeetingId, FileRefID]
+    columns:
+      MeetingId: meeting key
+      FactoryID: "factory short name — observed values TAL, BGL, RHL; raw company code for other units"
+      Unit: unit code
+      BuyerID: buyer id (Contact_Master.ContactID in BitopiSplint)
+      StyleID: style id
+      FileRefID: file reference (joins to rag.vw_ExportOrder.FileRefID)
+      ExportPONumber: buyer PO number
+      OrderQuantity: order quantity in pieces
+      PPMDate: meeting date
+      PPMTime: meeting time (varchar)
+      FirstPCD: first PCD associated with the meeting
+      LastPCD: latest PCD associated with the meeting
+      FirstShipmentDate: first shipment date
+      LastShipmentDate: last shipment date
+      Status: Approved / Cancelled / Pending
+      Location: meeting location
+      GPQApprovalStatus: GPQ (green production quality) approval status — observed value "Pending"
+      InitialCutApprovalStatus: initial-cut approval status — Approved / Rejected / not yet set
+      InitialCutApprovalQty: initial-cut approved quantity
+      BulkCutApprovalStatus: bulk-cut approval status — Approved / not yet set
+      BulkCutApprovalQty: bulk-cut approved quantity
+      Season: season
+    definition: |
+      SELECT
+        m.MeetingId,
+        CASE m.FactoryID
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE m.FactoryID
+        END AS FactoryID,
+        m.Unit,
+        m.BuyerID,
+        m.StyleID,
+        m.FileRefID,
+        m.ExportPONumber,
+        m.OrderQuantity,
+        CAST(m.PPMDate AS date)             AS PPMDate,
+        m.PPMTime,
+        CAST(m.FirstPCD AS date)            AS FirstPCD,
+        CAST(m.LastPCD AS date)             AS LastPCD,
+        CAST(m.FirstShipmentDate AS date)   AS FirstShipmentDate,
+        CAST(m.LastShipmentDate AS date)    AS LastShipmentDate,
+        m.Status,
+        m.Location,
+        m.GPQApprovalStatus,
+        m.InitialCutApprovalStatus,
+        m.InitialCutApprovalQty,
+        m.BulkCutApprovalStatus,
+        m.BulkCutApprovalQty,
+        m.Season
+      FROM PPM.PPMMeetings m
+
+  - name: rag.vw_PPMMeetingReschedule
+    grain: one row per reschedule log entry.
+    description: History of PPM meeting reschedules with old/new dates and remarks.
+    key_columns: [LogId, MeetingId]
+    columns:
+      LogId: reschedule log id
+      MeetingId: meeting key
+      OldPPMDate: previous PPM date
+      NewPPMDate: new PPM date
+      OldPPMTime: previous time
+      NewPPMTime: new time
+      OldLocation: previous location
+      NewLocation: new location
+      OldPCD: PCD before reschedule
+      NewPCD: PCD after reschedule
+      Remarks: reason / remarks
+      CreatedBy: user who logged the reschedule
+      CreatedDate: log timestamp
+    definition: |
+      SELECT
+        r.LogId,
+        r.MeetingId,
+        CAST(r.OldPPMDate AS date) AS OldPPMDate,
+        CAST(r.NewPPMDate AS date) AS NewPPMDate,
+        r.OldPPMTime,
+        r.NewPPMTime,
+        r.OldLocation,
+        r.NewLocation,
+        CAST(r.OldPCD AS date) AS OldPCD,
+        CAST(r.NewPCD AS date) AS NewPCD,
+        r.Remarks,
+        r.CreatedBy,
+        CAST(r.CreatedDate AS date) AS CreatedDate
+      FROM PPM.PPMMeetingRescheduleLog r
+
+  - name: rag.vw_PPMDepartmentChecklist
+    grain: one row per checklist item per department per meeting.
+    description: Department completion checklist for each PPM meeting.
+    key_columns: [ChecklistItemId, MeetingId]
+    columns:
+      ChecklistItemId: item id
+      MeetingId: meeting key
+      DepartmentCode: department code
+      ChecklistItem: checklist item name
+      ItemDescription: description
+      IsRequired: whether the item is required (1/0)
+      IsCompleted: whether the item is completed (1/0)
+      CompletedDate: date completed
+      CompletedBy: user who completed the item
+    definition: |
+      SELECT
+        c.ChecklistItemId,
+        c.MeetingId,
+        c.DepartmentCode,
+        c.ChecklistItem,
+        c.ItemDescription,
+        c.IsRequired,
+        c.IsCompleted,
+        CAST(c.CompletedDate AS date) AS CompletedDate,
+        c.CompletedBy
+      FROM PPM.DepartmentCompletionChecklist c
+
+examples:
+  - question: How many PPM meetings are scheduled at TAL next week?
+    sql: |
+      SELECT COUNT(*) AS Meetings
+      FROM rag.vw_PPMMeeting
+      WHERE FactoryID = 'TAL' AND PPMDate >= @nextMon AND PPMDate < @nextMon2
+
+  - question: Reschedule history for a specific PPM meeting id.
+    sql: |
+      SELECT TOP (50) OldPPMDate, NewPPMDate, OldPCD, NewPCD, Remarks, CreatedBy, CreatedDate
+      FROM rag.vw_PPMMeetingReschedule
+      WHERE MeetingId = 'PPM-2026-000123'
+      ORDER BY CreatedDate DESC

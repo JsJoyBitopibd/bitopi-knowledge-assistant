@@ -1,0 +1,30 @@
+{"q": "Which clause covers exceptions to the IT policy?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 12}
+{"q": "Who approves an exception affecting the Data Centre or disaster recovery?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 12}
+{"q": "What is the password standard for user accounts?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 18}
+{"q": "How long before an unused account is disabled?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 18}
+{"q": "How long are service desk tickets retained?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 25}
+{"q": "What counts as a P1 critical incident?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 25, "accept": [["Bitopi_IT_Policy_Book.pdf", 47]]}
+{"q": "What are the SLA response and resolution targets by priority?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 47}
+{"q": "Is the guest Wi-Fi network isolated from corporate VLANs?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 20, "accept": [["Bitopi_IT_Policy_Book.pdf", 30]]}
+{"q": "What backbone capacity is planned for CHO and the factories?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 30, "accept": [["Bitopi_IT_Policy_Book.pdf", 44]]}
+{"q": "How often is the firewall rule base reviewed?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 30}
+{"q": "What are the backup retention defaults?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 35}
+{"q": "What is the RTO for corporate email?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 51, "accept": [["Bitopi_IT_Policy_Book.pdf", 50]]}
+{"q": "Which locations are covered by the IT Section?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 44}
+{"q": "Which escalation level is the Sr. General Manager and when is it engaged?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 48}
+{"q": "Which form is the IT Acceptable Use Acknowledgement?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 55, "accept": [["Bitopi_IT_Policy_Book.pdf", 5], ["Bitopi_IT_Policy_Book.pdf", 16], ["Bitopi_IT_Policy_Book.pdf", 23]]}
+{"q": "What are the three data classification levels?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 22}
+{"q": "What is the document number of the IT Policy Book?", "source": "Bitopi_IT_Policy_Book.pdf", "page": 2, "accept": [["Bitopi_IT_Policy_Book.pdf", 1], ["Bitopi_IT_Policy_Book.pdf", 5]]}
+{"q": "What does SOP-04 cover?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 12, "accept": [["Bitopi_IT_SOP_Manual_v2.pdf", 7]]}
+{"q": "What does SOP-20 cover?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 28, "accept": [["Bitopi_IT_SOP_Manual_v2.pdf", 8]]}
+{"q": "What laptop specification does a manager get?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 12}
+{"q": "How is a VPN user request approved?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 26}
+{"q": "How many Microsoft 365 licences does the Group hold?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 27}
+{"q": "How many laptops and desktops are in the endpoint fleet?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 39}
+{"q": "What is the minimum CCTV footage retention period?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 43}
+{"q": "Where is the IT Inventory Management system hosted?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 37}
+{"q": "What is required before an ERP change is deployed to production?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 47}
+{"q": "Which items are always GRN'd at Head Office rather than at the factory?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 36}
+{"q": "What is the SOP index frequency for the data centre inspection?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 7, "accept": [["Bitopi_IT_SOP_Manual_v2.pdf", 15]]}
+{"q": "How many Kaspersky endpoint licences are held?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 40}
+{"q": "What is the filename convention for network device config backups?", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 21}

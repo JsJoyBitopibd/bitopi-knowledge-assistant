@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+config/settings.yaml
+data/index/
+data/pdfs/**/*.pdf
+logs/*.csv
+logs/*.log
+.pytest_cache/
+# leftover duplicate of the original scaffold — not part of the project
+_to_delete/
+# eval answers quote real orders, buyers and PCDs; keep production data out of git
+eval/results/

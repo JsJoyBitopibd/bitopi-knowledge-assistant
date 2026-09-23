@@ -1,0 +1,45 @@
+paths:
+  pdf_root: data/pdfs
+  index_dir: data/index
+  prompts_dir: prompts
+  catalog_dir: config/catalog
+  fixed_tools: config/fixed_tools.yaml
+  golden_set: tests/golden.jsonl
+
+ingest:
+  chunk_target_chars: 2400     # ~600 tokens
+  chunk_min_chars: 400
+  chunk_overlap_chars: 250
+  embed_batch_size: 32
+  ocr_min_text_chars: 50       # below this a page is treated as scanned
+  header_footer_min_share: 0.5 # a line in the top/bottom 3 lines of >= this share of pages is a header/footer
+
+retrieval:
+  vector_top_k: 20
+  keyword_top_k: 20
+  rrf_k: 60
+  rerank_candidates: 20
+  final_top_k: 6
+  default_filters:
+    superseded: false
+
+data:
+  max_rows: 200
+  timeout_seconds: 10
+  max_rows_to_llm: 50
+  sql_retries: 1
+
+llm:
+  temperature: 0
+  max_tokens_answer: 2048      # Gemini counts thinking tokens against this budget
+  max_tokens_rewrite: 256
+  max_tokens_route: 64
+  max_tokens_sql: 1536
+  max_chunks_to_llm: 8
+
+answer:
+  not_found_text: "System doesn't have the data."
+  history_turns: 3
+
+ui:
+  title: "Bitopi Knowledge Assistant · pilot"

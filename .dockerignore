@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+config/settings.yaml
+data/index/
+logs/
+eval/
+_to_delete/
+.pytest_cache/
+.git/
+docs/schema/

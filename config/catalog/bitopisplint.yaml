@@ -1,0 +1,233 @@
+# BitopiSplint: order, file-reference and PCD data. Views are virtual (see docs/DATA_ACCESS.md):
+# `definition:` is a T-SQL SELECT over the real tables that the model never sees. At execution the
+# guarded SQL is wrapped as WITH rag_vw_<name> AS (<definition>) ... — no DDL is run on the server.
+database: BitopiSplint
+description: Export orders, buyer files, styles, colour/size breakdowns, PCD history and cancellation register.
+dialect: tsql
+connection_env: SQLSERVER_CONN_BITOPISPLINT
+keywords: [order, orders, eo, exportorder, po, exportpo, style, buyer, factory, merchandiser, pcd, ship, shipment,
+           file, fileref, filerefno, unit, tal, rhl, bgl, ktl, cancel, cancelled, colour, color, size]
+rules:
+  - Use TOP (n), never LIMIT. Use half-open date ranges (col >= @from AND col < @to).
+  - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.
+  - Reference views only as rag.<name> (rag.vw_ExportOrder, rag.vw_FileRef, ...).
+  - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
+  - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System doesn't have the data."
+
+views:
+  - name: rag.vw_ExportOrder
+    grain: one row per confirmed export order; ExportOrderID is unique.
+    description: >
+      Confirmed export orders with the plan cut date (PCD), ship date, factory, merchandiser, buyer name
+      and current status. Excludes financial values (rate, order value) intentionally.
+    key_columns: [ExportOrderID, ExportPONo]
+    columns:
+      ExportOrderID: internal order key, e.g. TAL-17-382-1
+      ExportOrderNo: numeric order sequence
+      ExportPONo: buyer's PO number as they quote it
+      FileRefID: the file the order belongs to; joins rag.vw_FileRef
+      FileRefNo: file reference number, e.g. FR-17-29
+      Buyer: buyer name (from Contact_Master)
+      BuyerStyleNo: buyer's style number
+      StyleName: internal style name
+      OrderQty: pieces (numeric)
+      UOM: unit of measure (pcs typically)
+      PCD: planned cut date
+      PlanCutOffDate: planning cut-off date
+      ShipDate: planned shipment date
+      ExfactoryDate: planned ex-factory date
+      ExportOrderStatus: ACTIVE / APPROVED FOR SHIPMENT / PENDING / PRODUCTION COMPLETE / READY FOR SHIPMENT / RUNNING / TO CLOSE / CLOSED / CANCELLED
+      ExportOrderCategory: ALLOTED / CONFIRMED / PROJECTED
+      ShipmentStatus: TO SHIP / SHIPPED / SHORT SHIPPED / CANCELLED
+      Factory: factory short name — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
+      Merchandiser: merchandiser name from the file
+      Season: buyer season
+      PCDConfirmation: whether the PCD has been confirmed (1 / 0)
+    definition: |
+      SELECT
+        eo.ExportOrderID,
+        eo.ExportOrderNo,
+        eo.ExportPONo,
+        eo.FileRefID,
+        fr.FileRefNo,
+        buyer.ContactName        AS Buyer,
+        eo.BuyerStyleNo,
+        sm.StyleName,
+        eo.OrderQty,
+        eo.UOM,
+        CAST(eo.PCD AS date)             AS PCD,
+        CAST(eo.PlanCutOffDate AS date)  AS PlanCutOffDate,
+        CAST(eo.ShipDate AS date)        AS ShipDate,
+        CAST(eo.ExfactoryDate AS date)   AS ExfactoryDate,
+        eo.ExportOrderStatus,
+        eo.ExportOrderCategory,
+        eo.ShipmentStatus,
+        CASE fr.Factory
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE fr.Factory
+        END AS Factory,
+        fr.Merchandiser,
+        fr.Season,
+        eo.PCDConfirmation
+      FROM dbo.ExportOrder eo
+      LEFT JOIN dbo.FileRef fr        ON fr.FileRefID  = eo.FileRefID
+      LEFT JOIN dbo.Contact_Master buyer ON buyer.ContactID = fr.Buyer
+      LEFT JOIN dbo.Style_Master sm   ON sm.StyleId    = eo.StyleID
+
+  - name: rag.vw_FileRef
+    grain: one row per file reference (order file); FileRefID is unique.
+    description: >
+      Buyer file references with product category, fabric/trims in-house dates and current status.
+      One file usually spans several export orders.
+    key_columns: [FileRefID, FileRefNo]
+    columns:
+      FileRefID: internal file key
+      FileRefNo: file reference number, e.g. FR-17-29
+      Buyer: buyer name
+      BuyerDepartment: buyer department
+      ProductCategory: product category
+      FileRefDate: file creation date
+      LastDeliveryDate: last delivery date on file
+      OrderQty: total order quantity on the file
+      FileStatus: ACTIVE / PENDING / CLOSED / CANCELLED
+      OrderType: order type
+      Factory: factory short name — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
+      Merchandiser: merchandiser name
+      StyleName: primary style name
+      Season: buyer season
+      FabricFirstInhanseDate: date fabric first arrived in-house
+      FabricSecondInhanseDate: date of second fabric receipt
+      TrimsFirstInhanseDate: date trims first arrived in-house
+      TrimsSecondInhanseDate: date of second trims receipt
+    definition: |
+      SELECT
+        fr.FileRefID,
+        fr.FileRefNo,
+        buyer.ContactName        AS Buyer,
+        fr.BuyerDepartment,
+        fr.ProductCategory,
+        CAST(fr.FileRefDate      AS date) AS FileRefDate,
+        CAST(fr.LastDeliveryDate AS date) AS LastDeliveryDate,
+        fr.OrderQty,
+        fr.FileStatus,
+        fr.OrderType,
+        CASE fr.Factory
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE fr.Factory
+        END AS Factory,
+        fr.Merchandiser,
+        sm.StyleName,
+        fr.Season,
+        CAST(fr.FabricFirstInhanseDate  AS date) AS FabricFirstInhanseDate,
+        CAST(fr.FabricSecondInhanseDate AS date) AS FabricSecondInhanseDate,
+        CAST(fr.TrimsFirstInhanseDate   AS date) AS TrimsFirstInhanseDate,
+        CAST(fr.TrimsSecondInhanseDate  AS date) AS TrimsSecondInhanseDate
+      FROM dbo.FileRef fr
+      LEFT JOIN dbo.Contact_Master buyer ON buyer.ContactID = fr.Buyer
+      LEFT JOIN dbo.Style_Master sm      ON sm.StyleId      = fr.StyleID
+
+  - name: rag.vw_ExportOrderColorSize
+    grain: one row per export order per colour per size.
+    description: Breakdown of an export order into colours and sizes with quantities.
+    key_columns: [ExportOrderID, ColorName, SizeCode]
+    columns:
+      ExportOrderID: order key
+      ExportPONo: buyer PO number
+      ColorName: colour name
+      Shade: shade
+      SizeCode: size (e.g. S, M, L, XL)
+      SizeQty: pieces for this colour/size
+      ColorQty: total pieces for the colour
+    definition: |
+      SELECT
+        eo.ExportOrderID,
+        eo.ExportPONo,
+        ec.ColorName,
+        ec.Shade,
+        ecs.SizeCode,
+        ecs.SizeQty,
+        ec.ColorQty
+      FROM dbo.ExportOrder eo
+      INNER JOIN dbo.ExportColor ec      ON ec.ExportOrderID = eo.ExportOrderID
+      INNER JOIN dbo.ExportColorSize ecs ON ecs.ExportColorID = ec.ExportColorID AND ecs.ExportOrderID = eo.ExportOrderID
+
+  - name: rag.vw_PCDChangeHistory
+    grain: one row per (ExportOrderID, version) of PCD/ship-date history.
+    description: >
+      History of PCD and ship-date changes from the ExportOrderBack audit table (4M+ rows).
+      KNOWN LIMITATION: ExportOrderBack has no index on ExportOrderID (only on Serial), so a
+      WHERE ExportOrderID = @eo filter is a full table scan and can exceed the 10s guard timeout.
+      A DBA should add CREATE INDEX IX_ExportOrderBack_ExportOrderID ON dbo.ExportOrderBack(ExportOrderID)
+      when materialising the real rag.* views (docs/DATA_ACCESS.md §6); until then this view may
+      time out on some orders.
+    key_columns: [ExportOrderID, VersionNo]
+    columns:
+      ExportOrderID: order key
+      VersionNo: audit version number
+      PCD: PCD value at that version
+      ShipDate: ship date at that version
+      UpdatedBy: username who updated
+      DateUpdated: date the change was recorded
+    definition: |
+      SELECT
+        eob.ExportOrderID,
+        eob.VersionNo,
+        CAST(eob.PCD      AS date) AS PCD,
+        CAST(eob.ShipDate AS date) AS ShipDate,
+        eob.UpdatedBy,
+        CAST(eob.DateUpdated AS date) AS DateUpdated
+      FROM dbo.ExportOrderBack eob
+
+  - name: rag.vw_CancelledExportOrder
+    grain: one row per cancelled export order.
+    description: Register of cancelled export orders with cancellation date and reason (remarks).
+    key_columns: [ExportOrderID]
+    columns:
+      ExportOrderID: order key
+      FileRefNo: file reference number
+      CompanyName: company / buyer name
+      UnitName: unit name
+      PCD: PCD at cancellation (stored as varchar in source; may be null)
+      ShipDate: ship date at cancellation (stored as varchar in source; may be null)
+      OrderQty: order quantity
+      ExportOrderStatus: last order status
+      CancelledBy: user who cancelled
+      CancelledDate: date of cancellation
+      Remarks: cancellation remarks / reason
+    definition: |
+      SELECT
+        cel.ExportOrderID,
+        cel.FileRefNo,
+        cel.CompanyName,
+        cel.UnitName,
+        cel.PCD,
+        cel.ShipDate,
+        cel.OrderQty,
+        cel.ExportOrderStatus,
+        cel.CancelledBy,
+        cel.CancelledDate,
+        cel.Remarks
+      FROM dbo.CancellExportOrderList cel
+
+examples:
+  - question: Which TAL orders have PCD next week?
+    sql: |
+      SELECT TOP (200) ExportOrderID, ExportPONo, Buyer, PCD, ShipDate, ShipmentStatus
+      FROM rag.vw_ExportOrder
+      WHERE Factory = 'TAL' AND PCD >= @nextMon AND PCD < @nextMon2
+      ORDER BY PCD, ExportOrderID
+
+  - question: How many orders per factory are shipping this month?
+    sql: |
+      SELECT Factory, COUNT(*) AS Orders
+      FROM rag.vw_ExportOrder
+      WHERE ShipDate >= @monthStart AND ShipDate < DATEADD(MONTH, 1, @monthStart)
+      GROUP BY Factory
+      ORDER BY Orders DESC
+
+  - question: Show the PCD change history for order TAL-17-382-1.
+    sql: |
+      SELECT TOP (50) VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated
+      FROM rag.vw_PCDChangeHistory
+      WHERE ExportOrderID = 'TAL-17-382-1'
+      ORDER BY VersionNo

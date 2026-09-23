@@ -1,0 +1,35 @@
+# Copy to fixed_tools.yaml. Hand-written parameterised SQL for the most common questions.
+# Matched by regex against the rewritten question (case-insensitive). No LLM-generated SQL here.
+- name: pcd_by_eo
+  database: Production.PPM
+  description: PCD, ship date and PPM status for one export order
+  match: '(?i)\bEO\s*(\d{2}-\d{4})\b'
+  requires: ['(?i)\b(pcd|cut date|ship date|status)\b']
+  params:
+    eo: { from_group: 1 }
+  sql: |
+    SELECT TOP (1) FileRefID, EONo, StyleNo, PlannedCutDate, ShipDate, Factory, PPMStatus
+    FROM rag.vw_ExportOrderPCD WHERE EONo = @eo
+
+- name: pcd_by_fileref
+  database: Production.PPM
+  description: PCD and status by FileRefID
+  match: '(?i)\bfile\s*ref(?:\s*id)?\s*#?\s*(\d{3,7})\b'
+  params:
+    fileref: { from_group: 1, type: int }
+  sql: |
+    SELECT TOP (1) FileRefID, EONo, StyleNo, PlannedCutDate, ShipDate, Factory, PPMStatus
+    FROM rag.vw_ExportOrderPCD WHERE FileRefID = @fileref
+
+- name: pcd_window_by_factory
+  database: Production.PPM
+  description: Orders with PCD in a date window for one factory
+  match: '(?i)\b(TAL|RHL|BGL)\b.*\bPCD\b.*\b(this week|next week|next \d+ days)\b'
+  params:
+    factory: { from_group: 1, upper: true }
+    window:  { from_group: 2, type: date_window }   # resolved by tools.py into @from/@to
+  sql: |
+    SELECT TOP (200) EONo, StyleNo, PlannedCutDate, ShipDate, PPMStatus
+    FROM rag.vw_ExportOrderPCD
+    WHERE Factory = @factory AND PlannedCutDate >= @from AND PlannedCutDate < @to
+    ORDER BY PlannedCutDate, EONo

@@ -1,0 +1,24 @@
+# core
+pydantic>=2.6
+python-dotenv>=1.0
+pyyaml>=6.0
+# LLM providers (adapters in src/ragbot/llm)
+openai>=1.50
+anthropic>=0.34
+# local embeddings + reranker (CPU)
+sentence-transformers>=3.0
+torch>=2.2
+ollama>=0.3          # optional backend
+# vector store + keyword search
+chromadb>=1.0,<2     # store.py uses the 1.x collection `configuration=` API
+rank_bm25>=0.2
+numpy>=1.26
+# PDF
+pymupdf>=1.24
+# databases (read-only)
+pyodbc>=5.1
+mysql-connector-python>=8.4
+sqlglot>=26.0
+# UI + eval + tests
+streamlit>=1.40
+pytest>=8.0

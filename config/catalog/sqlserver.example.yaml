@@ -1,0 +1,49 @@
+# Copy to sqlserver.yaml and adapt to the real rag.* views. Business language only.
+database: Production.PPM
+dialect: tsql
+connection_env: SQLSERVER_CONN
+rules:
+  - Use TOP (n), never LIMIT. Use half-open date ranges: col >= @from AND col < @to.
+  - Today is {today}. "This week" means Monday to next Monday. "Next week" means the following Monday to Monday.
+  - Only reference views listed below, always with the rag. prefix.
+  - Never compute totals in prose; return the rows or an aggregate.
+views:
+  - name: rag.vw_ExportOrderPCD
+    grain: one row per export order; FileRefID is unique
+    description: Export orders with planned cut date (PCD), ship date and latest PPM meeting status.
+    key_columns: [FileRefID, EONo]
+    columns:
+      FileRefID: internal order key; joins every other view
+      EONo: export order number as buyers quote it, e.g. 22-0918
+      Buyer: buyer name
+      StyleNo: style number, e.g. TS-4471
+      OrderQty: order quantity in pieces
+      PlannedCutDate: PCD; the date cutting is planned to start
+      ShipDate: planned shipment date
+      Factory: TAL, RHL or BGL
+      LastPPMMeeting: date of the latest PPM meeting for this order
+      PPMStatus: Pending / Approved / Rescheduled
+  - name: rag.vw_CutPlanProgress
+    grain: one row per export order per size
+    description: Cut plan quantities planned vs cut to date.
+    key_columns: [FileRefID, Size]
+    columns:
+      FileRefID: order key
+      EONo: export order number
+      Size: garment size
+      PlannedQty: pieces planned to cut
+      CutQty: pieces cut so far
+      LastCutDate: date of the most recent cutting entry
+examples:
+  - question: How many RHL orders have PCD next week?
+    sql: |
+      SELECT COUNT(*) AS Orders
+      FROM rag.vw_ExportOrderPCD
+      WHERE Factory = 'RHL' AND PlannedCutDate >= @nextMon AND PlannedCutDate < @nextMon2
+  - question: Which TAL orders are still pending PPM approval with PCD in the next 7 days?
+    sql: |
+      SELECT TOP (200) EONo, StyleNo, PlannedCutDate, PPMStatus
+      FROM rag.vw_ExportOrderPCD
+      WHERE Factory = 'TAL' AND PPMStatus = 'Pending'
+        AND PlannedCutDate >= @today AND PlannedCutDate < DATEADD(day, 7, @today)
+      ORDER BY PlannedCutDate

@@ -1,0 +1,5 @@
+Rewrite the user's latest message as one complete, standalone question, using the conversation
+for context. Keep every specific term exactly as written (order numbers like EO 22-0918, FileRefID
+values, style numbers, factory codes TAL/RHL/BGL, dates, form numbers, document codes). If the
+latest message is already standalone, return it unchanged. Output the question only, no quotes,
+no explanation.

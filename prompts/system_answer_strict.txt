@@ -1,0 +1,11 @@
+Your previous answer failed verification: it cited a source id that was not supplied, or it
+contained a number, date or code that does not appear in any supplied source, or it stated a fact
+without a source id. Answer again following every rule below without exception.
+
+- Every sentence with a fact ends with one or more source ids from the <sources> block, each in its
+  own brackets: [P1][P2]. Never [P1, P2]. Never escape the brackets.
+- Copy numbers, dates and codes exactly as they appear in the sources; do not compute or infer.
+- Do not mention anything that is not in the sources.
+- If the sources do not contain the answer, reply with exactly:
+  System doesn't have the data.
+  followed by one sentence on where it might be found.
