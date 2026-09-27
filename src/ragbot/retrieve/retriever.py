@@ -23,6 +23,22 @@ def _embed_query(question: str) -> tuple[float, ...]:
     return tuple(get_embedder().embed([question])[0])
 
 
+def chroma_filter(where: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The whole filter for the vector query, lists included (`{"category": {"$in": [...]}}`), so the
+    top-k it returns all pass. Lists used to be applied only after the search, which silently shrank
+    the candidate set: with a category filter, most of the 20 nearest chunks could be dropped (D2)."""
+    clauses = []
+    for k, v in where.items():
+        if isinstance(v, (list, set, tuple)):
+            vals = list(v)
+            clauses.append({k: {"$in": vals}} if len(vals) != 1 else {k: vals[0]})
+        else:
+            clauses.append({k: v})
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
 def _passes(chunk: Chunk, where: dict[str, Any]) -> bool:
     for key, val in where.items():
         have = getattr(chunk, key, None)
@@ -43,11 +59,7 @@ def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optio
     # applies the filters itself (category, superseded), so its top-k are all usable.
     sparse_f = _POOL.submit(kw.search, question, s["retrieval.keyword_top_k"], where)
     qvec = list(_embed_query(question))
-    # Chroma needs a single-clause or $and dict; equality-only filter here, lists handled post-hoc.
-    chroma_where = {k: v for k, v in where.items() if not isinstance(v, (list, set, tuple))}
-    if len(chroma_where) > 1:
-        chroma_where = {"$and": [{k: v} for k, v in chroma_where.items()]}
-    dense = [c.id for c in store.query(qvec, s["retrieval.vector_top_k"], chroma_where or None)]
+    dense = [c.id for c in store.query(qvec, s["retrieval.vector_top_k"], chroma_filter(where))]
     sparse = [cid for cid, _ in sparse_f.result()]
 
     merged = rrf([dense, sparse], s["retrieval.rrf_k"])[: s["retrieval.rerank_candidates"]]

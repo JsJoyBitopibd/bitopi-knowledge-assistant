@@ -17,6 +17,9 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   Category and superseded filters are applied inside the keyword search. English stopwords are left
   out of the query. At 60K chunks: no 22.9 s rebuild, no 691 MB in memory, 291 → 17 ms per query.
   Existing indexes are seeded once from the vector store on first use; `bm25.pkl` is no longer read.
+- D2: category filters are pushed into the vector query (`$in`) instead of being applied after it,
+  so every one of the top-k vector hits is usable. HNSW settings were measured at 60K vectors and
+  left at Chroma's defaults (recall@20 0.999; the roadmap's larger graph gained nothing).
 
 ### Fixed
 - Re-ingesting a file that was already superseded made it visible again: its fresh chunks were

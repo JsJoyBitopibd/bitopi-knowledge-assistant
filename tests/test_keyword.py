@@ -86,3 +86,27 @@ def test_stopwords_do_not_decide_the_match(tmp_path):
     # "what is the ..." alone would match everything; the content word decides
     assert kw.search("what is the laptop form", 5)[0][0] == "IT#p9#c1"
     assert kw.search("what is the", 5)          # only stopwords: still searched, not an empty result
+
+
+def test_vector_filter_includes_lists():
+    from ragbot.retrieve.retriever import chroma_filter
+    assert chroma_filter({}) is None
+    assert chroma_filter({"superseded": False}) == {"superseded": False}
+    assert chroma_filter({"superseded": False, "category": ["SOP", "IT"]}) == \
+        {"$and": [{"superseded": False}, {"category": {"$in": ["SOP", "IT"]}}]}
+    assert chroma_filter({"category": ["SOP"]}) == {"category": "SOP"}
+
+
+def test_category_filter_is_pushed_into_the_vector_query(tmp_path):
+    """With the filter applied after the search, most of the k nearest could be dropped; pushed into
+    the query, all k results are in the category."""
+    import chromadb
+    from ragbot.retrieve.retriever import chroma_filter
+    col = chromadb.PersistentClient(path=str(tmp_path)).create_collection(
+        "chunks", configuration={"hnsw": {"space": "cosine"}}, embedding_function=None)
+    ids = [f"c{i}" for i in range(60)]
+    col.add(ids=ids, embeddings=[[1.0, i / 100] for i in range(60)],
+            metadatas=[{"category": "IT" if i >= 55 else "SOP", "superseded": False} for i in range(60)])
+    got = col.query(query_embeddings=[[1.0, 0.0]], n_results=5,
+                    where=chroma_filter({"superseded": False, "category": ["IT"]}))["ids"][0]
+    assert len(got) == 5 and all(int(g[1:]) >= 55 for g in got)

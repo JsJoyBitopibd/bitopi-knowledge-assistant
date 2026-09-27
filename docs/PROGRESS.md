@@ -10,9 +10,9 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.4.0** (Phase E3–E4), tag `v1.4.0`, on `main` |
 | In progress | **Phase D** (60K pages) → v1.5.0, branch `feature/phase-d1-fts` |
-| Next task | D2 — Chroma HNSW tuning + list filters pushed into the vector query |
+| Next task | D3 — ingestion throughput (cold ingest measured at 98 chunks / 243 s: profile first) |
 | Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
-| Tests | 270 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 272 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
 ## How to update this file (every session)
@@ -80,7 +80,7 @@ routed to `data` only (router).
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
 | D1 | Keyword search on SQLite FTS5 (`chunk_fts` in `registry.db`), maintained per document; filters inside the search | ✅ | `tests/test_keyword.py`; `hit_rate.py` ≥ baseline | `tests/test_keyword.py` (9: codes, Bangla, per-document update/removal, filters, FTS-syntax safety, upgrade seeding, stopwords). `hit_rate.py` **29/30** (baseline). Live index seeded in 1.3 s; vs the old pickled BM25 on 30 questions: top-20 overlap 0.82, same top-1 26/30. **At 60K chunks**: rank_bm25 = 22.9 s full rebuild after every ingest, 691 MB RAM building, 291 ms/query; FTS5 = no rebuild, nothing held in the app, 17 ms/query (stopwords left out of the query: 57 → 17 ms, identical top-20). Also fixed: a re-ingested file that was already superseded came back visible (its fresh chunks were written unsuperseded and never re-marked) — verified live |
-| D2 | Chroma at 60K: HNSW parameters; list filters pushed into the vector query | ⬜ | `hit_rate.py`; filter test | |
+| D2 | Chroma at 60K: HNSW parameters; list filters pushed into the vector query | ✅ | `hit_rate.py`; filter test | **HNSW measured, left at defaults**: 60K vectors (real embeddings + noise), 50 queries vs exact search — Chroma defaults (M16/efC100/efS100) recall@20 **0.999**, 1.1 ms/query; the roadmap's M32/efC200 also 0.999 but 1.7 ms and slower builds, so no change and no reindex needed. **Filter pushdown**: category lists now go into the vector query as `$in` (they were applied after it, silently dropping most of the top-k); `tests/test_keyword.py` (2 new). For today's queries (only `superseded`) the Chroma filter is byte-identical, so hit_rate is unaffected |
 | D3 | Ingestion throughput (parallel parse/OCR, batched embedding; ONNX int8 bge-m3 behind the parity test) | ⬜ | throughput numbers; parity cosine ≥ 0.99 | |
 | D4 | ONNX int8 reranker behind `RERANK_BACKEND=onnx` | ⬜ | latency; `hit_rate.py` | |
 | D✓ | Phase gate: full eval | ⬜ | `scripts/eval.py` | |
