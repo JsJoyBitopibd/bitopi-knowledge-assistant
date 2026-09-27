@@ -14,12 +14,14 @@ _CONTEXT_DEP = re.compile(r"\b(it|its|it's|that|this|those|these|they|them|their
 
 
 def _needs_rewrite(latest: str) -> bool:
-    words = re.findall(r"\w+", latest)
-    if len(words) < 6:
+    if _CONTEXT_DEP.search(latest) or re.match(r"^\s*(and|also|what about|how about|then|so)\b", latest, re.I):
         return True
-    if _CONTEXT_DEP.search(latest):
-        return True
-    return bool(re.match(r"^\s*(and|also|what about|how about|then|so)\b", latest, re.I))
+    # A short question that fully matches a fixed tool ("What is the next PCD?", "TAL next PCD") already
+    # carries everything the query needs; rewriting it only costs a model call (one took 27 s, 2026-09-27).
+    from ..data.tools import load_fixed_tools, match_fixed_tool   # lazy: DB deps optional at import time
+    if match_fixed_tool(latest, load_fixed_tools()):
+        return False
+    return len(re.findall(r"\w+", latest)) < 6
 
 
 def standalone_question(latest: str, history: list[dict], user: str = "") -> str:

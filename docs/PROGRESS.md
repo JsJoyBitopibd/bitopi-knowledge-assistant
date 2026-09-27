@@ -10,9 +10,9 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.2.0** (Phase B), tag `v1.2.0`, on `main` |
 | In progress | **Phase C** (large database: schema RAG) → v1.3.0, branch `feature/phase-c-schema-rag` |
-| Next task | C8 — data UX (result table, CSV download, chart) |
+| Next task | C6 — pre-computed aggregates for heavy queries (local SQLite, scheduled refresh) |
 | Last eval | 2026-09-27, `eval/results/20260927T1214.json`: correctness 85%, faithful 100%, hit 91%, citations 100% |
-| Tests | 230 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 242 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
 ## How to update this file (every session)
@@ -71,7 +71,7 @@ routed to `data` only (router).
 | C4 | Guard at scale: raw-table allow-list, no `SELECT *` on raw, WHERE on >1M-row tables, sensitive names, new deny tokens | ✅ | ~20 adversarial tests; existing guard tests green | `tests/test_guard_scale.py` (30: 7 allowed, 21 denied incl. the real "blood group … with number" probe, defaults, curated examples) + the 41 pre-C4 tests green. Found + fixed: the curated "orders per factory" few-shot example (GROUP BY + ORDER BY, no TOP) was always rejected by the guard — every imitation cost a failed attempt |
 | C5 | SQL generation uses the selected tables (prompt v4) + full allow-list guard | ✅ | live data questions outside the curated views; data eval cases | `tests/test_schema_rag.py` (3). Live 2026-09-27, raw tables with no curated view: "How many suppliers…" → `dbo.SupplierData` 1,022; "suppliers evaluated in 2026" → `tblSupplierEvaluationMaster` 135; "sample indents in Sep 2026" → join over the 6.8M-row `tblSampleIndent` with a date filter → 0, **cross-checked** independently (last request 17 Aug 2026). Curated views still preferred when they cover it; "suppliers' phones and emails" returns nothing. Fixed along the way: the catalog's `@from/@to` rule produced unresolvable parameters (now literal dates); the router sent ERP questions beyond orders/PPM to documents; "pcs" was attached to record counts |
 | C7 | Zero-LLM data answers: templated fixed-tool results, more fixed tools, clarification | ✅ | unit tests; eval | Templated answers ✅: `tests/test_templated.py` (10), `tests/test_fixed_tools.py` (9). Data + both eval cases (13): correctness **9/13 → 13/13** vs Phase B on the same cases (`eval/results/20260927T1307.json`); cases 55 and 56 answered with no model call. Also fixed: `eo_by_po` matched "IT **po**licy" as PO 'licy' (case 60), `both` questions with a policy noun missed the documents (case 61), multi-part answers collapsed to not-found (case 60). **More fixed tools** mined from `logs/chat.csv` (18 real questions): upcoming PCDs (all / by buyer / by factory), buyer list, cancelled orders (count / list) — live 0.1–0.5 s, **0 model calls**; "0 cancelled this month" cross-checked (none in Sep 2026; last one dated 5 Oct 2026 — a future date, worth flagging to the data owners). **Clarification**: `config/clarify.yaml` (which order? which factory?) asks instead of guessing; no golden question triggers it. 230 tests |
-| C8 | Data UX: result table, CSV download, chart, follow-ups | ⬜ | browser | |
+| C8 | Data UX: result table, CSV download, chart, follow-ups | ✅ | browser | `tests/test_present.py` (5). Browser 2026-09-27: "orders per factory this month" → table + bar chart (BGL/RHL/TAL) + Download CSV in the `[D1]` card; "What is the next PCD?" → table + CSV, no chart (7 columns); two turns, unique widget keys, no errors. Fixed: "Row key: ; ;" on aggregates; duplicate PDF-download keys when two turns cite the same chunk; a pointless 27.6 s rewrite call on short self-contained follow-ups (now skipped when a fixed tool matches). **Deferred**: per-tool follow-up suggestion chips |
 | C6 | Pre-computed aggregates in local SQLite for heavy queries | ⬜ | unit tests; live refresh | |
 | C✓ | Phase gate: full eval, no metric drops > 5 points | ⬜ | `scripts/eval.py` (62 cases) | |
 

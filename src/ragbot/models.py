@@ -57,6 +57,8 @@ class QueryResult(BaseModel):
         if not self.key_columns:
             return []
         idx = [self.columns.index(k) for k in self.key_columns if k in self.columns]
+        if not idx:
+            return []   # an aggregate (GROUP BY / COUNT) returns no key columns: nothing to show, not "; ;"
         keys = []
         for r in self.rows[:5]:
             keys.append(", ".join(f"{self.columns[i]}={r[i]}" for i in idx))
@@ -107,3 +109,4 @@ class Answer(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     sources_text: str = ""       # the <sources> block sent to the model (for eval judging; never logged)
     error_kind: str = ""         # "" on success; else quota|timeout|auth|db|other — UI shows a soft message
+    results: list[QueryResult] = Field(default_factory=list)   # database results in [D1], [D2] … order (UI table/CSV)

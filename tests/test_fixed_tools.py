@@ -55,3 +55,17 @@ def test_clarification_rules(q, asks):
     from ragbot.data.tools import needs_clarification
     got = needs_clarification(q)
     assert (got is None) if asks is None else (got and got.startswith(asks))
+
+
+@pytest.mark.parametrize("q, needs", [
+    ("What is the next PCD?", False),          # short, but a fixed tool answers it as written
+    ("TAL next PCD", False),
+    ("What about RHL?", True),                 # leans on the previous turn
+    ("And its ship date?", True),
+    ("Who approves it?", True),
+    ("Show me more", True),                    # short and no tool
+    ("Which form is used for a laptop requisition?", False),
+])
+def test_rewrite_only_context_dependent_follow_ups(q, needs):
+    from ragbot.agent.rewrite import _needs_rewrite
+    assert _needs_rewrite(q) is needs

@@ -18,6 +18,7 @@ import streamlit as st  # noqa: E402
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
 from ragbot.agent.orchestrator import answer_stream, log_feedback  # noqa: E402
 from ragbot.config import log_dir, settings  # noqa: E402
+from ragbot.data import present  # noqa: E402
 from ragbot.index_version import index_version  # noqa: E402
 from ragbot.store import Registry  # noqa: E402
 
@@ -105,9 +106,25 @@ def feedback(i: int) -> None:
     log_feedback(user, i, val, turn["text"])
 
 
-def show_refs(refs) -> None:
+def show_result(res, key: str) -> None:
+    """C8: the rows behind a [D#] reference — sortable table, bar chart for label→number lists, CSV."""
+    if not res.rows:
+        return
+    st.caption(present.caption(res))
+    df = present.frame(res)
+    st.dataframe(df, hide_index=True, use_container_width=True)
+    chart = present.chart_columns(res)
+    if chart:
+        st.bar_chart(df.set_index(chart[0])[chart[1]])
+    st.download_button("Download CSV", data=present.csv_bytes(res), file_name=present.csv_name(res),
+                       mime="text/csv", key=f"csv{key}")
+
+
+def show_refs(refs, results=None, turn: int = 0) -> None:
+    """`turn` makes widget keys unique per chat turn: two turns citing the same chunk used to collide."""
     if not refs:
         return
+    results = results or []
     with st.expander(f"References ({len(refs)})", expanded=True):
         for r in refs:
             if r.kind == "pdf":
@@ -116,26 +133,29 @@ def show_refs(refs) -> None:
                 data = _pdf_bytes(r.source, ver)
                 if data:
                     st.download_button("Open PDF", data=data, file_name=r.source,
-                                       key=f"dl{r.marker}{r.chunk_id}", mime="application/pdf")
+                                       key=f"dl{turn}{r.marker}{r.chunk_id}", mime="application/pdf")
             else:
                 asof = r.as_of.strftime("%d %b %Y %H:%M") if r.as_of else ""
                 st.markdown(f"**[{r.marker}] {r.database} ({r.engine}) · {', '.join(r.views or [])}**  \n"
                             f"Row key: {'; '.join(r.row_keys or []) or '—'} · {r.row_count} row(s) · "
                             f"as of {asof} · tool: {r.tool}")
+                k = int(r.marker[1:]) - 1
+                if 0 <= k < len(results):
+                    show_result(results[k], f"{turn}{r.marker}")
                 with st.expander("show SQL"):
                     st.code(r.sql or "", language="sql")
                     if r.params:
                         st.json(r.params)
 
 
-def render_answer(a) -> None:
+def render_answer(a, turn: int) -> None:
     if a.error_kind:
         st.warning(a.text)   # a friendly quota/timeout/auth message, not a normal answer
         return
     st.markdown(a.text)
     if a.not_found:
         st.caption("No source in the system covers this question.")
-    show_refs(a.references)
+    show_refs(a.references, a.results, turn)
     if admin:
         st.caption(f"route: {a.route} · tokens in/out: {a.usage.input_tokens}/{a.usage.output_tokens}"
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
@@ -155,7 +175,7 @@ for i, t in enumerate(st.session_state.history):
     with st.chat_message(t["role"]):
         st.markdown(t["text"])
         if t["role"] == "assistant":
-            show_refs(t.get("refs"))
+            show_refs(t.get("refs"), t.get("results"), i)
             refresh_button(i, t.get("q", ""), t.get("refs"))
             st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))
 
@@ -217,9 +237,10 @@ if q:
                 fh.write(f"\n=== {datetime.now().isoformat()} q={q!r}\n{traceback.format_exc()}")
             st.error("Something went wrong answering that. The team has been notified — please try again.")
             st.stop()
-        render_answer(a)
         i = len(st.session_state.history)   # index this assistant turn will have in history
-        st.session_state.history.append({"role": "assistant", "text": a.text, "refs": a.references, "q": q})
+        render_answer(a, i)
+        st.session_state.history.append({"role": "assistant", "text": a.text, "refs": a.references, "q": q,
+                                         "results": a.results})
         # Feedback now, not after a rerun; the history loop re-renders it with the same key next run.
         refresh_button(i, q, a.references)
         st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))

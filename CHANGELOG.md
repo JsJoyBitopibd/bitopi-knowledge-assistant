@@ -44,6 +44,10 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   with no model call. `config/clarify.yaml`: when a data question names no order ("status of the
   order") or no factory ("how many PPM meetings this week"), the assistant asks which one instead of
   guessing (route `clarify`).
+- C8: database answers show their rows inside the `[D#]` reference card: a sortable table, a bar
+  chart when the result is a label → number list (2–25 rows), and a Download CSV button (UTF-8 with
+  BOM, so Excel shows Bangla correctly). `Answer.results` carries the rows; `data/present.py`
+  decides table / chart / file name.
 - Each `[D#]` source now shows the query's filter (factory, dates, order id) to the answering model
   and in the judge's view; `verify()` also accepts the row count and parameter values.
 
@@ -53,6 +57,10 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   answer the covered parts instead of replying not-found.
 
 ### Fixed
+- Aggregate results showed "Row key: ; ;" (the view's key columns are not in a GROUP BY result).
+- Two chat turns citing the same PDF chunk created duplicate download-button keys (a Streamlit error).
+- A short, self-contained follow-up ("What is the next PCD?") was sent through the rewrite model call;
+  one such call took 27.6 s. Skipped now when a fixed tool already matches the question.
 - `eo_by_po` matched "IT **po**licy" as PO number 'licy', hijacking any question that mentioned a
   policy and an order (eval case 60). "PO" must now be a whole word and the value contain a digit.
 - `both` questions with an order code and a password/IT-policy noun were routed to `data` only

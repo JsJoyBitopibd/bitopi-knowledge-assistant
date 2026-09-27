@@ -208,6 +208,7 @@ def _templated_answer(out: Answer, result: QueryResult, nf: str) -> bool:
         out.warnings.append(f"template failed verification, using the model: {problems}")
         return False
     out.text, out.sources_text, out.not_found = text, block, False
+    out.results = [result]
     out.references = [x for x in refs if x.marker in set(_MARK.findall(text))]
     out.warnings.append("templated answer (no model call)")
     return True
@@ -262,6 +263,7 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
                 used = set(_MARK.findall(text))
                 out.text = text
                 out.references = [x for x in refs if x.marker in used]
+                out.results = list(results)   # index i is [D{i+1}], matching sources_block
             return
         out.warnings += [f"attempt {attempt + 1}: {p}" for p in problems]
         # Record every voided draft: if replaces exceed ~10% of answers, the plan (docs/ROADMAP.md B2)
