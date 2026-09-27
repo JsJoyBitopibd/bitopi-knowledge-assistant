@@ -191,3 +191,34 @@ def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN",
 
 def run(engine: str, sql: str, params: dict[str, Any], **kw) -> tuple[list[str], list[list[Any]]]:
     return (run_sqlserver if engine == "sqlserver" else run_mysql)(sql, params, **kw)
+
+
+def stream_sqlserver(sql: str, *, conn_env: str, timeout: int, batch: int = 50_000, tool: str = "aggregate"):
+    """Yield (columns, rows-batch) for a long read-only scan (scripts/refresh_aggregates.py). NOT pooled
+    and NOT row-capped like run_sqlserver: it exists to copy a whole curated result once. Same write
+    barrier: read-only, autocommit off, rolled back and closed however it ends. Logged once to sql.csv."""
+    import pyodbc
+    t0, total, cn = time.perf_counter(), 0, None
+    try:
+        cn = pyodbc.connect(env(conn_env), timeout=timeout, autocommit=False, readonly=True)
+        cn.timeout = timeout
+        cur = cn.cursor()
+        cur.execute("SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+        cur.execute(sql)
+        cols = [d[0] for d in cur.description]
+        while True:
+            rows = cur.fetchmany(batch)
+            if not rows:
+                break
+            total += len(rows)
+            yield cols, [list(r) for r in rows]
+        _log("sqlserver", tool, sql, sql, {}, total, (time.perf_counter() - t0) * 1000)
+    except Exception as e:
+        _log("sqlserver", tool, sql, sql, {}, total, (time.perf_counter() - t0) * 1000, error=str(e)[:300])
+        raise
+    finally:
+        if cn is not None:
+            try:
+                cn.rollback()
+            finally:
+                cn.close()

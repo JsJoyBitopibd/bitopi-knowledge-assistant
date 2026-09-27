@@ -19,6 +19,17 @@
   match: '(?i)\b(pcd|cut\s*date|ship\s*date)\b.*\b(history|change|changes|changed)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b|\bhistory\b.*\b(pcd|ship\s*date)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'
   params:
     eo: { from_group: [3, 5] }
+  # Live, this scans dbo.ExportOrderBack (4.2M rows, unindexed): ~10 s, sometimes a timeout. Answered
+  # from the nightly local copy (config/aggregates.yaml: pcd_history); live only on "Refresh data" or
+  # when no copy exists, then with the 30 s heavy timeout.
+  heavy: true
+  aggregate: pcd_history
+  local_sql: |
+    SELECT ExportOrderID, VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated
+    FROM pcd_history
+    WHERE ExportOrderID = @eo
+    ORDER BY VersionNo
+    LIMIT 50
   sql: |
     SELECT TOP (50)
       ExportOrderID, VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated

@@ -96,3 +96,36 @@ python scripts\db_ping.py                 # every catalog's database
 python scripts\discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --schemas dbo
 python scripts\check_catalog.py --live    # runs every view's definition + every fixed tool's example
 ```
+
+### Asking about any table: schema discovery and the schema index (Phase C)
+
+Beyond the curated `rag.*` views, generated SQL may use any discovered table the question needs —
+never a sensitive or excluded one (`data/sensitive.py`, `exclude_tables:` in the catalog YAML), and
+always through the guard. Refresh after the database schema changes:
+
+```powershell
+python scripts\discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json   # sys.* only, ~10 s
+python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --json
+python scripts\index_schema.py            # embeds one short document per table (~15 min on CPU)
+python scripts\index_schema.py --check    # recall on tests/schema_cases.jsonl (10/11 at k=6, 2026-09-27)
+python scripts\index_schema.py --try "how many suppliers do we have?"
+```
+
+`--samples` on discovery also reads up to 30 distinct values of short text columns in small tables.
+A full pass is ~6,700 small queries on production, so it is off by default.
+
+### Aggregates: heavy queries answered from a nightly local copy (Phase C6)
+
+`config/aggregates.yaml` lists curated queries too slow to run per question (PCD history scans the
+4.2M-row, unindexed `dbo.ExportOrderBack`). `scripts\refresh_aggregates.py` copies each into
+`data\index\aggregates.db` with one read-only scan; fixed tools with `aggregate:` answer from the copy
+and show its as-of time. "Refresh data" in the UI, or a missing copy, runs the query live instead.
+Schedule the refresh nightly, off-hours:
+
+```powershell
+python scripts\refresh_aggregates.py                 # once (Task Scheduler: daily 02:00)
+python scripts\refresh_aggregates.py --every 24      # or keep it running
+```
+
+The DBA index on `dbo.ExportOrderBack(ExportOrderID)` (`docs/schema/rag_views_bitopisplint.sql`)
+would make the live query fast too; the copy is the no-DDL workaround until then.

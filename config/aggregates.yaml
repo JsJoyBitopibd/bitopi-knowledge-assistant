@@ -1,0 +1,20 @@
+# Pre-computed aggregates (Phase C6): curated read-only queries copied into data/index/aggregates.db by
+#   python scripts/refresh_aggregates.py            (schedule nightly; see README "Aggregates")
+# A fixed tool uses one via `aggregate: <name>` + `local_sql:` (SQLite, @name parameters). Only for
+# results too slow to compute per question; everything else stays live.
+#   name:     local table name
+#   database: catalog whose rag.* views the SQL uses (virtual views are expanded as usual)
+#   sql:      one SELECT; checked by guard.assert_read_only, run on a read-only connection
+#   indexes:  columns the fixed tools filter on
+
+- name: pcd_history
+  database: BitopiSplint
+  description: >
+    Every PCD / ship-date version of every export order (rag.vw_PCDChangeHistory). Live, one order
+    costs a scan of dbo.ExportOrderBack (4.2M rows, no index on ExportOrderID), about 10 s with
+    timeouts (measured 2026-09-27).
+  views: [rag.vw_PCDChangeHistory]
+  sql: |
+    SELECT ExportOrderID, VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated
+    FROM rag.vw_PCDChangeHistory
+  indexes: [ExportOrderID]

@@ -2,6 +2,8 @@
 #   app           - the Streamlit UI
 #   ingest-worker - rescans data/pdfs and re-ingests on a schedule, so new PDFs reach the app
 #                   without a restart (the app hot-reloads its caches when the index changes)
+#   aggregates    - refreshes the pre-computed heavy results (config/aggregates.yaml) daily;
+#                   one read-only scan each, swapped into data/index/aggregates.db atomically
 #
 #   docker compose up -d
 #
@@ -35,4 +37,15 @@ services:
       - ./data/pdfs:/app/data/pdfs
       - ${HF_CACHE:-~/.cache/huggingface}:/models
     mem_limit: 8g
+    restart: unless-stopped
+
+  aggregates:
+    image: bitopi-assistant:1.0
+    depends_on:
+      - app
+    command: ["python", "scripts/refresh_aggregates.py", "--every", "24"]
+    env_file: .env
+    volumes:
+      - ./data/index:/app/data/index
+    mem_limit: 2g
     restart: unless-stopped

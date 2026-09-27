@@ -48,6 +48,11 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   chart when the result is a label → number list (2–25 rows), and a Download CSV button (UTF-8 with
   BOM, so Excel shows Bangla correctly). `Answer.results` carries the rows; `data/present.py`
   decides table / chart / file name.
+- C6: pre-computed aggregates. `config/aggregates.yaml` + `scripts/refresh_aggregates.py` copy
+  results too slow to compute per question into `data/index/aggregates.db` (one read-only streaming
+  scan, `guard.assert_read_only`, atomic swap). `pcd_history_by_eo` now answers from the copy:
+  10 s with timeouts → 28–134 ms; "Refresh data" or a missing copy runs it live with the 30 s heavy
+  timeout. `docker-compose.yml` gains an `aggregates` service (every 24 h); README runbook.
 - Each `[D#]` source now shows the query's filter (factory, dates, order id) to the answering model
   and in the judge's view; `verify()` also accepts the row count and parameter values.
 

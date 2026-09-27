@@ -7,6 +7,7 @@ virtual views expanded (see virtual.py) when the DBA has not yet created the rea
 from __future__ import annotations
 
 import re
+import time
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -105,10 +106,36 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
     return None
 
 
+def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, user: str) -> Optional[QueryResult]:
+    """Answer a fixed tool from its local pre-computed copy (data/aggregates.py), or None to go live
+    (no copy yet, or the local query failed). The result's as_of is the copy's refresh time."""
+    from . import aggregates
+    from .connectors import _log
+    name = tool["aggregate"]
+    as_of = aggregates.available(name)
+    if as_of is None or not tool.get("local_sql"):
+        return None
+    sql = tool["local_sql"].strip()
+    t0 = time.perf_counter()
+    try:
+        cols, rows = aggregates.run_local(sql, params, int(settings()["data.max_rows"]))
+    except Exception as e:
+        _log("local", tool["name"], sql, sql, params, 0, (time.perf_counter() - t0) * 1000, error=str(e)[:300], user=user)
+        return None
+    _log("local", tool["name"], sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user)
+    views = _views_in(tool["sql"], cat)
+    return QueryResult(database=cat.database, engine="local", views=views, sql=sql, sql_executed=sql,
+                       params=params, tool=tool["name"], columns=cols, rows=rows,
+                       key_columns=_keys_for(views, cat), as_of=as_of)
+
+
 def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog], user: str = "",
                    refresh: bool = False) -> QueryResult:
     cat = cats[tool["database"]]
     sql = tool["sql"].strip()
+    local = _from_aggregate(tool, params, cat, user) if tool.get("aggregate") and not refresh else None
+    if local is not None:
+        return local
     try:
         sql_exec, views = rewrite_virtual(sql, cat)
         # `heavy: true` in fixed_tools.yaml: a known-slow query (e.g. over the 4M-row, unindexed

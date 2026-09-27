@@ -36,6 +36,21 @@ class GuardError(ValueError):
     pass
 
 
+def assert_read_only(sql: str, dialect: str = "tsql") -> None:
+    """For curated SQL from config (config/aggregates.yaml): exactly one SELECT, no deny-list token.
+    No row cap and no view allow-list — an aggregate may copy a whole view — but the same write
+    checks as generated SQL, in front of the read-only, rolled-back connection."""
+    s = sql.strip().rstrip(";").strip()
+    m = _DENY_RE.search(s)
+    if m:
+        raise GuardError(f"forbidden token {m.group(0)!r}")
+    if not re.match(r"^\s*(select|with)\b", s, re.IGNORECASE):
+        raise GuardError("only SELECT / WITH ... SELECT is allowed")
+    trees = sqlglot.parse(s, read="tsql" if dialect == "tsql" else "mysql")
+    if len(trees) != 1 or not isinstance(trees[0], exp.Query):
+        raise GuardError("exactly one SELECT statement is allowed")
+
+
 def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, *,
           allowed_tables: frozenset[str] | set[str] = frozenset(),
           big_tables: dict[str, int] | None = None) -> str:

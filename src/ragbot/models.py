@@ -40,7 +40,7 @@ class Chunk(BaseModel):
 class QueryResult(BaseModel):
     """Rows returned by a data tool, with everything a [D#] reference needs."""
     database: str
-    engine: Literal["sqlserver", "mysql"]
+    engine: Literal["sqlserver", "mysql", "local"]   # local = a pre-computed copy (data/aggregates.py)
     views: list[str]
     sql: str
     params: dict[str, Any] = Field(default_factory=dict)
