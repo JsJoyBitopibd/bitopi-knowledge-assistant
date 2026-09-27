@@ -41,7 +41,8 @@ class Embedder:
         return vecs.tolist()
 
     def _st_embed(self, texts: list[str]):
-        return self._st.encode(texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False)
+        return self._st.encode(texts, batch_size=_batch_size("EMBED_BATCH_SIZE"), normalize_embeddings=True,
+                               show_progress_bar=False)
 
     def _ollama(self, texts: list[str]):
         import ollama
@@ -60,10 +61,25 @@ class Reranker:
     def score(self, question: str, texts: list[str]) -> list[float]:
         if not texts:
             return []
-        # One batch: the candidate list is small (retrieval.rerank_candidates) and splitting it
-        # into the default batches of 32 only adds overhead.
+        # Small batches on CPU (see _batch_size). Phase A had used one batch of all pairs; measured
+        # 2026-09-27, 10 real pairs x 3 questions x 2 runs: batch 10 = 18.7 s, batch 1 = 10.1 s.
         pairs = [(question, t) for t in texts]
-        return [float(s) for s in self._ce.predict(pairs, batch_size=len(pairs), show_progress_bar=False)]
+        return [float(s) for s in self._ce.predict(pairs, batch_size=_batch_size("RERANK_BATCH_SIZE"),
+                                                  show_progress_bar=False)]
+
+
+def _batch_size(env_name: str) -> int:
+    """Texts per forward pass. On CPU, small batches are much faster: every text in a batch is padded
+    to the longest one, and the bigger activations fall out of cache. Measured 2026-09-27 on the pilot
+    box (bge-m3, 48 real chunks, 2 runs each): batch 1 = 0.96 chunks/s, 4 = 0.65, 32 = 0.52. On a GPU
+    large batches win, so the CPU default is 1 and the GPU default 32; override with `env_name`."""
+    if os.getenv(env_name):
+        return int(os.environ[env_name])
+    try:
+        import torch
+        return 32 if torch.cuda.is_available() else 1
+    except Exception:
+        return 1
 
 
 def _use_all_cpu_threads() -> None:

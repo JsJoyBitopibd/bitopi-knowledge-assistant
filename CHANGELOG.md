@@ -20,6 +20,11 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
 - D2: category filters are pushed into the vector query (`$in`) instead of being applied after it,
   so every one of the top-k vector hits is usable. HNSW settings were measured at 60K vectors and
   left at Chroma's defaults (recall@20 0.999; the roadmap's larger graph gained nothing).
+- D3/D4: the embedder and the reranker run in small batches on CPU (`EMBED_BATCH_SIZE`,
+  `RERANK_BATCH_SIZE`; default 1 on CPU, 32 on GPU). Padding every text to the longest in a batch
+  made batch 32 about half as fast. Cold ingest 243 s → 127 s for the 60-page manual; reranking 10
+  candidates 18.7 s → 10.1 s; document answers 18–32 s → 14–28 s. Results unchanged (scores within
+  1.3e-7, same order).
 
 ### Fixed
 - Re-ingesting a file that was already superseded made it visible again: its fresh chunks were

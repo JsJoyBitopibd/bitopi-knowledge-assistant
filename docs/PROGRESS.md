@@ -10,7 +10,7 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.4.0** (Phase E3–E4), tag `v1.4.0`, on `main` |
 | In progress | **Phase D** (60K pages) → v1.5.0, branch `feature/phase-d1-fts` |
-| Next task | D3 — ingestion throughput (cold ingest measured at 98 chunks / 243 s: profile first) |
+| Next task | Decision needed: install ONNX Runtime for D4 (int8 reranker/embedder), or skip it; then D✓ gate → v1.5.0 |
 | Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
 | Tests | 272 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
@@ -81,8 +81,8 @@ routed to `data` only (router).
 |---|---|---|---|---|
 | D1 | Keyword search on SQLite FTS5 (`chunk_fts` in `registry.db`), maintained per document; filters inside the search | ✅ | `tests/test_keyword.py`; `hit_rate.py` ≥ baseline | `tests/test_keyword.py` (9: codes, Bangla, per-document update/removal, filters, FTS-syntax safety, upgrade seeding, stopwords). `hit_rate.py` **29/30** (baseline). Live index seeded in 1.3 s; vs the old pickled BM25 on 30 questions: top-20 overlap 0.82, same top-1 26/30. **At 60K chunks**: rank_bm25 = 22.9 s full rebuild after every ingest, 691 MB RAM building, 291 ms/query; FTS5 = no rebuild, nothing held in the app, 17 ms/query (stopwords left out of the query: 57 → 17 ms, identical top-20). Also fixed: a re-ingested file that was already superseded came back visible (its fresh chunks were written unsuperseded and never re-marked) — verified live |
 | D2 | Chroma at 60K: HNSW parameters; list filters pushed into the vector query | ✅ | `hit_rate.py`; filter test | **HNSW measured, left at defaults**: 60K vectors (real embeddings + noise), 50 queries vs exact search — Chroma defaults (M16/efC100/efS100) recall@20 **0.999**, 1.1 ms/query; the roadmap's M32/efC200 also 0.999 but 1.7 ms and slower builds, so no change and no reindex needed. **Filter pushdown**: category lists now go into the vector query as `$in` (they were applied after it, silently dropping most of the top-k); `tests/test_keyword.py` (2 new). For today's queries (only `superseded`) the Chroma filter is byte-identical, so hit_rate is unaffected |
-| D3 | Ingestion throughput (parallel parse/OCR, batched embedding; ONNX int8 bge-m3 behind the parity test) | ⬜ | throughput numbers; parity cosine ≥ 0.99 | |
-| D4 | ONNX int8 reranker behind `RERANK_BACKEND=onnx` | ⬜ | latency; `hit_rate.py` | |
+| D3 | Ingestion throughput (parallel parse/OCR, batched embedding; ONNX int8 bge-m3 behind the parity test) | ✅ | throughput numbers; parity cosine ≥ 0.99 | **Profiled first**: embedding is 97% of ingest time (parse + tables ≈ 5 s per PDF), so a parallel parse pool would gain nothing. torch int8 dynamic quantization: 0.81× (slower) — rejected. **Batch size is the lever**: every text in a batch is padded to the longest; grid on 48 real chunks × 2 runs: batch 1 = 0.96 chunks/s, 32 = 0.52. Default now 1 on CPU / 32 on GPU (`EMBED_BATCH_SIZE`). Cold ingest of the 60-page manual **243.4 s → 126.5 s** (0.40 → 0.77 chunks/s); embeddings identical (cosine ≥ 0.9999999). Projection for 60K pages (~2.4 chunks/page ≈ 145K chunks) on this CPU: ~52 h once — a GPU (or ONNX, below) is the realistic path for the bulk load; revisions stay cheap via E3 |
+| D4 | ONNX int8 reranker behind `RERANK_BACKEND=onnx` | 🔄 | latency; `hit_rate.py` | **Done without new dependencies**: reranker batch 10 → 1 (same finding as D3): 10 pairs 18.7 s → 10.1 s; scores identical (max diff 1.3e-7, same order); `hit_rate.py` 29/30 in 387 s (the previous run did not finish within 600 s); document answers 18–32 s → 14–28 s. **Awaiting a decision**: ONNX int8 needs `onnxruntime` + `optimum` and a model export (~570 MB) — not installed without approval |
 | D✓ | Phase gate: full eval | ⬜ | `scripts/eval.py` | |
 
 ## Phase E — Freshness ✅
