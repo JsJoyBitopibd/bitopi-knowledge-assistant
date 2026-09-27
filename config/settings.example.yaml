@@ -27,8 +27,10 @@ retrieval:
 data:
   max_rows: 200
   timeout_seconds: 10
+  timeout_seconds_heavy: 30      # fixed tools marked `heavy: true` in fixed_tools.yaml
   max_rows_to_llm: 50
   sql_retries: 1
+  result_cache_ttl_seconds: 180   # SQL result cache; hits keep their original as-of time; 0 = off
 
 llm:
   temperature: 0
@@ -41,6 +43,7 @@ llm:
 answer:
   not_found_text: "System doesn't have the data."
   history_turns: 3
+  cache_ttl_seconds: 3600         # repeat documents question served from cache; 0 = off
 
 ui:
   title: "Bitopi Knowledge Assistant · pilot"

@@ -1,6 +1,8 @@
 """Document retrieval: scoped hybrid search -> fetch -> filter -> rerank -> top-k chunks."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import Any, Optional
 
 from ..config import settings
@@ -9,6 +11,16 @@ from ..models import Chunk
 from ..store import get_store
 from .hybrid import rrf
 from .keyword import get_keyword_index
+
+
+_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="retrieve")
+
+
+@lru_cache(maxsize=512)
+def _embed_query(question: str) -> tuple[float, ...]:
+    """Query vectors are deterministic for a given model, so a repeated or retried question (the
+    documents retry after a data miss, eval reruns, the same question from two users) embeds once."""
+    return tuple(get_embedder().embed([question])[0])
 
 
 def _passes(chunk: Chunk, where: dict[str, Any]) -> bool:
@@ -27,13 +39,15 @@ def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optio
     where = {**s.get("retrieval.default_filters", {}), **(where or {})}
     store, kw = get_store(), get_keyword_index()
 
-    qvec = get_embedder().embed([question])[0]
+    # BM25 is pure Python and independent of the embedding, so run it alongside embed + vector search.
+    sparse_f = _POOL.submit(kw.search, question, s["retrieval.keyword_top_k"])
+    qvec = list(_embed_query(question))
     # Chroma needs a single-clause or $and dict; equality-only filter here, lists handled post-hoc.
     chroma_where = {k: v for k, v in where.items() if not isinstance(v, (list, set, tuple))}
     if len(chroma_where) > 1:
         chroma_where = {"$and": [{k: v} for k, v in chroma_where.items()]}
     dense = [c.id for c in store.query(qvec, s["retrieval.vector_top_k"], chroma_where or None)]
-    sparse = [cid for cid, _ in kw.search(question, s["retrieval.keyword_top_k"])]
+    sparse = [cid for cid, _ in sparse_f.result()]
 
     merged = rrf([dense, sparse], s["retrieval.rrf_k"])[: s["retrieval.rerank_candidates"]]
     chunks = [c for c in store.get(merged) if _passes(c, where)]

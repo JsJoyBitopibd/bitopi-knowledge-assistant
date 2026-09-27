@@ -85,7 +85,7 @@ def _pdf_bytes(source: str, _version: int) -> bytes | None:
 ver = index_version()
 
 if "history" not in st.session_state:
-    st.session_state.history = []      # [{"role","text","refs"}]
+    st.session_state.history = []      # [{"role","text","refs","q"}]; "q" = the question an answer replied to
 if "pending_q" not in st.session_state:
     st.session_state.pending_q = None
 
@@ -141,11 +141,22 @@ def render_answer(a) -> None:
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
 
 
+def refresh_button(i: int, question: str, refs) -> None:
+    """Database answers may come from the short SQL result cache (their as-of time shows when the rows
+    were read). This re-asks the question with the cache bypassed."""
+    if question and any(r.kind != "pdf" for r in refs or []):
+        if st.button("↻ Refresh data", key=f"rf{i}", help="Re-run the database query live"):
+            st.session_state.pending_q = question
+            st.session_state.pending_refresh = True
+            st.rerun()
+
+
 for i, t in enumerate(st.session_state.history):
     with st.chat_message(t["role"]):
         st.markdown(t["text"])
         if t["role"] == "assistant":
             show_refs(t.get("refs"))
+            refresh_button(i, t.get("q", ""), t.get("refs"))
             st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))
 
 # Suggested-question chips on an empty conversation.
@@ -163,17 +174,19 @@ if not st.session_state.history:
 
 typed = st.chat_input("Ask about export orders, PCDs, PPM meetings, SOPs, IT policies…")
 q = typed or st.session_state.pending_q
+refresh = bool(st.session_state.get("pending_refresh")) and not typed
 st.session_state.pending_q = None
+st.session_state.pending_refresh = False
 
 
-def stream_answer(q: str, hist: list[dict], where: dict | None):
+def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool = False):
     """Run answer_stream(): progress in a status box, the draft text as it is written, then the
     verified answer in its place. Returns the Final Answer."""
     t0 = time.perf_counter()
     status = st.status("Understanding the question…", expanded=False)
     draft = st.empty()
     text, final = "", None
-    for ev in answer_stream(q, history=hist, where=where, user=user):
+    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh):
         if isinstance(ev, Stage):
             status.update(label=ev.label, state="running")
         elif isinstance(ev, Token):
@@ -198,7 +211,7 @@ if q:
     where = {"category": cats} if cats else None
     with st.chat_message("assistant"):
         try:
-            a = stream_answer(q, hist, where)
+            a = stream_answer(q, hist, where, refresh)
         except Exception:  # last-resort guard: never show a raw traceback to a user
             with open(log_dir() / "errors.log", "a", encoding="utf-8") as fh:
                 fh.write(f"\n=== {datetime.now().isoformat()} q={q!r}\n{traceback.format_exc()}")
@@ -206,6 +219,7 @@ if q:
             st.stop()
         render_answer(a)
         i = len(st.session_state.history)   # index this assistant turn will have in history
-        st.session_state.history.append({"role": "assistant", "text": a.text, "refs": a.references})
+        st.session_state.history.append({"role": "assistant", "text": a.text, "refs": a.references, "q": q})
         # Feedback now, not after a rerun; the history loop re-renders it with the same key next run.
+        refresh_button(i, q, a.references)
         st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))

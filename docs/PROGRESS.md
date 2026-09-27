@@ -10,9 +10,9 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.1.0** (Phase A), tag `v1.1.0`, on `main` |
 | In progress | **Phase B** (streaming, parallelism, caching) → v1.2.0, branch `feature/phase-b-streaming` |
-| Next task | B4 — parallel retrieval and database lookups |
+| Next task | B✓ — Phase B gate: full 62-case eval (rerank on), then release v1.2.0 |
 | Last eval | 2026-09-23, `eval/results/20260923T1743.json`: correctness 85%, faithful 100%, hit 93%, citations 100% |
-| Tests | 109 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 126 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
 ## How to update this file (every session)
@@ -47,9 +47,9 @@ Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faste
 | B1 | `ChatModel.stream()` + OpenAI-compatible streaming; one `calls.csv` row per stream | ✅ | unit test with fake client; live Gemini stream | `tests/test_stream.py` (4). Live 2026-09-27: 8 deltas, first at 2.6–3.4 s, one `calls.csv` row. Found + fixed: provider errors crashed instead of raising `LLMError`; `thinking_budget: 0` is rejected (HTTP 400) by flash-lite |
 | B2 | `answer_stream()` events (Stage / Token / Replace / Final); `answer()` drains it; verify before Final | ✅ | unit tests: event order, Replace on failed verify, LLM error mid-stream | `tests/test_answer_stream.py` (6). Live 2026-09-27 (rerank off): 2 doc questions verified with correct `[P#]`; first token 3.9–6.1 s. Gemini sends short answers in 1–2 bursts, so first token ≈ full answer; model latency after "writing" is 3.6–3.8 s |
 | B3 | UI renders stages + tokens live; no extra rerun | ✅ | manual in browser | Browser 2026-09-27, rerank ON: stage label updates live, chips clear on ask, "Answered in 19.2 s" / "17.9 s" (follow-up "Who approves it?" rewritten to Form IT-03), references + thumbs shown at once, thumbs-up logged to `chat.csv`, no app errors |
-| B4 | Parallel: BM25 ∥ embedding; documents ∥ database for `both` | ⬜ | unit test; timing | |
-| B5 | Caches: query embedding, documents-answer cache, SQL result cache (+ Refresh data) | ⬜ | unit tests: TTL, invalidation, `as_of` kept, refresh bypass | |
-| B6 | SQL Server connection pool, `NOCOUNT`, `fetchmany`, heavy-tool timeout tier | ⬜ | unit test with fake connections; live DB ping | |
+| B4 | Parallel: BM25 ∥ embedding; documents ∥ database for `both` | ✅ | unit test; timing | `tests/test_parallel.py` (2): two 0.4 s steps finish in < 0.6 s. `hit_rate.py` (rerank on) 29/30, same as baseline |
+| B5 | Caches: query embedding, documents-answer cache, SQL result cache (+ Refresh data) | ✅ | unit tests: TTL, invalidation, `as_of` kept, refresh bypass | `tests/test_cache.py` (8). Browser 2026-09-27: repeat document question 32.2 s → **0.1 s** (same verified answer + `[P1]`); fixed tool 474 ms → cache hit 5 ms with identical `as_of`, logged `cache:<tool>`; ↻ Refresh data re-ran `eo_by_id` live (`sql.csv`) |
+| B6 | SQL Server connection pool, `NOCOUNT`, `fetchmany`, heavy-tool timeout tier | ✅ | unit test with fake connections; live DB ping | `tests/test_pool.py` (6). `db_ping.py`: both DBs OK. Live: count tool 266 ms fresh → 4 ms pooled; `eo_by_id` 382 ms → 124 ms (≈120 ms is the query itself). No `SELECT 1` health check (one more round trip per query); stale session retried once instead |
 | B✓ | Phase gate: full eval, no metric drops > 5 points | ⬜ | `scripts/eval.py` (62 cases) | |
 
 ## Phase C — Large database: schema RAG ⬜
@@ -76,6 +76,10 @@ D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D
 - Streamlit's file watcher logs ~50 harmless `ModuleNotFoundError: torchvision` tracebacks at start
   (it scans transformers' image modules). Fix: `server.fileWatcherType = "none"` in
   `.streamlit/config.toml` for production, or install torchvision. Cosmetic.
+- Data answers the model wrongly reports as not-found (seen 2026-09-27, both older than Phase B):
+  a count of **0** ("How many PPM meetings does TAL have this week?" → rows `[[0]]`), and a list of
+  **200 rows** ("Which TAL orders ship in the next 30 days?"). Planned fix: Phase C7 templated
+  answers (scalar → "Meetings: 0 [D1]") and C8 result tables.
 
 ## Open items outside the code
 

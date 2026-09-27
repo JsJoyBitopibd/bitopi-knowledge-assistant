@@ -39,6 +39,7 @@ class FakeChat(ChatModel):
 def wire(monkeypatch):
     """Returns a function that installs a route and scripted model replies."""
     logged = []
+    orch._ANSWERS.clear()
     monkeypatch.setattr(base, "_log_call", lambda *a: None)
     monkeypatch.setattr(orch, "_log", lambda a, user: logged.append(a) or a)
     monkeypatch.setattr(orch, "_log_verify_failure", lambda *a: None)
@@ -105,3 +106,18 @@ def test_chitchat_yields_final_without_tokens(wire):
 def test_answer_equals_stream_final(wire):
     wire("documents", [GOOD])
     assert orch.answer("Which form approves a PCD change?").text == GOOD
+
+
+def test_data_miss_clears_draft_before_documents_retry(wire, monkeypatch):
+    """A data answer that ends not-found is retried against the documents; the not-found draft must
+    be cleared BEFORE the (slow) document search starts, not after it."""
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    wire("data", ["System doesn't have the data.", GOOD])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False: [QueryResult(
+        database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["n"], rows=[[0]])])
+    evs = list(orch.answer_stream("how many licences does the Group have?"))
+    names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
+    retry_search = names.index("Stage:searching")
+    assert names[retry_search - 1] == "Replace"
+    assert evs[-1].answer.text == GOOD

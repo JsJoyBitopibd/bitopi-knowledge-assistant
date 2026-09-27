@@ -11,7 +11,9 @@ only the Final answer (verified by citations.verify) enters history and logs/cha
 from __future__ import annotations
 
 import csv
+import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Iterator, Optional
 
@@ -21,12 +23,14 @@ from ..llm import get_chat
 from ..llm.base import ChatReply, LLMError
 from ..models import Answer, Chunk, QueryResult, Usage
 from ..retrieve.retriever import retrieve
+from ..ttl_cache import TTLCache
 from .citations import normalize_markers, sources_block, verify
 from .events import Event, Final, Replace, Stage, Token
 from .rewrite import standalone_question
 from .router import _DOC_HINT, route
 
 _MARK = re.compile(r"\[([PD]\d+)\]")
+_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="answer")
 
 
 def _route(q: str, user: str) -> str:
@@ -38,11 +42,23 @@ def _route(q: str, user: str) -> str:
     return route(q, user)
 
 
+_ANSWERS = TTLCache(maxsize=512)
+
+
+def _answer_key(question: str, where: Optional[dict[str, Any]]) -> tuple:
+    """Documents-answer cache key: the normalized question, the retrieval filter (today's only scope),
+    and the index version, so any ingest makes every earlier entry unreachable. When per-user scoping
+    (PRD FR-4) lands, the user's scope must join this key."""
+    from ..index_version import index_version
+    norm = re.sub(r"\s+", " ", question.strip().lower()).rstrip("?!. ")
+    return norm, json.dumps(where or {}, sort_keys=True, default=str), index_version()
+
+
 def answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-           user: str = "") -> Answer:
+           user: str = "", refresh: bool = False) -> Answer:
     """Blocking entry point: the verified Answer from answer_stream()."""
     final: Optional[Answer] = None
-    for ev in answer_stream(question, history, where, user):
+    for ev in answer_stream(question, history, where, user, refresh):
         if isinstance(ev, Final):
             final = ev.answer
     assert final is not None, "answer_stream() must end with a Final event"
@@ -50,13 +66,13 @@ def answer(question: str, history: Optional[list[dict]] = None, where: Optional[
 
 
 def answer_stream(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-                  user: str = "") -> Iterator[Event]:
+                  user: str = "", refresh: bool = False) -> Iterator[Event]:
     """Streaming entry point. Always ends with exactly one Final. A provider failure (quota, timeout,
     auth) becomes a soft answer the UI can show instead of a traceback; the raw cause stays in
-    warnings and the call log."""
+    warnings and the call log. refresh=True reads the database live (skips the SQL result cache)."""
     drafting = False
     try:
-        for ev in _answer_stream(question, history, where, user):
+        for ev in _answer_stream(question, history, where, user, refresh):
             if isinstance(ev, Token):
                 drafting = True
             elif isinstance(ev, Replace):
@@ -71,7 +87,7 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
 
 
 def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
-                   user: str) -> Iterator[Event]:
+                   user: str, refresh: bool = False) -> Iterator[Event]:
     from ..index_version import refresh_if_changed
     refresh_if_changed()   # pick up a background ingest without a restart (cheap: one stat)
     s = settings()
@@ -79,6 +95,18 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     usage = Usage()
     history = history or []
     top = int(s["llm.max_chunks_to_llm"])
+
+    # Repeat documents question: serve the earlier verified answer, no model call. Only a
+    # self-contained question (no history) can hit, because a follow-up's meaning depends on context.
+    ttl = int(s.get("answer.cache_ttl_seconds", 3600))
+    key = _answer_key(question, where) if not history and ttl > 0 else None
+    if key is not None:
+        hit = _ANSWERS.get(key)
+        if hit is not None:
+            a = hit.model_copy(deep=True)
+            a.usage = Usage()
+            a.warnings = ["answer cache hit"]
+            yield Final(_log(a, user)); return
 
     yield Stage("understanding", "Understanding the question…")
     q = standalone_question(question, history, user) if history else question
@@ -94,13 +122,23 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
 
     chunks: list[Chunk] = []
     results: list[QueryResult] = []
-    if r in ("documents", "both"):
+    if r in ("data", "both"):
+        from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
+    if r == "both":
+        # Independent sources: search the documents while the database query (and its SQL-generation
+        # call) runs, instead of one after the other. A worker's exception re-raises in .result().
+        yield Stage("searching+querying", "Searching documents and querying the database…")
+        docs_f = _POOL.submit(retrieve, q, where=where)
+        data_f = _POOL.submit(answer_from_data, q, user, refresh)
+        chunks = docs_f.result()[:top]
+        results = list(data_f.result())
+    elif r == "documents":
         yield Stage("searching", "Searching documents…")
         chunks = retrieve(q, where=where)[:top]
-    if r in ("data", "both"):
+    elif r == "data":
         yield Stage("querying", "Querying the database…")
-        from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
-        results = [x for x in answer_from_data(q, user)]
+        results = list(answer_from_data(q, user, refresh))
+    if r in ("data", "both"):
         # a failed query is not a source: never let the model cite an error message
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
         results = [x for x in results if not x.error]
@@ -122,13 +160,13 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # have?") for database questions, and the SQL then returns rows that are real but irrelevant, so
     # the earlier no-rows fallback never fires. Retry once against the documents before giving up.
     if out.not_found and r == "data" and not chunks:
+        yield Replace("retrying against documents")   # clear the not-found draft before the search starts
         yield Stage("searching", "Searching documents…")
         doc_chunks = retrieve(q, where=where)[:top]
         if doc_chunks:
             out.warnings.append("data route returned no answer; retried against documents")
             retry = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
             retry.warnings = out.warnings
-            yield Replace("retrying against documents")
             yield Stage("writing", "Writing the answer…")
             yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
             if not retry.not_found:
@@ -138,6 +176,10 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if out.not_found and not out.text:
         out.text = nf + " The retrieved sources did not support a verifiable answer."
         _log_verify_failure(question, q, out.warnings)
+    # Cache only verified documents answers: database rows go stale in minutes (they have their own
+    # short cache in data/cache.py) and a not-found may become answerable after the next ingest.
+    if key is not None and r == "documents" and not out.not_found and not out.error_kind:
+        _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user))
 
 

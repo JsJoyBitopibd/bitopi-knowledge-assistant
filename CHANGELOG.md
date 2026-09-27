@@ -22,8 +22,22 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
 - B3: the chat UI shows each stage live ("Searching documents…", "Writing the answer…"), types
   the draft as it streams, then shows the verified answer with "Answered in N s". References and
   thumbs appear immediately (no extra page rerun); suggestion chips clear when a question is asked.
+- B4: keyword search runs alongside embedding + vector search; `both` questions search documents
+  while the database query (and its SQL-generation call) runs.
+- B5: caches. Query embeddings (LRU 512). Verified documents answers (`answer.cache_ttl_seconds`,
+  default 1 h; key = normalized question + filter + index version; follow-ups and data answers never
+  cached): a repeat question went 32 s → 0.1 s. SQL results (`data/cache.py`,
+  `data.result_cache_ttl_seconds`, default 180 s; keyed on the guarded statement + parameters; hits
+  keep the original `as_of`, logged as `cache:<tool>`). **↻ Refresh data** button under database
+  answers re-runs the query live.
+- B6: SQL Server connection pool (`data/connectors.py`): session settings once per connection,
+  rollback on every release, a failed connection is never reused, a dead pooled session is retried
+  once; `fetchmany(max_rows)`; fixed tools marked `heavy: true` get `data.timeout_seconds_heavy`
+  (30 s). Pooled query 266 ms → 4 ms.
 
 ### Fixed
+- When a database answer came back not-found and was retried against the documents, the voided
+  draft stayed on screen during the document search; it is now cleared first.
 - A failed LLM call raised a pydantic `ValidationError` instead of `LLMError`, so the friendly
   quota / timeout message from v1.1.0 never appeared (`ChatReply.text` now defaults to "").
 - `.env.example`: `thinking_budget: 0` is rejected by gemini-3.5-flash-lite (HTTP 400), so it is now
