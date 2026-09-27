@@ -9,10 +9,10 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 | | |
 |---|---|
 | Released | **v1.3.0** (Phase C), tag `v1.3.0`, on `main` |
-| In progress | **Phase E3** (cheaper re-ingest: embedding cache + chunk-level diff), branch `feature/phase-e3-reingest` |
-| Next task | E3, then E4 (README "new version of a document"), then Phase D (D1–D4) |
+| In progress | **Phase E** complete on branch `feature/phase-e3-reingest` (E3 + E4) → v1.4.0 after its gate |
+| Next task | Release v1.4.0 (hit_rate + tests gate; ingest-only change), then Phase D (D1 SQLite FTS5 keyword index) |
 | Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
-| Tests | 254 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 260 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
 ## How to update this file (every session)
@@ -79,14 +79,14 @@ routed to `data` only (router).
 
 D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D4 ONNX reranker. Not started.
 
-## Phase E — Freshness
+## Phase E — Freshness ✅
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
 | E1 | Ingestion worker (`scripts/ingest_worker.py`) | ✅ | shipped in v1.1.0 |
 | E2 | Hot reload of new PDFs (`index_version.py`) | ✅ | shipped in v1.1.0 |
-| E3 | Embedding cache + chunk-level diff | ⬜ | |
-| E4 | Document the "new version of a document" behavior in README | ⬜ | |
+| E3 | Embedding cache + chunk-level diff | ✅ | `tests/test_embedding_cache.py` (6). Live 2026-09-27 in a throwaway index, 60-page IT SOP manual (98 chunks): cold ingest **243 s** (98 embedded) → one-page revision **6.9 s** (1 embedded, 97 cached, 1 stale row pruned) → unchanged re-run 0.0 s; revised text indexed on p12; vectors = registry chunks = 98. **Decision:** no chunk-level diff in the vector store — with cached vectors, replacing a document's rows costs milliseconds and keeps every chunk's metadata (`doc_hash`, `ingested_at`) consistent, which a diff would leave stale |
+| E4 | Document the "new version of a document" behavior in README | ✅ | README "Revising a document" + "Add documents". Claims verified live in the throwaway index: `_v3` beside `_v2` → v2 superseded in registry and vectors, added in 6.4 s with 0 chunks embedded (all cached); deleting `_v3` → v2 restored |
 
 ## Small follow-ups noticed along the way
 

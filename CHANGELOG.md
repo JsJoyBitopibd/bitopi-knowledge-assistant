@@ -6,10 +6,23 @@ versions follow [Semantic Versioning](https://semver.org/). Each released versio
 Where things stand right now (done / in progress / next) is in `docs/PROGRESS.md`. The design behind
 each phase is in `docs/ROADMAP.md`.
 
-## [Unreleased] — Phase E3: cheaper re-ingest
+## [Unreleased] — Phase E3–E4: cheaper re-ingest (target v1.4.0)
 
 Work in progress on branch `feature/phase-e3-reingest`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
+
+### Added
+- E3: embedding cache in `registry.db` (`embedding_cache`, keyed by SHA-256 of the chunk text + model):
+  a re-ingested document embeds only chunks whose text changed. 60-page manual: cold 243 s, one-page
+  revision 6.9 s (1 embedded / 97 cached). `logs/ingest.log` and `ingest_state.json` report
+  `embedded` / `cached` / `cache_pruned`; unused cache rows are pruned after updates and removals.
+  `chunk.text_hash` column (older registries are migrated on open).
+- E4: README "Revising a document": replace in place vs. add `…_v3.pdf` beside `…_v2.pdf`
+  (older revision superseded and hidden from answers), and how the running app picks either up.
+
+### Changed
+- `ingest_folder()` accepts a store, registry and index folder (default: the app's), and
+  `rebuild_keyword_index()` an index folder, so an ingest can run against a throwaway index.
 
 ## [1.3.0] — 2026-09-27 — Phase C: large database, schema RAG
 

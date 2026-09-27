@@ -36,13 +36,15 @@ def _path() -> Path:
     return settings().path("index_dir") / "bm25.pkl"
 
 
-def rebuild_keyword_index(store) -> KeywordIndex:
+def rebuild_keyword_index(store, index_dir: Path | None = None) -> KeywordIndex:
+    """index_dir: where bm25.pkl goes (default: the app's index; a test ingest passes its own)."""
     ids, texts = [], []
     for cid, text in store.all_ids_and_texts():
         ids.append(cid); texts.append(text)
     idx = KeywordIndex(ids, texts)
-    _path().parent.mkdir(parents=True, exist_ok=True)
-    with open(_path(), "wb") as f:
+    path = (index_dir / "bm25.pkl") if index_dir else _path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
         pickle.dump(idx, f)
     get_keyword_index.cache_clear()
     return idx

@@ -5,6 +5,7 @@ can always be rebuilt from the registry + source PDFs.
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from abc import ABC, abstractmethod
 from functools import lru_cache
@@ -107,7 +108,14 @@ CREATE INDEX IF NOT EXISTS ix_chunk_source ON chunk(source);
 CREATE TABLE IF NOT EXISTS ingest_run(
   id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT,
   added INTEGER, updated INTEGER, removed INTEGER, failed INTEGER);
+CREATE TABLE IF NOT EXISTS embedding_cache(
+  hash TEXT, model TEXT, vec BLOB, PRIMARY KEY(hash, model));
 """
+
+
+def text_hash(text: str) -> str:
+    """Key of the embedding cache: the exact chunk text (prefix included) that gets embedded."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class Registry:
@@ -116,6 +124,10 @@ class Registry:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path))
         self.db.executescript(SCHEMA)
+        # registries created before E3 lack chunk.text_hash (which ties cache rows to live chunks)
+        if "text_hash" not in {r[1] for r in self.db.execute("PRAGMA table_info(chunk)")}:
+            self.db.execute("ALTER TABLE chunk ADD COLUMN text_hash TEXT")
+            self.db.commit()
 
     def known_hash(self, source: str) -> Optional[str]:
         r = self.db.execute("SELECT doc_hash FROM document WHERE source=?", (source,)).fetchone()
@@ -132,9 +144,34 @@ class Registry:
 
     def replace_chunks(self, source: str, chunks: list[Chunk]) -> None:
         self.db.execute("DELETE FROM chunk WHERE source=?", (source,))
-        self.db.executemany("INSERT INTO chunk VALUES(?,?,?,?,?,?)",
-                            [(c.id, c.source, c.page, c.section, c.kind, len(c.text)) for c in chunks])
+        self.db.executemany("INSERT INTO chunk(id, source, page, section, kind, chars, text_hash) VALUES(?,?,?,?,?,?,?)",
+                            [(c.id, c.source, c.page, c.section, c.kind, len(c.text), text_hash(c.text))
+                             for c in chunks])
         self.db.commit()
+
+    # ---- embedding cache (Phase E3): a revised PDF re-embeds only the chunks whose text changed
+    def cached_vectors(self, hashes: list[str], model: str) -> dict[str, list[float]]:
+        import numpy as np
+        out: dict[str, list[float]] = {}
+        for i in range(0, len(hashes), 500):          # stay under SQLite's bound-parameter limit
+            part = hashes[i:i + 500]
+            q = f"SELECT hash, vec FROM embedding_cache WHERE model=? AND hash IN ({','.join('?' * len(part))})"
+            for h, blob in self.db.execute(q, (model, *part)):
+                out[h] = np.frombuffer(blob, dtype=np.float32).tolist()
+        return out
+
+    def store_vectors(self, pairs: list[tuple[str, list[float]]], model: str) -> None:
+        import numpy as np
+        self.db.executemany("INSERT OR REPLACE INTO embedding_cache(hash, model, vec) VALUES(?,?,?)",
+                            [(h, model, np.asarray(v, dtype=np.float32).tobytes()) for h, v in pairs])
+        self.db.commit()
+
+    def prune_embedding_cache(self) -> int:
+        """Drop cache rows no current chunk uses (removed documents, replaced text). Returns rows removed."""
+        n = self.db.execute("DELETE FROM embedding_cache WHERE hash NOT IN "
+                            "(SELECT text_hash FROM chunk WHERE text_hash IS NOT NULL)").rowcount
+        self.db.commit()
+        return n
 
     def remove_document(self, source: str) -> None:
         self.db.execute("DELETE FROM chunk WHERE source=?", (source,))

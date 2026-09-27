@@ -56,9 +56,11 @@ starts reasoning/"thinking" and eats the whole token budget, tune `LLM_EXTRA_BOD
 
 ## Runbook
 
-- **Add documents**: copy PDFs into `data/pdfs/<Category>/`, run `python scripts/ingest.py`. Re-runs
-  are idempotent (unchanged files are skipped by SHA-256; changed files are re-chunked; removed
-  files are purged from the index).
+- **Add documents**: copy PDFs into `data/pdfs/<Category>/`. With the ingest worker running
+  (`docker compose up`, or `python scripts/ingest_worker.py`) they are picked up within
+  `ingest.watch_interval_seconds` (5 min) and the running app sees them without a restart; or run
+  `python scripts/ingest.py` once. Re-runs are idempotent (unchanged files are skipped by SHA-256;
+  changed files are re-chunked; removed files are purged from the index). See "Revising a document".
 - **Add a database view**: this build has no DDL access, so every catalog view carries a `definition:`
   field (a plain SQL `SELECT` over the real tables) instead of a real `CREATE VIEW` — see "Database
   views without DDL" below. Once the DBA creates the real view, delete `definition:` and the same SQL
@@ -78,6 +80,25 @@ starts reasoning/"thinking" and eats the whole token budget, tune `LLM_EXTRA_BOD
   comes from `.env`).
 - **Restore**: delete `data/index/` and re-run `python scripts/ingest.py` — the registry (SQLite) and
   vector store can always be rebuilt from the source PDFs plus the databases; nothing else holds state.
+
+### Revising a document
+
+Two ways to publish a new version, with different effects:
+
+1. **Replace the file in place** (same file name, new content). The next ingest pass sees a new
+   SHA-256, re-chunks the file and replaces its chunks. Only chunks whose text changed are
+   re-embedded; the rest come from the embedding cache in `registry.db` (measured 2026-09-27 on the
+   60-page IT SOP manual: cold ingest 243 s, a one-page revision 6.9 s — 1 chunk embedded, 97 cached).
+   `logs/ingest.log` shows `embedded N / cached M` per file.
+2. **Add the new revision beside the old one**, with the revision in the file name:
+   `…_v3.pdf` next to `…_v2.pdf` (also `Rev3`, `ver_10`, `-v1.2`). The older file is marked
+   **superseded**: it stays in the index but is hidden from answers (`retrieval.default_filters:
+   superseded: false`), and reappears if the newer file is removed. Keep the old file for audit, or
+   delete it — the next pass removes it from the index.
+
+Either way the running app picks the change up without a restart: its keyword index, vector store
+client and repeat-question answer cache are all keyed on `data/index/ingest_state.json`, which every
+ingest rewrites. Removing a PDF removes its chunks and, on the next pass, its unused cache entries.
 
 ### Database views without DDL
 
