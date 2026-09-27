@@ -41,3 +41,17 @@ def test_aggregate_results_have_no_blank_row_keys():
     r = _qr(["Factory", "Orders"], [["TAL", 1], ["RHL", 2]])
     r.key_columns = ["ExportOrderID", "ExportPONo"]           # the view's keys, absent from a GROUP BY result
     assert r.row_keys == []
+
+
+def test_onnx_reranker_without_an_export_says_how_to_make_one(tmp_path, monkeypatch):
+    import pytest
+    import ragbot.embed as embed
+    with pytest.raises(RuntimeError, match="export_reranker_onnx.py"):
+        embed.OnnxReranker(tmp_path / "missing")
+    monkeypatch.setenv("RERANK_BACKEND", "onnx")
+    monkeypatch.setattr(embed, "OnnxReranker", lambda: "onnx-backend")
+    embed.get_reranker.cache_clear()
+    try:
+        assert embed.get_reranker() == "onnx-backend"
+    finally:
+        embed.get_reranker.cache_clear()

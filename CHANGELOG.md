@@ -25,6 +25,11 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   made batch 32 about half as fast. Cold ingest 243 s → 127 s for the 60-page manual; reranking 10
   candidates 18.7 s → 10.1 s; document answers 18–32 s → 14–28 s. Results unchanged (scores within
   1.3e-7, same order).
+- D4: int8 ONNX reranker (`RERANK_BACKEND=onnx`, `OnnxReranker`), exported by
+  `scripts/export_reranker_onnx.py` to `data/models/` (git-ignored). 2.7× faster than the PyTorch
+  reranker (12.5 s → 4.6 s for 10 candidates), same top result on 6/6 questions, hit rate 29/30.
+  New dependency: `onnx` (export only). `optimum` is deliberately not used: its current release pins
+  transformers < 4.58.
 
 ### Fixed
 - Re-ingesting a file that was already superseded made it visible again: its fresh chunks were

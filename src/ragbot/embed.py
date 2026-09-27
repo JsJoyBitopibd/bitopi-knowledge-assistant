@@ -68,6 +68,37 @@ class Reranker:
                                                   show_progress_bar=False)]
 
 
+class OnnxReranker:
+    """The same reranker as int8 ONNX (scripts/export_reranker_onnx.py), run by onnxruntime. Tokenized
+    like CrossEncoder (pairs, longest-first truncation to RERANK_MAX_LENGTH) and scored with the same
+    sigmoid, so scores are directly comparable with Reranker's. Selected by RERANK_BACKEND=onnx."""
+
+    def __init__(self, model_dir=None) -> None:
+        from pathlib import Path
+        import onnxruntime as ort
+        from transformers import AutoTokenizer
+        from .config import ROOT
+        d = Path(model_dir) if model_dir else ROOT / "data" / "models" / f"{RERANK_MODEL.split('/')[-1]}-int8"
+        if not (d / "model.onnx").exists():
+            raise RuntimeError(f"{d / 'model.onnx'} not found — run python scripts/export_reranker_onnx.py")
+        self._tok = AutoTokenizer.from_pretrained(str(d))
+        self._sess = ort.InferenceSession(str(d / "model.onnx"), providers=["CPUExecutionProvider"])
+
+    def score(self, question: str, texts: list[str]) -> list[float]:
+        if not texts:
+            return []
+        out: list[float] = []
+        bs = _batch_size("RERANK_BATCH_SIZE")
+        for i in range(0, len(texts), bs):
+            part = texts[i:i + bs]
+            enc = self._tok([question] * len(part), part, padding=True, truncation="longest_first",
+                            max_length=RERANK_MAX_LENGTH, return_tensors="np")
+            logits = self._sess.run(["logits"], {"input_ids": enc["input_ids"].astype(np.int64),
+                                                 "attention_mask": enc["attention_mask"].astype(np.int64)})[0]
+            out += [float(x) for x in 1.0 / (1.0 + np.exp(-logits[:, 0]))]
+        return out
+
+
 def _batch_size(env_name: str) -> int:
     """Texts per forward pass. On CPU, small batches are much faster: every text in a batch is padded
     to the longest one, and the bigger activations fall out of cache. Measured 2026-09-27 on the pilot
@@ -100,7 +131,10 @@ def get_embedder() -> Embedder:
 
 
 @lru_cache(maxsize=1)
-def get_reranker() -> Reranker | None:
+def get_reranker() -> Reranker | OnnxReranker | None:
+    """RERANK_BACKEND: `torch` (default, sentence-transformers CrossEncoder) or `onnx` (int8 export)."""
     if os.getenv("RERANK_ENABLED", "true").lower() not in {"1", "true", "yes"}:
         return None
+    if os.getenv("RERANK_BACKEND", "torch").lower() == "onnx":
+        return OnnxReranker()
     return Reranker()
