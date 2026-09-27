@@ -39,6 +39,11 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   (`agent/templated.py`; `answer:` / `answer_list:` in `config/fixed_tools.yaml`): a count as one
   sentence, rows as a Markdown table, still checked by `verify()`. A date window keeps its phrase
   ("next week") as a parameter. Data + both eval cases: 9/13 → 13/13 correct.
+- C7: six fixed tools mined from real questions in `logs/chat.csv` — upcoming PCDs (all, per buyer,
+  per factory), the buyer list, cancelled orders in a window (count, list). Answered in 0.1–0.5 s
+  with no model call. `config/clarify.yaml`: when a data question names no order ("status of the
+  order") or no factory ("how many PPM meetings this week"), the assistant asks which one instead of
+  guessing (route `clarify`).
 - Each `[D#]` source now shows the query's filter (factory, dates, order id) to the answering model
   and in the judge's view; `verify()` also accepts the row count and parameter values.
 

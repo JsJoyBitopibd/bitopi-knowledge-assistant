@@ -122,6 +122,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
 
     chunks: list[Chunk] = []
     results: list[QueryResult] = []
+    if r == "data":
+        from ..data.tools import needs_clarification
+        ask = needs_clarification(q)
+        if ask:   # a missing order id / factory: ask instead of guessing (config/clarify.yaml)
+            out.text, out.route = ask, "clarify"
+            yield Final(_log(out, user)); return
     if r in ("data", "both"):
         from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
     if r == "both":

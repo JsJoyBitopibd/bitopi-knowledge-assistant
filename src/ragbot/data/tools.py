@@ -38,6 +38,17 @@ def _load_fixed_tools(path: Path, _mtime: int) -> list[dict[str, Any]]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or []
 
 
+def needs_clarification(question: str) -> Optional[str]:
+    """The clarifying question from config/clarify.yaml whose `match` fires (and `unless` does not), or None."""
+    path = settings().path("fixed_tools").parent / "clarify.yaml"
+    if not path.exists():
+        return None
+    for rule in _load_fixed_tools(path, path.stat().st_mtime_ns):
+        if re.search(rule["match"], question) and not (rule.get("unless") and re.search(rule["unless"], question)):
+            return rule["ask"]
+    return None
+
+
 def _date_window(text: str) -> tuple[date, date]:
     t = text.lower()
     today = date.today()

@@ -100,6 +100,84 @@
     WHERE FactoryID = @factory AND PPMDate >= @from AND PPMDate < @to
     ORDER BY PPMDate, MeetingId
 
+# --- added 2026-09-27 from real questions in logs/chat.csv (C7): each used to cost a SQL-generation call
+- name: upcoming_pcds_by_factory
+  database: BitopiSplint
+  description: The next PCDs from today for one factory ("TAL next PCD").
+  answer_list: 'Next PCDs at {factory}: {n} order(s)'
+  match: '(?i)\b(TAL|RHL|BGL|KTL|CKDL)\b.*\b(?:upcoming|next|latest|nearest)\s+pcds?\b|\b(?:upcoming|next|latest|nearest)\s+pcds?\b.*\b(TAL|RHL|BGL|KTL|CKDL)\b'
+  params:
+    factory: { from_group: [1, 2], upper: true }
+  sql: |
+    SELECT TOP (20) ExportOrderID, Buyer, StyleName, OrderQty, PCD, ShipDate, Factory
+    FROM rag.vw_ExportOrder
+    WHERE Factory = @factory AND PCD >= CAST(GETDATE() AS date)
+      AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
+    ORDER BY PCD, ExportOrderID
+
+- name: upcoming_pcds_by_buyer
+  database: BitopiSplint
+  description: The next PCDs from today for one buyer ("H&M upcoming PCD", "next PCDs for Zara").
+  answer_list: 'Next PCDs for {buyer}: {n} order(s)'
+  # the buyer is a capitalised word next to "upcoming/next PCD"; factory codes are not buyers
+  match: '(?i)\b(?-i:(?!(?:TAL|RHL|BGL|KTL|CKDL|PCD)\b)([A-Z][A-Za-z0-9&.\-]{1,24}))\s+(?:upcoming|next)\s+pcds?\b|\b(?:upcoming|next)\s+pcds?\s+(?:for|of)\s+(?:buyer\s+)?(?-i:(?!(?:TAL|RHL|BGL|KTL|CKDL)\b)([A-Z][A-Za-z0-9&.\-]{1,24}))'
+  params:
+    buyer: { from_group: [1, 2] }
+  sql: |
+    SELECT TOP (20) ExportOrderID, Buyer, StyleName, OrderQty, PCD, ShipDate, Factory
+    FROM rag.vw_ExportOrder
+    WHERE Buyer LIKE '%' + @buyer + '%' AND PCD >= CAST(GETDATE() AS date)
+      AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
+    ORDER BY PCD, ExportOrderID
+
+- name: upcoming_pcds
+  database: BitopiSplint
+  description: The next PCDs from today across all buyers ("next PCD", "upcoming PCDs", "latest PCD").
+  answer_list: 'The next {n} PCD(s) from today'
+  match: '(?i)\b(?:upcoming|next|latest|nearest)\s+pcds?\b|\bpcds?\s+(?:coming\s+up|upcoming)\b'
+  sql: |
+    SELECT TOP (20) ExportOrderID, Buyer, StyleName, OrderQty, PCD, ShipDate, Factory
+    FROM rag.vw_ExportOrder
+    WHERE PCD >= CAST(GETDATE() AS date) AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
+    ORDER BY PCD, ExportOrderID
+
+- name: buyer_list
+  database: BitopiSplint
+  description: Names of the buyers that have export orders ("give me buyer names", "list buyers").
+  answer_list: '{n} buyer(s) with export orders'
+  # not when an order code is present: "buyer name for TAL-25-1493-215" is eo_by_id
+  match: '(?i)^(?!.*\b[A-Z]{2,4}-\d{2,4}-\d{2,5})(?=.*\bbuyers?\b)(?=.*\b(?:names?|list)\b)'
+  sql: |
+    SELECT DISTINCT TOP (200) Buyer
+    FROM rag.vw_ExportOrder
+    WHERE Buyer IS NOT NULL
+    ORDER BY Buyer
+
+- name: cancelled_orders_count_window
+  database: BitopiSplint
+  description: Count of export orders cancelled in a date window.
+  answer: '{value} export order(s) were cancelled {window}'
+  match: '(?i)\bhow many\b.*\bcancel(?:l?ed|lations?)?\b.*\b(today|this week|this month|next week|last \d+ days)\b'
+  params:
+    window: { from_group: 1, type: date_window }
+  sql: |
+    SELECT COUNT(*) AS Cancelled
+    FROM rag.vw_CancelledExportOrder
+    WHERE CancelledDate >= @from AND CancelledDate < @to
+
+- name: cancelled_orders_window
+  database: BitopiSplint
+  description: Export orders cancelled in a date window, newest first.
+  answer_list: '{n} export order(s) cancelled {window}'
+  match: '(?i)\bcancel(?:l?ed|lations?)?\b.*\b(today|this week|this month|last \d+ days)\b|\b(today|this week|this month|last \d+ days)\b.*\bcancel(?:l?ed|lations?)?\b'
+  params:
+    window: { from_group: [1, 2], type: date_window }
+  sql: |
+    SELECT TOP (200) ExportOrderID, FileRefNo, UnitName, PCD, ShipDate, OrderQty, CancelledBy, CancelledDate, Remarks
+    FROM rag.vw_CancelledExportOrder
+    WHERE CancelledDate >= @from AND CancelledDate < @to
+    ORDER BY CancelledDate DESC
+
 - name: orders_by_fileref
   database: BitopiSplint
   description: >

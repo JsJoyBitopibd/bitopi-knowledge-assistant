@@ -25,3 +25,33 @@ def test_matches(q, tool, params):
 def test_no_false_match(q):
     hit = match_fixed_tool(q, load_fixed_tools())
     assert not hit or hit[0]["name"] != "eo_by_po"
+
+
+@pytest.mark.parametrize("q, tool", [
+    ("What is the next PCD?", "upcoming_pcds"),
+    ("what is the upcoming pcd", "upcoming_pcds"),
+    ("What is the H&M upcoming PCD?", "upcoming_pcds_by_buyer"),
+    ("TAL next PCD", "upcoming_pcds_by_factory"),
+    ("give me buyer names", "buyer_list"),
+    ("What is the buyer name for TAL-25-1493-215?", "eo_by_id"),     # an order code beats the buyer list
+    ("How many export orders were cancelled this month?", "cancelled_orders_count_window"),
+    ("Which export orders were cancelled in the last 30 days?", "cancelled_orders_window"),
+])
+def test_tools_added_from_real_questions(q, tool):
+    hit = match_fixed_tool(q, load_fixed_tools())
+    assert hit and hit[0]["name"] == tool
+
+
+@pytest.mark.parametrize("q, asks", [
+    ("What is the status of the order?", "Which export order"),
+    ("PCD for my order please", "Which export order"),
+    ("How many PPM meetings this week?", "For which factory"),
+    ("What is the status of TAL-25-1493-215?", None),
+    ("status of the order with PO 594520-9192", None),
+    ("How many PPM meetings does TAL have this week?", None),
+    ("Which orders have a PCD next week?", None),               # answerable by generated SQL: no question back
+])
+def test_clarification_rules(q, asks):
+    from ragbot.data.tools import needs_clarification
+    got = needs_clarification(q)
+    assert (got is None) if asks is None else (got and got.startswith(asks))

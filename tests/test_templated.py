@@ -103,3 +103,10 @@ def test_generated_sql_still_uses_the_model(wired):
     chat = wired(_qr(["Orders"], [[7]], tool="generated"), ["There are 7 orders [D1]."])
     a = orch.answer("some free-form data question")
     assert a.text == "There are 7 orders [D1]." and a.usage.calls == 1 and not chat.replies
+
+
+def test_missing_order_id_asks_instead_of_querying(wired, monkeypatch):
+    wired(_qr(["n"], [[1]]), [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda *a, **k: pytest.fail("must not query the database"))
+    a = orch.answer("What is the status of the order?")
+    assert a.route == "clarify" and a.text.startswith("Which export order") and a.usage.calls == 0
