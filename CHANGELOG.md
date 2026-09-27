@@ -16,7 +16,9 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   a re-ingested document embeds only chunks whose text changed. 60-page manual: cold 243 s, one-page
   revision 6.9 s (1 embedded / 97 cached). `logs/ingest.log` and `ingest_state.json` report
   `embedded` / `cached` / `cache_pruned`; unused cache rows are pruned after updates and removals.
-  `chunk.text_hash` column (older registries are migrated on open).
+  `chunk.text_hash` column (older registries are migrated on open). An index built before E3 seeds
+  the cache from the vectors already in the store on its first ingest — nothing is re-embedded
+  (live index: 250 of 250 chunks seeded).
 - E4: README "Revising a document": replace in place vs. add `…_v3.pdf` beside `…_v2.pdf`
   (older revision superseded and hidden from answers), and how the running app picks either up.
 

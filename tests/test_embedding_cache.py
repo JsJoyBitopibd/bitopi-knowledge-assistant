@@ -70,3 +70,19 @@ def test_pre_e3_registry_is_migrated(tmp_path):
     reg = Registry(db)
     cols = {r[1] for r in reg.db.execute("PRAGMA table_info(chunk)")}
     assert "text_hash" in cols and reg.db.execute("SELECT COUNT(*) FROM chunk").fetchone()[0] == 1
+
+
+def test_pre_e3_index_seeds_the_cache_from_existing_vectors(tmp_path):
+    """An index built before E3 has vectors in the store but no cache: seed it, embed nothing."""
+    reg = Registry(tmp_path / "r.db")
+    reg.db.execute("INSERT INTO chunk(id, source, page, section, kind, chars) VALUES('d#p1#c1','d.pdf',1,'s','text',9)")
+    reg.db.commit()
+
+    class Store:
+        def all_texts_and_vectors(self):
+            yield "d#p1#c1", "old chunk", [0.5, 0.25]
+
+    assert reg.seed_embedding_cache(Store(), "m") == 1
+    assert reg.cached_vectors([text_hash("old chunk")], "m") == {text_hash("old chunk"): [0.5, 0.25]}
+    assert reg.db.execute("SELECT text_hash FROM chunk").fetchone()[0] == text_hash("old chunk")
+    assert reg.seed_embedding_cache(Store(), "m") == 0          # idempotent: done once

@@ -141,6 +141,9 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
 
     logging.basicConfig(filename=log_dir() / "ingest.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+    seeded = reg.seed_embedding_cache(store, EMBED_MODEL)   # index built before E3: reuse its vectors
+    if seeded:
+        log.info("embedding cache seeded from %d existing vectors (no re-embedding)", seeded)
 
     for path in sorted(root.rglob("*.pdf")):
         seen.add(path.name)

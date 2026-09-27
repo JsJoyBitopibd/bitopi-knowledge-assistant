@@ -89,6 +89,13 @@ class ChromaStore(VectorStore):
     def count(self):
         return self.col.count()
 
+    def all_texts_and_vectors(self, batch: int = 2000):
+        """(id, text, vector) for every chunk — seeds the embedding cache without re-embedding (E3)."""
+        n = self.count()
+        for off in range(0, n, batch):
+            res = self.col.get(limit=batch, offset=off, include=["documents", "embeddings"])
+            yield from zip(res["ids"], res["documents"], res["embeddings"])
+
     def set_superseded(self, source, superseded):
         res = self.col.get(where={"source": source}, include=[])
         ids = res["ids"]
@@ -165,6 +172,21 @@ class Registry:
         self.db.executemany("INSERT OR REPLACE INTO embedding_cache(hash, model, vec) VALUES(?,?,?)",
                             [(h, model, np.asarray(v, dtype=np.float32).tobytes()) for h, v in pairs])
         self.db.commit()
+
+    def seed_embedding_cache(self, store, model: str) -> int:
+        """One-off upgrade for an index built before E3: its chunks have no text_hash and the cache is
+        empty, so the first revision of any existing PDF would re-embed it whole. The vectors are
+        already in the store — copy them into the cache and fill text_hash. No-op once done."""
+        if not self.db.execute("SELECT 1 FROM chunk WHERE text_hash IS NULL LIMIT 1").fetchone():
+            return 0
+        seeded = 0
+        for cid, text, vec in store.all_texts_and_vectors():
+            h = text_hash(text)
+            self.db.execute("UPDATE chunk SET text_hash=? WHERE id=?", (h, cid))
+            self.store_vectors([(h, list(vec))], model)
+            seeded += 1
+        self.db.commit()
+        return seeded
 
     def prune_embedding_cache(self) -> int:
         """Drop cache rows no current chunk uses (removed documents, replaced text). Returns rows removed."""
