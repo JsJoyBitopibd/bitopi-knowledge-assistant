@@ -79,3 +79,9 @@ word-for-word the one Phase A's judge rated faithful.
 
 **Tooling fix:** `eval.py` compared a `--kind` subset run with the previous run's totals and printed
 false BLOCKs; it now compares with the most recent earlier run covering the same cases, on those cases.
+| v1.5.0 Phase D (ONNX reranker) | `20260927T1710.json` | 96% | **100%** | **90%** | 100% | 100% | 100% |
+
+**Phase D notes:** the hit-rate dip is one case (61) that hit a Gemini rate-limit mid-run; it passes on
+re-run (`both` cases 3/3). Cases 2, 22, 33, 37 — "terser" in v1.3.0 — are complete again with the same
+prompts, so that was run-to-run variance. Speed: `hit_rate.py` (30 questions, reranker on) >600 s →
+387 s (batch size 1) → 174 s (int8 ONNX); document answers in the app ~10 s.

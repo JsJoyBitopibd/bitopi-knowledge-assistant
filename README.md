@@ -118,6 +118,20 @@ python scripts\discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --sch
 python scripts\check_catalog.py --live    # runs every view's definition + every fixed tool's example
 ```
 
+### Faster reranking: the int8 ONNX reranker (Phase D4)
+
+The reranker is most of a document answer's wait on CPU. An int8 ONNX copy is 2.7x faster with the
+same top result (measured 2026-09-27: 10 candidates 12.5 s -> 4.6 s; `hit_rate.py` 29/30 either way).
+
+```powershell
+python scripts\export_reranker_onnx.py           # once: data\modelsge-reranker-v2-m3-int8 (570 MB, ~1 min)
+python scripts\export_reranker_onnx.py --check   # parity + speed against the PyTorch reranker
+# then in .env:  RERANK_BACKEND=onnx
+```
+
+Re-export after changing `RERANK_MODEL`. Do not install `optimum` for this: its current release pins
+transformers < 4.58 and downgrades the environment.
+
 ### Asking about any table: schema discovery and the schema index (Phase C)
 
 Beyond the curated `rag.*` views, generated SQL may use any discovered table the question needs —

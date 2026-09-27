@@ -11,6 +11,7 @@
 #   ./.env            secrets: Gemini key + SQL Server credentials
 #   ./data/index      Chroma + BM25 + registry (shared writer = worker, readers = app)
 #   ./data/pdfs       source documents
+#   ./data/models     exported ONNX models (scripts/export_reranker_onnx.py)
 #   ~/.cache/huggingface -> /models   bge-m3 + reranker weights (~6.5 GB), so neither container re-downloads
 services:
   app:
@@ -22,6 +23,7 @@ services:
     volumes:
       - ./data/index:/app/data/index
       - ./data/pdfs:/app/data/pdfs
+      - ./data/models:/app/data/models      # int8 ONNX reranker (RERANK_BACKEND=onnx)
       - ${HF_CACHE:-~/.cache/huggingface}:/models
     mem_limit: 8g
     restart: unless-stopped

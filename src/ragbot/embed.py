@@ -10,6 +10,9 @@ from functools import lru_cache
 
 import numpy as np
 
+from . import config  # noqa: F401  — loads .env before the settings below are read; importing this module
+                      # directly (a script, a test) used to ignore .env, e.g. RERANK_BACKEND
+
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
 RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 EMBED_BACKEND = os.getenv("EMBED_BACKEND", "sentence_transformers")

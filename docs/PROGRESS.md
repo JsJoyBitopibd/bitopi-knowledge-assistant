@@ -8,10 +8,10 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.4.0** (Phase E3–E4), tag `v1.4.0`, on `main` |
-| In progress | **Phase D** (60K pages) → v1.5.0, branch `feature/phase-d1-fts` |
-| Next task | D✓ — full 62-case eval with `RERANK_BACKEND=onnx`; if it holds, make ONNX the reranker default and release v1.5.0 |
-| Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
+| Released | **v1.5.0** (Phase D), tag `v1.5.0`, on `main` — **the Phase A–E roadmap is complete** |
+| In progress | nothing; see "Small follow-ups" and "Open items" below for what remains |
+| Next task | Your choice: follow-ups below (document-answer tuning, schema samples, follow-up chips), or the open items (Gemini billing, DBA request, auth / per-user scoping — PRD FR-4) |
+| Last eval | 2026-09-27, `eval/results/20260927T1710.json`: correctness 90%, faithful 100%, hit 96% (one rate-limit miss), citations 100% |
 | Tests | 273 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
@@ -75,7 +75,7 @@ routed to `data` only (router).
 | C6 | Pre-computed aggregates in local SQLite for heavy queries | ✅ | unit tests; live refresh | `tests/test_aggregates.py` (12). Live 2026-09-27: `pcd_history_by_eo` was **10.3 s + HYT00 timeout** (cold); `refresh_aggregates.py` copied 4,235,069 rows in 33–35 s (one read-only scan, 363 MB); lookups now 28–134 ms, **5/5 orders identical to live**. Found + fixed: order IDs are stored in mixed case (`tal-22-523-81` / `TAL-22-523-81`) and SQL Server matches both — the copy compared case-sensitively (7 vs 9 rows); columns are now `COLLATE NOCASE`. `docker-compose.yml` service `aggregates` refreshes every 24 h; README runbook added |
 | C✓ | Phase gate: full eval, no metric drops > 5 points | ✅ | `scripts/eval.py` (62 cases) | `eval/results/20260927T1347.json` vs v1.2.0 on the same 62 cases: correctness **85% → 89%**, hit **91% → 98%**, faithful 100% → 98%, citations 100%, not-found 100%, refuse 100%. Better: 55, 56, 60, 61 (0 → 1). Worse: 6, 22, 33, 37 (1.0 → 0.5, document answers terser — follow-up below), 4 (faithful, judge noise: same answer as Phase A). `eval.py` fixed to compare on the same cases (it printed a false BLOCK) |
 
-## Phase D — 60K pages (v1.5.0) 🔄
+## Phase D — 60K pages (v1.5.0) ✅
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
@@ -83,7 +83,7 @@ routed to `data` only (router).
 | D2 | Chroma at 60K: HNSW parameters; list filters pushed into the vector query | ✅ | `hit_rate.py`; filter test | **HNSW measured, left at defaults**: 60K vectors (real embeddings + noise), 50 queries vs exact search — Chroma defaults (M16/efC100/efS100) recall@20 **0.999**, 1.1 ms/query; the roadmap's M32/efC200 also 0.999 but 1.7 ms and slower builds, so no change and no reindex needed. **Filter pushdown**: category lists now go into the vector query as `$in` (they were applied after it, silently dropping most of the top-k); `tests/test_keyword.py` (2 new). For today's queries (only `superseded`) the Chroma filter is byte-identical, so hit_rate is unaffected |
 | D3 | Ingestion throughput (parallel parse/OCR, batched embedding; ONNX int8 bge-m3 behind the parity test) | ✅ | throughput numbers; parity cosine ≥ 0.99 | **Profiled first**: embedding is 97% of ingest time (parse + tables ≈ 5 s per PDF), so a parallel parse pool would gain nothing. torch int8 dynamic quantization: 0.81× (slower) — rejected. **Batch size is the lever**: every text in a batch is padded to the longest; grid on 48 real chunks × 2 runs: batch 1 = 0.96 chunks/s, 32 = 0.52. Default now 1 on CPU / 32 on GPU (`EMBED_BATCH_SIZE`). Cold ingest of the 60-page manual **243.4 s → 126.5 s** (0.40 → 0.77 chunks/s); embeddings identical (cosine ≥ 0.9999999). Projection for 60K pages (~2.4 chunks/page ≈ 145K chunks) on this CPU: ~52 h once — a GPU (or ONNX, below) is the realistic path for the bulk load; revisions stay cheap via E3 |
 | D4 | ONNX int8 reranker behind `RERANK_BACKEND=onnx` | ✅ | latency; `hit_rate.py` | **Done without new dependencies**: reranker batch 10 → 1 (same finding as D3): 10 pairs 18.7 s → 10.1 s; scores identical (max diff 1.3e-7, same order); `hit_rate.py` 29/30 in 387 s (the previous run did not finish within 600 s); document answers 18–32 s → 14–28 s. **ONNX int8** (approved 2026-09-27, reranker only): `scripts/export_reranker_onnx.py` (torch export + onnxruntime int8, 56 s → `data/models/bge-reranker-v2-m3-int8/`, 570 MB). `--check` on 6 questions × 10 real candidates: **12.5 s → 4.6 s (2.7×)**, same top-1 6/6, full order identical 3/6 (max score diff 0.149). `hit_rate.py` with `RERANK_BACKEND=onnx`: **29/30** (same miss) in 174 s. **Install incident**: `optimum` downgraded transformers 5.17 → 4.57 and huggingface-hub 1.32 → 0.36 (breaking sentence-transformers 6); reverted to the lock file, optimum removed, `pip check` clean, stored vectors reproduce at cosine 1.0000. Only `onnx` + `ml_dtypes` added |
-| D✓ | Phase gate: full eval | ⬜ | `scripts/eval.py` | |
+| D✓ | Phase gate: full eval | ✅ | `scripts/eval.py` | `eval/results/20260927T1710.json` (62 cases, `RERANK_BACKEND=onnx`) vs v1.3.0 on the same cases: correctness 89% → **90%**, faithfulness 98% → **100%**, citations 100%, not-found 100%, refuse 100%, hit 98% → 96%. The only miss (case 61) was a one-off Gemini rate-limit (429 → the friendly quota message, as designed); re-run: `both` cases 3/3. Cases 2, 22, 33, 37 are complete again (v1.3.0's "terser answers" was run-to-run variance). ONNX made the default in `.env`; app check: "Who must approve a new user account request?" **10.1 s** (28.0 s with PyTorch earlier today, 130–160 s at the start of the day) |
 
 ## Phase E — Freshness ✅
 
@@ -101,9 +101,10 @@ routed to `data` only (router).
   `.streamlit/config.toml` for production, or install torchvision. Cosmetic.
 - ~~Data answers wrongly reported as not-found (a count of 0, a 200-row list)~~ — fixed in v1.3.0 by
   C7 templated answers (eval cases 55, 56).
-- **Document answers got terser in v1.3.0** (eval cases 6, 22, 33, 37: correct fact, qualifier left
-  out). Try a `system_answer.txt` rule to keep the conditions, purpose and exceptions a source attaches
-  to a fact; verify with a documents-only eval (`eval.py --kind direct,table`). See `docs/tuning_log.md`.
+- ~~Document answers got terser in v1.3.0~~ — run-to-run variance: cases 22, 33, 37 (and 2) were
+  complete again in the v1.5.0 gate with the same prompts. Watch it, no change needed now.
+- The Gemini free tier rate-limits bursts (one 429 in 541 calls on 2026-09-27, during back-to-back
+  evals). Billing (open item) removes it; the app already shows a friendly message.
 - Deferred from C: per-tool follow-up suggestion chips (C8); `discover_schema.py --samples` only for
   the tables the schema index actually selects (a full pass is ~6,700 production queries) (C1).
 - Raw tables store some codes, not names (e.g. `tblSampleRequestMaster.Buyer` = `C/09/7`); the
@@ -130,3 +131,4 @@ routed to `data` only (router).
 | 2026-09-27 | v1.2.0: Phase B done (B1–B6 + gate), merged to `main`, tagged. Phase C drafted (C1–C5 in working tree) |
 | 2026-09-27 | v1.3.0: Phase C done (C1–C8 + gate; correctness 85% → 89%), merged to `main`, tagged. E3 next |
 | 2026-09-27 | Aggregates refreshed (4.2M rows, 32 s). v1.4.0: E3 embedding cache (one-page revision 243 s → 6.9 s) + E4 README; live index seeded; hit_rate 29/30. D1 next |
+| 2026-09-27 | v1.5.0: Phase D done (D1 FTS5, D2 filter pushdown, D3/D4 batch size + int8 ONNX reranker; correctness 90%, faithful 100%). Document answers ~10 s. Roadmap A–E complete |

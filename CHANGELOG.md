@@ -6,10 +6,20 @@ versions follow [Semantic Versioning](https://semver.org/). Each released versio
 Where things stand right now (done / in progress / next) is in `docs/PROGRESS.md`. The design behind
 each phase is in `docs/ROADMAP.md`.
 
-## [Unreleased] — Phase D: 60K pages (target v1.5.0)
+## [Unreleased]
 
-Work in progress on branch `feature/phase-d1-fts`. Entries are added here as each task is
-verified; see `docs/PROGRESS.md` for per-task status and evidence.
+Nothing yet. What remains is listed in `docs/PROGRESS.md` ("Small follow-ups", "Open items").
+
+## [1.5.0] — 2026-09-27 — Phase D: 60K pages
+
+Eval (62 cases, `RERANK_BACKEND=onnx`, `eval/results/20260927T1710.json`, vs v1.3.0 on the same cases):
+correctness 89% → **90%**, faithfulness 98% → **100%**, citation validity 100%, not-found 100%, refuse
+100%, hit rate 98% → 96% (the one miss was a Gemini rate-limit; it passes on re-run). Document answers
+in the app: ~10 s (130–160 s before v1.1.0).
+
+### Added
+- `RERANK_BACKEND=onnx` is now set in `.env.example` (export the model first); `docker-compose.yml`
+  mounts `data/models`; README "Faster reranking" runbook.
 
 ### Changed
 - D1: keyword search moved from a pickled in-memory `rank_bm25` index (rebuilt in full after every
@@ -32,6 +42,8 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   transformers < 4.58.
 
 ### Fixed
+- `embed.py` read `EMBED_MODEL`, `RERANK_MODEL` and `RERANK_BACKEND` without loading `.env`, so a
+  script importing it directly ignored `.env` (the app worked only because it imported `config` first).
 - Re-ingesting a file that was already superseded made it visible again: its fresh chunks were
   written as not superseded and never re-marked, because the document row had not changed.
 
