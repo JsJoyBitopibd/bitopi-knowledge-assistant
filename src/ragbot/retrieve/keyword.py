@@ -1,11 +1,20 @@
-"""BM25 keyword index over all chunks (exact codes, form numbers, rare terms, Bangla words).
-Rebuilt after each ingest and pickled to data/index/bm25.pkl."""
+"""Keyword (BM25) search over all chunks: exact codes, form numbers, rare terms, Bangla words.
+
+Phase D1: the index is the `chunk_fts` SQLite FTS5 table in data/index/registry.db, kept up to date
+per document by store.Registry (replace_chunks / remove_document / set_superseded) — no full rebuild
+after an ingest, no in-memory copy. The old design (rank_bm25 over every chunk, pickled to bm25.pkl)
+scored all chunks in Python on every question and would have been a 1–2 GB pickle at 60K pages.
+
+`KeywordIndex` (in-memory rank_bm25) stays for small corpora built on the fly — the schema index
+(data/schema_index.py) uses it for table documents.
+"""
 from __future__ import annotations
 
-import pickle
 import re
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Optional
 
 from rank_bm25 import BM25Okapi
 
@@ -19,12 +28,23 @@ def tokenize(text: str) -> list[str]:
     return _TOKEN.findall(text.lower())
 
 
+# English function words left out of FTS queries: they match nearly every chunk, so BM25 has to score
+# most of the table while they add ~nothing to the ranking. Measured at 60K chunks (2026-09-27):
+# query median 57 ms -> 17 ms with an identical top-20. Bangla terms are never dropped.
+_STOP = frozenset("""a an the is are was were be been of in on at to for from by with and or not no it its this
+that these those what which who whom whose when where why how do does did can could should would will shall
+may might must have has had our we you your their they them there here as if than then so such any all each
+every per about into over under up down out""".split())
+
+
 class KeywordIndex:
+    """In-memory BM25 over a small list of texts."""
+
     def __init__(self, ids: list[str], texts: list[str]):
         self.ids = ids
         self.bm25 = BM25Okapi([tokenize(t) for t in texts]) if texts else None
 
-    def search(self, question: str, k: int = 20) -> list[tuple[str, float]]:
+    def search(self, question: str, k: int = 20, where: Optional[dict[str, Any]] = None) -> list[tuple[str, float]]:
         if not self.bm25:
             return []
         scores = self.bm25.get_scores(tokenize(question))
@@ -32,28 +52,50 @@ class KeywordIndex:
         return [(self.ids[i], float(scores[i])) for i in order if scores[i] > 0]
 
 
-def _path() -> Path:
-    return settings().path("index_dir") / "bm25.pkl"
+class FtsKeywordIndex:
+    """BM25 over the registry's chunk_fts table. A fresh read-only connection per search: searches run
+    in a worker thread (retriever.py), and sqlite3 connections must not cross threads."""
 
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
 
-def rebuild_keyword_index(store, index_dir: Path | None = None) -> KeywordIndex:
-    """index_dir: where bm25.pkl goes (default: the app's index; a test ingest passes its own)."""
-    ids, texts = [], []
-    for cid, text in store.all_ids_and_texts():
-        ids.append(cid); texts.append(text)
-    idx = KeywordIndex(ids, texts)
-    path = (index_dir / "bm25.pkl") if index_dir else _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        pickle.dump(idx, f)
-    get_keyword_index.cache_clear()
-    return idx
+    def search(self, question: str, k: int = 20, where: Optional[dict[str, Any]] = None) -> list[tuple[str, float]]:
+        all_terms = list(dict.fromkeys(tokenize(question)))
+        terms = [t for t in all_terms if t not in _STOP] or all_terms   # a question of only stopwords keeps them
+        if not terms or not self.db_path.exists():
+            return []
+        # quoted terms joined by OR: any token may match, BM25 ranks by how many and how rare
+        sql = "SELECT id, bm25(chunk_fts) FROM chunk_fts WHERE chunk_fts MATCH ?"
+        args: list[Any] = [" OR ".join(f'"{t}"' for t in terms)]
+        # The retrieval filters are applied inside the search, so k results survive them (filtering
+        # after the merge used to shrink the candidate list silently).
+        for col, val in (where or {}).items():
+            if col == "superseded":
+                sql += " AND superseded = ?"; args.append(int(bool(val)))
+            elif col in ("category", "source"):
+                vals = list(val) if isinstance(val, (list, set, tuple)) else [val]
+                sql += f" AND {col} IN ({','.join('?' * len(vals))})"; args += vals
+        sql += " ORDER BY bm25(chunk_fts) LIMIT ?"
+        args.append(int(k))
+        con = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        try:
+            rows = con.execute(sql, args).fetchall()
+        except sqlite3.OperationalError:
+            return []          # a registry from before D1 that has not been opened for writing yet
+        finally:
+            con.close()
+        return [(cid, -float(score)) for cid, score in rows]   # FTS5 bm25(): lower is better
 
 
 @lru_cache(maxsize=1)
-def get_keyword_index() -> KeywordIndex:
-    p = _path()
-    if not p.exists():
-        return KeywordIndex([], [])
-    with open(p, "rb") as f:
-        return pickle.load(f)
+def get_keyword_index() -> FtsKeywordIndex:
+    """The app's keyword index. On first use after upgrading from the pickled BM25, fill chunk_fts
+    from the vector store once (a registry without it would otherwise return no keyword hits)."""
+    from ..store import Registry, get_store
+    path = settings().path("index_dir") / "registry.db"
+    if path.exists():
+        seeded = Registry(path).seed_fts(get_store())
+        if seeded:
+            import logging
+            logging.getLogger("ingest").info("keyword index (chunk_fts) seeded with %d chunks", seeded)
+    return FtsKeywordIndex(path)

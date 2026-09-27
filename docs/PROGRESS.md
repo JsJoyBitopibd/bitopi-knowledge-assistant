@@ -10,9 +10,9 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.4.0** (Phase E3–E4), tag `v1.4.0`, on `main` |
 | In progress | **Phase D** (60K pages) → v1.5.0, branch `feature/phase-d1-fts` |
-| Next task | D1 — SQLite FTS5 keyword index (incremental, replaces the pickled BM25) |
+| Next task | D2 — Chroma HNSW tuning + list filters pushed into the vector query |
 | Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
-| Tests | 260 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 270 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
 ## How to update this file (every session)
@@ -75,9 +75,15 @@ routed to `data` only (router).
 | C6 | Pre-computed aggregates in local SQLite for heavy queries | ✅ | unit tests; live refresh | `tests/test_aggregates.py` (12). Live 2026-09-27: `pcd_history_by_eo` was **10.3 s + HYT00 timeout** (cold); `refresh_aggregates.py` copied 4,235,069 rows in 33–35 s (one read-only scan, 363 MB); lookups now 28–134 ms, **5/5 orders identical to live**. Found + fixed: order IDs are stored in mixed case (`tal-22-523-81` / `TAL-22-523-81`) and SQL Server matches both — the copy compared case-sensitively (7 vs 9 rows); columns are now `COLLATE NOCASE`. `docker-compose.yml` service `aggregates` refreshes every 24 h; README runbook added |
 | C✓ | Phase gate: full eval, no metric drops > 5 points | ✅ | `scripts/eval.py` (62 cases) | `eval/results/20260927T1347.json` vs v1.2.0 on the same 62 cases: correctness **85% → 89%**, hit **91% → 98%**, faithful 100% → 98%, citations 100%, not-found 100%, refuse 100%. Better: 55, 56, 60, 61 (0 → 1). Worse: 6, 22, 33, 37 (1.0 → 0.5, document answers terser — follow-up below), 4 (faithful, judge noise: same answer as Phase A). `eval.py` fixed to compare on the same cases (it printed a false BLOCK) |
 
-## Phase D — 60K pages ⬜
+## Phase D — 60K pages (v1.5.0) 🔄
 
-D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D4 ONNX reranker. Not started.
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| D1 | Keyword search on SQLite FTS5 (`chunk_fts` in `registry.db`), maintained per document; filters inside the search | ✅ | `tests/test_keyword.py`; `hit_rate.py` ≥ baseline | `tests/test_keyword.py` (9: codes, Bangla, per-document update/removal, filters, FTS-syntax safety, upgrade seeding, stopwords). `hit_rate.py` **29/30** (baseline). Live index seeded in 1.3 s; vs the old pickled BM25 on 30 questions: top-20 overlap 0.82, same top-1 26/30. **At 60K chunks**: rank_bm25 = 22.9 s full rebuild after every ingest, 691 MB RAM building, 291 ms/query; FTS5 = no rebuild, nothing held in the app, 17 ms/query (stopwords left out of the query: 57 → 17 ms, identical top-20). Also fixed: a re-ingested file that was already superseded came back visible (its fresh chunks were written unsuperseded and never re-marked) — verified live |
+| D2 | Chroma at 60K: HNSW parameters; list filters pushed into the vector query | ⬜ | `hit_rate.py`; filter test | |
+| D3 | Ingestion throughput (parallel parse/OCR, batched embedding; ONNX int8 bge-m3 behind the parity test) | ⬜ | throughput numbers; parity cosine ≥ 0.99 | |
+| D4 | ONNX int8 reranker behind `RERANK_BACKEND=onnx` | ⬜ | latency; `hit_rate.py` | |
+| D✓ | Phase gate: full eval | ⬜ | `scripts/eval.py` | |
 
 ## Phase E — Freshness ✅
 

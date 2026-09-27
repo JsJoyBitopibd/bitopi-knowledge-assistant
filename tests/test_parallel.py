@@ -52,7 +52,7 @@ def test_retriever_runs_keyword_search_alongside_embedding(monkeypatch):
         time.sleep(DELAY)
         return [[0.0] * 4]
 
-    def slow_kw(question, k):
+    def slow_kw(question, k, where=None):
         time.sleep(DELAY)
         return [(c.id, 1.0)]
 

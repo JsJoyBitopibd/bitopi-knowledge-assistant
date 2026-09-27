@@ -117,7 +117,18 @@ CREATE TABLE IF NOT EXISTS ingest_run(
   added INTEGER, updated INTEGER, removed INTEGER, failed INTEGER);
 CREATE TABLE IF NOT EXISTS embedding_cache(
   hash TEXT, model TEXT, vec BLOB, PRIMARY KEY(hash, model));
+-- Phase D1: the keyword index, maintained per document (no full rebuild). `body` holds the tokens of
+-- retrieve.keyword.tokenize() joined by spaces, so the FTS 'ascii' tokenizer (whitespace/ASCII
+-- punctuation split, non-ASCII kept inside tokens) sees exactly those tokens — 'PCD-02' -> 'pcd 02',
+-- Bangla words intact (unicode61 would split them at vowel signs).
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+  id UNINDEXED, source UNINDEXED, category UNINDEXED, superseded UNINDEXED, body, tokenize='ascii');
 """
+
+
+def fts_body(text: str) -> str:
+    from .retrieve.keyword import tokenize
+    return " ".join(tokenize(text))
 
 
 def text_hash(text: str) -> str:
@@ -151,10 +162,27 @@ class Registry:
 
     def replace_chunks(self, source: str, chunks: list[Chunk]) -> None:
         self.db.execute("DELETE FROM chunk WHERE source=?", (source,))
+        self.db.execute("DELETE FROM chunk_fts WHERE source=?", (source,))
         self.db.executemany("INSERT INTO chunk(id, source, page, section, kind, chars, text_hash) VALUES(?,?,?,?,?,?,?)",
                             [(c.id, c.source, c.page, c.section, c.kind, len(c.text), text_hash(c.text))
                              for c in chunks])
+        self.db.executemany("INSERT INTO chunk_fts(id, source, category, superseded, body) VALUES(?,?,?,?,?)",
+                            [(c.id, c.source, c.category, int(bool(c.superseded)), fts_body(c.text)) for c in chunks])
         self.db.commit()
+
+    def seed_fts(self, store) -> int:
+        """One-off upgrade for a registry from before D1: fill chunk_fts from the vector store's texts
+        (category/superseded from the document table). No-op when it already has rows."""
+        if self.db.execute("SELECT 1 FROM chunk_fts LIMIT 1").fetchone() or \
+                not self.db.execute("SELECT 1 FROM chunk LIMIT 1").fetchone():
+            return 0
+        meta = {r[0]: (r[1], r[2], r[3]) for r in self.db.execute(
+            "SELECT c.id, c.source, d.category, d.superseded FROM chunk c JOIN document d ON d.source = c.source")}
+        rows = [(cid, *meta[cid][:2], int(bool(meta[cid][2])), fts_body(text))
+                for cid, text in store.all_ids_and_texts() if cid in meta]
+        self.db.executemany("INSERT INTO chunk_fts(id, source, category, superseded, body) VALUES(?,?,?,?,?)", rows)
+        self.db.commit()
+        return len(rows)
 
     # ---- embedding cache (Phase E3): a revised PDF re-embeds only the chunks whose text changed
     def cached_vectors(self, hashes: list[str], model: str) -> dict[str, list[float]]:
@@ -197,11 +225,13 @@ class Registry:
 
     def remove_document(self, source: str) -> None:
         self.db.execute("DELETE FROM chunk WHERE source=?", (source,))
+        self.db.execute("DELETE FROM chunk_fts WHERE source=?", (source,))
         self.db.execute("DELETE FROM document WHERE source=?", (source,))
         self.db.commit()
 
     def set_superseded(self, source: str, superseded: bool) -> None:
         self.db.execute("UPDATE document SET superseded=? WHERE source=?", (int(superseded), source))
+        self.db.execute("UPDATE chunk_fts SET superseded=? WHERE source=?", (int(superseded), source))
         self.db.commit()
 
     def all_titles(self) -> dict[str, str]:

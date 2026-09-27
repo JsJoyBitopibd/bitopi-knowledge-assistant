@@ -11,6 +11,17 @@ each phase is in `docs/ROADMAP.md`.
 Work in progress on branch `feature/phase-d1-fts`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
 
+### Changed
+- D1: keyword search moved from a pickled in-memory `rank_bm25` index (rebuilt in full after every
+  ingest) to the `chunk_fts` SQLite FTS5 table in `registry.db`, updated per document by the registry.
+  Category and superseded filters are applied inside the keyword search. English stopwords are left
+  out of the query. At 60K chunks: no 22.9 s rebuild, no 691 MB in memory, 291 → 17 ms per query.
+  Existing indexes are seeded once from the vector store on first use; `bm25.pkl` is no longer read.
+
+### Fixed
+- Re-ingesting a file that was already superseded made it visible again: its fresh chunks were
+  written as not superseded and never re-marked, because the document row had not changed.
+
 ## [1.4.0] — 2026-09-27 — Phase E3–E4: cheaper re-ingest
 
 Ingestion-only release (the answer path is unchanged): 261 tests; retrieval `hit_rate.py` 29/30

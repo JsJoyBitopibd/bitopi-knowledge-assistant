@@ -39,8 +39,9 @@ def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optio
     where = {**s.get("retrieval.default_filters", {}), **(where or {})}
     store, kw = get_store(), get_keyword_index()
 
-    # BM25 is pure Python and independent of the embedding, so run it alongside embed + vector search.
-    sparse_f = _POOL.submit(kw.search, question, s["retrieval.keyword_top_k"])
+    # Keyword search is independent of the embedding, so run it alongside embed + vector search. It
+    # applies the filters itself (category, superseded), so its top-k are all usable.
+    sparse_f = _POOL.submit(kw.search, question, s["retrieval.keyword_top_k"], where)
     qvec = list(_embed_query(question))
     # Chroma needs a single-clause or $and dict; equality-only filter here, lists handled post-hoc.
     chroma_where = {k: v for k, v in where.items() if not isinstance(v, (list, set, tuple))}

@@ -18,7 +18,6 @@ import pymupdf
 from ..config import log_dir, settings
 from ..embed import EMBED_MODEL, get_embedder
 from ..models import Chunk
-from ..retrieve.keyword import rebuild_keyword_index
 from ..store import Registry, get_store, text_hash
 from .chunker import chunk_page
 from .pdf_text import clean_pages
@@ -144,6 +143,10 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     seeded = reg.seed_embedding_cache(store, EMBED_MODEL)   # index built before E3: reuse its vectors
     if seeded:
         log.info("embedding cache seeded from %d existing vectors (no re-embedding)", seeded)
+    fts_seeded = reg.seed_fts(store)                           # index built before D1: fill chunk_fts once
+    if fts_seeded:
+        log.info("keyword index (chunk_fts) seeded with %d chunks", fts_seeded)
+    touched: set[str] = set()                                  # sources whose chunks were rewritten this run
 
     for path in sorted(root.rglob("*.pdf")):
         seen.add(path.name)
@@ -168,6 +171,7 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
             if not all_chunks:
                 raise ValueError("zero chunks (no text layer and OCR unavailable?)")
             reg.replace_chunks(path.name, all_chunks)
+            touched.add(path.name)
             reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=h,
                                 pages=stats["pages"], chunks=stats["chunks"], tables_=stats["tables"],
                                 ocr_pages=stats["ocr_pages"], status="ok", error=None,
@@ -195,15 +199,17 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     for source in reg.all_sources():
         want = source in old
         row = reg.db.execute("SELECT superseded FROM document WHERE source=?", (source,)).fetchone()
-        if row is not None and bool(row[0]) != want:
+        # A re-ingested file's fresh chunks are written with superseded=False; if its document row
+        # already says superseded, re-apply it — otherwise an old revision touched on disk silently
+        # reappeared in answers (found 2026-09-27).
+        if row is not None and (bool(row[0]) != want or (want and source in touched)):
             reg.set_superseded(source, want)
             store.set_superseded(source, want)
             superseded_now += 1
             log.info("%s: %s", "superseded" if want else "un-superseded", source)
 
     pruned = reg.prune_embedding_cache() if (updated or removed) else 0
-    if added or updated or removed:
-        rebuild_keyword_index(store, index_dir)
+    # No keyword-index rebuild: chunk_fts is maintained per document by the registry (Phase D1).
     reg.db.execute("INSERT INTO ingest_run(started_at,finished_at,added,updated,removed,failed) VALUES(?,?,?,?,?,?)",
                    (started.isoformat(timespec="seconds"), datetime.now().isoformat(timespec="seconds"),
                     added, updated, removed, failed))
