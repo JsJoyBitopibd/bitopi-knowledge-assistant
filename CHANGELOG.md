@@ -6,10 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/). Each released versio
 Where things stand right now (done / in progress / next) is in `docs/PROGRESS.md`. The design behind
 each phase is in `docs/ROADMAP.md`.
 
-## [Unreleased] — Phase E3–E4: cheaper re-ingest (target v1.4.0)
+## [Unreleased] — Phase D: 60K pages (target v1.5.0)
 
-Work in progress on branch `feature/phase-e3-reingest`. Entries are added here as each task is
+Work in progress on branch `feature/phase-d1-fts`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
+
+## [1.4.0] — 2026-09-27 — Phase E3–E4: cheaper re-ingest
+
+Ingestion-only release (the answer path is unchanged): 261 tests; retrieval `hit_rate.py` 29/30
+(reranker on), same as v1.1.0–v1.3.0.
 
 ### Added
 - E3: embedding cache in `registry.db` (`embedding_cache`, keyed by SHA-256 of the chunk text + model):

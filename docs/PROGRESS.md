@@ -8,9 +8,9 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.3.0** (Phase C), tag `v1.3.0`, on `main` |
-| In progress | **Phase E** complete on branch `feature/phase-e3-reingest` (E3 + E4) → v1.4.0 after its gate |
-| Next task | Release v1.4.0 (hit_rate + tests gate; ingest-only change), then Phase D (D1 SQLite FTS5 keyword index) |
+| Released | **v1.4.0** (Phase E3–E4), tag `v1.4.0`, on `main` |
+| In progress | **Phase D** (60K pages) → v1.5.0, branch `feature/phase-d1-fts` |
+| Next task | D1 — SQLite FTS5 keyword index (incremental, replaces the pickled BM25) |
 | Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
 | Tests | 260 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
@@ -123,3 +123,4 @@ D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D
 | 2026-09-27 | Phase A merged to `main`; PRD v1.2 spec committed; tags v1.0.0/v1.1.0; tracking docs added; Phase B started |
 | 2026-09-27 | v1.2.0: Phase B done (B1–B6 + gate), merged to `main`, tagged. Phase C drafted (C1–C5 in working tree) |
 | 2026-09-27 | v1.3.0: Phase C done (C1–C8 + gate; correctness 85% → 89%), merged to `main`, tagged. E3 next |
+| 2026-09-27 | Aggregates refreshed (4.2M rows, 32 s). v1.4.0: E3 embedding cache (one-page revision 243 s → 6.9 s) + E4 README; live index seeded; hit_rate 29/30. D1 next |
