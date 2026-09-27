@@ -7,6 +7,9 @@ dialect: tsql
 connection_env: SQLSERVER_CONN_BITOPISPLINT
 keywords: [order, orders, eo, exportorder, po, exportpo, style, buyer, factory, merchandiser, pcd, ship, shipment,
            file, fileref, filerefno, unit, tal, rhl, bgl, ktl, cancel, cancelled, colour, color, size]
+# Discovered tables never offered to the SQL model (fnmatch, case-insensitive): history/backup
+# copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
+exclude_tables: ["*back", "*backup*", "*$", "*$'", "*_old", "*_bak", "*.tmp*", "*.temp_*", "*_test", "*daytest"]
 rules:
   - Use TOP (n), never LIMIT. Use half-open date ranges (col >= @from AND col < @to).
   - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.

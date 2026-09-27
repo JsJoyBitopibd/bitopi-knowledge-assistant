@@ -17,6 +17,10 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   `MS_Description` text, from `sys.*` only. Optional `--samples` reads up to 30 distinct values of
   short text columns in small tables, never from a sensitive column. `data/sensitive.py`: one
   word-based definition of sensitive names (`EmpNID`, `DOB`, `BasicSalary` yes; `ManID` no).
+- C2: catalogs have two tiers: the curated views (always in the prompt) and the discovered tables
+  (`Catalog.tables`, rendered only when selected via `render_selected()`, sensitive columns never
+  shown, at most 40 columns each). `exclude_tables:` patterns in the catalog YAML drop history
+  copies, spreadsheet imports and scratch tables; sensitive and empty tables are never offered.
 
 ### Fixed
 - `discover_schema.py` read the connection string from `os.environ` before `.env` was loaded.

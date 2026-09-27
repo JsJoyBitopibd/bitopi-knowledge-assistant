@@ -10,7 +10,7 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.2.0** (Phase B), tag `v1.2.0`, on `main` |
 | In progress | **Phase C** (large database: schema RAG) → v1.3.0, branch `feature/phase-c-schema-rag` |
-| Next task | C2 — catalog tiers (drafted with C3–C5 in the working tree; verify + commit one by one) |
+| Next task | C3 — schema index (drafted with C4–C5 in the working tree; verify + commit one by one) |
 | Last eval | 2026-09-27, `eval/results/20260927T1214.json`: correctness 85%, faithful 100%, hit 91%, citations 100% |
 | Tests | 126 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
@@ -66,7 +66,7 @@ routed to `data` only (router).
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
 | C1 | `discover_schema.py --json` → `config/catalog/discovered/<db>.json` (tables, columns, PK, FK, rows, descriptions; optional samples) | ✅ | unit tests; live read-only run on both DBs | `tests/test_discovery.py` (25). Live 2026-09-27 (sys.* only, ~10 s): BitopiSplint 1,129 tables + 214 views, 22,698 columns, 160 FKs, 371 sensitive columns; Production 274 + 5, 50 FKs, 13 sensitive. Markdown mode still works. **Samples not run on production**: a full `--samples` pass = ~6,700 DISTINCT queries; to be done later only for tables the index selects |
-| C2 | Catalog tiers: curated views + discovered tables, `exclude_tables`, sensitive/empty tables never offered | ⬜ | unit tests; real catalogs load | |
+| C2 | Catalog tiers: curated views + discovered tables, `exclude_tables`, sensitive/empty tables never offered | ✅ | unit tests; real catalogs load | `tests/test_catalog_tiers.py` (4). Real catalogs: `render()` byte-identical to v1.2.0 on both DBs (prompt unchanged until C5). Offered: BitopiSplint 1,069 of 1,343, Production 222 of 279 (sensitive, empty, backup/`$`/temp/test tables removed). Load 0.42 s |
 | C3 | Schema index: hybrid table search + FK neighbours + join hints; `scripts/index_schema.py` | ⬜ | unit tests; vectors built; live selection spot-check | |
 | C4 | Guard at scale: raw-table allow-list, no `SELECT *` on raw, WHERE on >1M-row tables, sensitive names, new deny tokens | ⬜ | ~20 adversarial tests; existing guard tests green | |
 | C5 | SQL generation uses the selected tables (prompt v4) + full allow-list guard | ⬜ | live data questions outside the curated views; data eval cases | |
