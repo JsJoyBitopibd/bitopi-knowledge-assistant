@@ -8,10 +8,10 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.1.0** (Phase A), tag `v1.1.0`, on `main` |
-| In progress | **Phase B** (streaming, parallelism, caching) → v1.2.0, branch `feature/phase-b-streaming` |
-| Next task | B✓ — Phase B gate: full 62-case eval (rerank on), then release v1.2.0 |
-| Last eval | 2026-09-23, `eval/results/20260923T1743.json`: correctness 85%, faithful 100%, hit 93%, citations 100% |
+| Released | **v1.2.0** (Phase B), tag `v1.2.0`, on `main` |
+| In progress | **Phase C** (large database: schema RAG) → v1.3.0, branch `feature/phase-c-schema-rag` |
+| Next task | C1 — schema discovery (drafted with C2–C5 in the working tree; verify + commit one by one) |
+| Last eval | 2026-09-27, `eval/results/20260927T1214.json`: correctness 85%, faithful 100%, hit 91%, citations 100% |
 | Tests | 126 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
@@ -38,7 +38,7 @@ Status key: ✅ done and verified · 🔄 in progress · ⬜ not started · ⏸ 
 | A4 | Friendly LLM / DB errors, fast fail | ✅ | commit `48e2595` |
 | A5 | UX polish (chips, Clear chat, admin toggle, PDF download) | ✅ | commit `48e2595` |
 
-## Phase B — Streaming, parallelism, caching (v1.2.0) 🔄
+## Phase B — Streaming, parallelism, caching (v1.2.0) ✅
 
 Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faster; repeat questions instant.
 
@@ -50,7 +50,7 @@ Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faste
 | B4 | Parallel: BM25 ∥ embedding; documents ∥ database for `both` | ✅ | unit test; timing | `tests/test_parallel.py` (2): two 0.4 s steps finish in < 0.6 s. `hit_rate.py` (rerank on) 29/30, same as baseline |
 | B5 | Caches: query embedding, documents-answer cache, SQL result cache (+ Refresh data) | ✅ | unit tests: TTL, invalidation, `as_of` kept, refresh bypass | `tests/test_cache.py` (8). Browser 2026-09-27: repeat document question 32.2 s → **0.1 s** (same verified answer + `[P1]`); fixed tool 474 ms → cache hit 5 ms with identical `as_of`, logged `cache:<tool>`; ↻ Refresh data re-ran `eo_by_id` live (`sql.csv`) |
 | B6 | SQL Server connection pool, `NOCOUNT`, `fetchmany`, heavy-tool timeout tier | ✅ | unit test with fake connections; live DB ping | `tests/test_pool.py` (6). `db_ping.py`: both DBs OK. Live: count tool 266 ms fresh → 4 ms pooled; `eo_by_id` 382 ms → 124 ms (≈120 ms is the query itself). No `SELECT 1` health check (one more round trip per query); stale session retried once instead |
-| B✓ | Phase gate: full eval, no metric drops > 5 points | ⬜ | `scripts/eval.py` (62 cases) | |
+| B✓ | Phase gate: full eval, no metric drops > 5 points | ✅ | `scripts/eval.py` (62 cases) | `eval/results/20260927T1214.json` (rerank on): correctness 85% → 85%, faithful 100%, citations 100%, not-found 100%, refuse 100%, hit 93% → 91% (−2, within the 5-point rule). Changed cases: 37 and 54 better; 7 (table, judge 1.0 → 0.5) and 55 (200-row PCD list answered not-found) worse. Case 55 rerun 3× directly: 3/3 answered — model variance on large results, addressed by C8 |
 
 ## Phase C — Large database: schema RAG ⬜
 
@@ -96,3 +96,4 @@ D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D
 | 2026-09-22 | v1.0.0: M0–M6 pilot complete |
 | 2026-09-23 | v1.1.0: Phase A done, eval correctness 85% |
 | 2026-09-27 | Phase A merged to `main`; PRD v1.2 spec committed; tags v1.0.0/v1.1.0; tracking docs added; Phase B started |
+| 2026-09-27 | v1.2.0: Phase B done (B1–B6 + gate), merged to `main`, tagged. Phase C drafted (C1–C5 in working tree) |

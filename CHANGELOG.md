@@ -6,10 +6,16 @@ versions follow [Semantic Versioning](https://semver.org/). Each released versio
 Where things stand right now (done / in progress / next) is in `docs/PROGRESS.md`. The design behind
 each phase is in `docs/ROADMAP.md`.
 
-## [Unreleased] — Phase B: streaming, parallelism, caching (target v1.2.0)
+## [Unreleased] — Phase C: large database, schema RAG (target v1.3.0)
 
-Work in progress on branch `feature/phase-b-streaming`. Entries are added here as each task is
+Work in progress on branch `feature/phase-c-schema-rag`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
+
+## [1.2.0] — 2026-09-27 — Phase B: streaming, parallelism, caching
+
+Eval (62 cases, reranker on, `eval/results/20260927T1214.json`): correctness 85% (unchanged),
+faithfulness 100%, citation validity 100%, not-found 100%, refuse 100%, hit rate 93% → 91%.
+Document answers 130–160 s before v1.1.0 → 18–32 s; repeat questions 0.1 s; pooled SQL 266 ms → 4 ms.
 
 ### Added
 - B1: `ChatModel.stream()` yields text deltas then a final `ChatReply`; the OpenAI-compatible
