@@ -1,18 +1,28 @@
-"""The answer path (CLAUDE.md §"How the answer path works"). One public function: answer()."""
+"""The answer path (CLAUDE.md §"How the answer path works").
+
+Two public entry points over one pipeline:
+- answer_stream() yields events (agent/events.py): progress stages, answer tokens as the model writes
+  them, a Replace when a streamed draft fails verification, and the verified Answer last.
+- answer() drains the stream and returns the verified Answer (scripts/eval.py, scripts/ask.py).
+
+Streaming never weakens verification: the draft a user watches is provisional until Final, and
+only the Final answer (verified by citations.verify) enters history and logs/chat.csv.
+"""
 from __future__ import annotations
 
 import csv
 import re
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
 from ..llm import get_chat
-from ..llm.base import LLMError
+from ..llm.base import ChatReply, LLMError
 from ..models import Answer, Chunk, QueryResult, Usage
 from ..retrieve.retriever import retrieve
 from .citations import normalize_markers, sources_block, verify
+from .events import Event, Final, Replace, Stage, Token
 from .rewrite import standalone_question
 from .router import _DOC_HINT, route
 
@@ -30,40 +40,65 @@ def _route(q: str, user: str) -> str:
 
 def answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
            user: str = "") -> Answer:
-    """Public entry point. Translates a provider failure (quota, timeout, auth) into a soft answer the
-    UI can show instead of a traceback; the raw cause stays in warnings and the call log."""
+    """Blocking entry point: the verified Answer from answer_stream()."""
+    final: Optional[Answer] = None
+    for ev in answer_stream(question, history, where, user):
+        if isinstance(ev, Final):
+            final = ev.answer
+    assert final is not None, "answer_stream() must end with a Final event"
+    return final
+
+
+def answer_stream(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
+                  user: str = "") -> Iterator[Event]:
+    """Streaming entry point. Always ends with exactly one Final. A provider failure (quota, timeout,
+    auth) becomes a soft answer the UI can show instead of a traceback; the raw cause stays in
+    warnings and the call log."""
+    drafting = False
     try:
-        return _answer(question, history, where, user)
+        for ev in _answer_stream(question, history, where, user):
+            if isinstance(ev, Token):
+                drafting = True
+            elif isinstance(ev, Replace):
+                drafting = False
+            yield ev
     except LLMError as e:
+        if drafting:
+            yield Replace("provider error")
         out = Answer(text=friendly_llm(e.kind), question=question, error_kind=e.kind, not_found=True)
         out.warnings.append(f"llm {e.kind}: {e}")
-        return _log(out, user)
+        yield Final(_log(out, user))
 
 
-def _answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-            user: str = "") -> Answer:
+def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
+                   user: str) -> Iterator[Event]:
     from ..index_version import refresh_if_changed
     refresh_if_changed()   # pick up a background ingest without a restart (cheap: one stat)
     s = settings()
     nf = s["answer.not_found_text"]
     usage = Usage()
     history = history or []
+    top = int(s["llm.max_chunks_to_llm"])
 
+    yield Stage("understanding", "Understanding the question…")
     q = standalone_question(question, history, user) if history else question
     r = _route(q, user)
     out = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
 
     if r == "refuse":
-        out.text = prompt("refusal").strip(); return _log(out, user)
+        out.text = prompt("refusal").strip()
+        yield Final(_log(out, user)); return
     if r == "chitchat":
         out.text = prompt("chitchat").strip()
-        return _log(out, user)
+        yield Final(_log(out, user)); return
 
     chunks: list[Chunk] = []
     results: list[QueryResult] = []
     if r in ("documents", "both"):
-        chunks = retrieve(q, where=where)[: int(s["llm.max_chunks_to_llm"])]
+        yield Stage("searching", "Searching documents…")
+        chunks = retrieve(q, where=where)[:top]
     if r in ("data", "both"):
+        yield Stage("querying", "Querying the database…")
         from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
         results = [x for x in answer_from_data(q, user)]
         # a failed query is not a source: never let the model cite an error message
@@ -71,40 +106,46 @@ def _answer(question: str, history: Optional[list[dict]] = None, where: Optional
         results = [x for x in results if not x.error]
         if r == "data" and not any(x.rows for x in results) and not chunks:
             # data route found nothing usable: fall back to documents once (a PDF may hold it)
-            chunks = retrieve(q, where=where)[: int(s["llm.max_chunks_to_llm"])]
+            yield Stage("searching", "Searching documents…")
+            chunks = retrieve(q, where=where)[:top]
 
     if not chunks and not any(x.rows for x in results):
         out.text = nf + " No document or database view in the system covers this question."
         out.not_found = True
-        return _log(out, user)
+        yield Final(_log(out, user)); return
 
-    _attempt_answer(out, question, q, history, chunks, results, user, s, nf, usage)
+    yield Stage("writing", "Writing the answer…")
+    yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
 
     # A "data" question that the rows could not answer may still be answerable from the documents —
     # the router mistakes policy questions phrased as counts ("how many licences does the Group
     # have?") for database questions, and the SQL then returns rows that are real but irrelevant, so
     # the earlier no-rows fallback never fires. Retry once against the documents before giving up.
     if out.not_found and r == "data" and not chunks:
-        doc_chunks = retrieve(q, where=where)[: int(s["llm.max_chunks_to_llm"])]
+        yield Stage("searching", "Searching documents…")
+        doc_chunks = retrieve(q, where=where)[:top]
         if doc_chunks:
             out.warnings.append("data route returned no answer; retried against documents")
             retry = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
             retry.warnings = out.warnings
-            _attempt_answer(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
+            yield Replace("retrying against documents")
+            yield Stage("writing", "Writing the answer…")
+            yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
             if not retry.not_found:
-                return _log(retry, user)
+                yield Final(_log(retry, user)); return
             out = retry
 
     if out.not_found and not out.text:
         out.text = nf + " The retrieved sources did not support a verifiable answer."
         _log_verify_failure(question, q, out.warnings)
-    return _log(out, user)
+    yield Final(_log(out, user))
 
 
-def _attempt_answer(out: Answer, question: str, q: str, history: list[dict], chunks: list[Chunk],
-                    results: list[QueryResult], user: str, s: Any, nf: str, usage: Usage) -> None:
-    """Assemble the <sources> block, generate, verify, and fill `out` in place. Two attempts: the
-    second uses the stricter prompt. Leaves out.not_found=True with no text if both attempts fail."""
+def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chunks: list[Chunk],
+                    results: list[QueryResult], user: str, s: Any, nf: str, usage: Usage) -> Iterator[Event]:
+    """Assemble the <sources> block, stream the model's answer as Tokens, verify it, and fill `out`
+    in place. Two attempts: a draft that fails verification is voided with Replace and the second
+    attempt uses the stricter prompt. Leaves out.not_found=True with no text if both attempts fail."""
     block, refs = sources_block(chunks, results, int(s["data.max_rows_to_llm"]))
     out.sources_text = block
     hist = "\n".join(f"{t['role']}: {t['text']}" for t in history[-2 * int(s["answer.history_turns"]):])
@@ -117,14 +158,24 @@ def _attempt_answer(out: Answer, question: str, q: str, history: list[dict], chu
     rows_sent = sum(min(len(x.rows), int(s["data.max_rows_to_llm"])) for x in results)
 
     for attempt in range(2):
-        reply = chat.chat([{"role": "user", "content": user_msg}], system=system,
-                          max_tokens=int(s["llm.max_tokens_answer"]), temperature=0, purpose="answer",
-                          sent_chunk_ids=chunk_ids, sent_rows=rows_sent, user=user)
+        reply: Optional[ChatReply] = None
+        drafted = False
+        for item in chat.stream([{"role": "user", "content": user_msg}], system=system,
+                                max_tokens=int(s["llm.max_tokens_answer"]), temperature=0, purpose="answer",
+                                sent_chunk_ids=chunk_ids, sent_rows=rows_sent, user=user):
+            if isinstance(item, ChatReply):
+                reply = item
+            elif item:
+                drafted = True
+                yield Token(item)
+        assert reply is not None
         usage.input_tokens += reply.input_tokens; usage.output_tokens += reply.output_tokens
         usage.model = reply.model; usage.calls += 1
         text = normalize_markers(reply.text.strip())
         if not text:
             out.warnings.append(f"attempt {attempt + 1}: empty reply (stop_reason={reply.stop_reason})")
+            if drafted:
+                yield Replace("empty reply")
             continue
         ok, problems = verify(text, chunks, results, nf)
         if ok:
@@ -141,6 +192,10 @@ def _attempt_answer(out: Answer, question: str, q: str, history: list[dict], chu
                 out.references = [x for x in refs if x.marker in used]
             return
         out.warnings += [f"attempt {attempt + 1}: {p}" for p in problems]
+        # Record every voided draft: if replaces exceed ~10% of answers, the plan (docs/ROADMAP.md B2)
+        # is to verify first and only then reveal the text.
+        _log_verify_failure(question, q, [f"streamed draft replaced (attempt {attempt + 1})", *problems])
+        yield Replace("verification failed")
         system = prompt("system_answer_strict")
 
     out.not_found = True

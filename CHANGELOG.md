@@ -15,6 +15,10 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
 - B1: `ChatModel.stream()` yields text deltas then a final `ChatReply`; the OpenAI-compatible
   adapter streams with usage included; non-streaming adapters fall back to one delta. One
   `calls.csv` row per stream.
+- B2: `orchestrator.answer_stream()` yields `Stage` / `Token` / `Replace` / `Final` events
+  (`agent/events.py`). The draft is provisional: a draft that fails citation verification is voided
+  with `Replace` (logged to `verify_failures.csv`) and only the verified `Final` enters history and
+  `chat.csv`. `answer()` drains the stream, so `eval.py` and `ask.py` are unchanged.
 
 ### Fixed
 - A failed LLM call raised a pydantic `ValidationError` instead of `LLMError`, so the friendly
