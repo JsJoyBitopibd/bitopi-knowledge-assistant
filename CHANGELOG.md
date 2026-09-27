@@ -11,6 +11,18 @@ each phase is in `docs/ROADMAP.md`.
 Work in progress on branch `feature/phase-b-streaming`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
 
+### Added
+- B1: `ChatModel.stream()` yields text deltas then a final `ChatReply`; the OpenAI-compatible
+  adapter streams with usage included; non-streaming adapters fall back to one delta. One
+  `calls.csv` row per stream.
+
+### Fixed
+- A failed LLM call raised a pydantic `ValidationError` instead of `LLMError`, so the friendly
+  quota / timeout message from v1.1.0 never appeared (`ChatReply.text` now defaults to "").
+- `.env.example`: `thinking_budget: 0` is rejected by gemini-3.5-flash-lite (HTTP 400), so it is now
+  128; values unquoted and comments moved to their own lines (Docker `--env-file` keeps both);
+  model names updated to gemini-3.5-flash-lite.
+
 ## [1.1.0] — 2026-09-23 — Phase A: speed and UX quick wins
 
 Commit `48e2595`. Eval (62 cases, `eval/results/20260923T1743.json`): correctness 83% → **85%** (target

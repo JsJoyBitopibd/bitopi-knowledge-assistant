@@ -9,7 +9,7 @@ import csv
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional, Union
 
 from pydantic import BaseModel
 
@@ -29,7 +29,7 @@ class LLMError(RuntimeError):
 
 
 class ChatReply(BaseModel):
-    text: str
+    text: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
@@ -65,6 +65,45 @@ class ChatModel(ABC):
             raise LLMError(kind, str(e)[:300]) from e
         _log_call(self.name, reply, time.perf_counter() - t0, purpose, sent_chunk_ids or [], sent_rows, user)
         return reply
+
+    def _stream(self, messages: list[dict], system: str, max_tokens: int,
+                temperature: float) -> Iterator[Union[str, ChatReply]]:
+        """Yield text deltas, then one final ChatReply (full text + usage). Adapters that cannot stream
+        inherit this default: the whole reply arrives as a single delta."""
+        reply = self._chat(messages, system, max_tokens, temperature)
+        if reply.text:
+            yield reply.text
+        yield reply
+
+    def stream(self, messages: list[dict], system: str = "", max_tokens: int = 700, temperature: float = 0.0,
+               *, purpose: str = "answer", sent_chunk_ids: list[str] | None = None, sent_rows: int = 0,
+               user: str = "") -> Iterator[Union[str, ChatReply]]:
+        """Like chat(), but yields text deltas as they arrive; the LAST item is the complete ChatReply.
+        One calls.csv row is written when the stream ends (or fails), with the same columns as chat()."""
+        t0 = time.perf_counter()
+        parts: list[str] = []
+        try:
+            for item in self._stream(messages, system, max_tokens, temperature):
+                if isinstance(item, ChatReply):
+                    if not item.text:
+                        item.text = "".join(parts)
+                    _log_call(self.name, item, time.perf_counter() - t0, purpose, sent_chunk_ids or [],
+                              sent_rows, user)
+                    yield item
+                    return
+                parts.append(item)
+                yield item
+        except LLMError:
+            raise
+        except Exception as e:
+            kind = self._classify(e)
+            _log_call(self.name, ChatReply(stop_reason=f"error:{kind}"), time.perf_counter() - t0,
+                      purpose, sent_chunk_ids or [], sent_rows, user)
+            raise LLMError(kind, str(e)[:300]) from e
+        # The adapter ended without a final ChatReply: synthesize one so callers can rely on it.
+        reply = ChatReply(text="".join(parts), stop_reason="stop")
+        _log_call(self.name, reply, time.perf_counter() - t0, purpose, sent_chunk_ids or [], sent_rows, user)
+        yield reply
 
 
 def _log_call(provider: str, r: ChatReply, seconds: float, purpose: str, chunk_ids: list[str], rows: int, user: str) -> None:

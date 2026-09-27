@@ -35,13 +35,37 @@ class OpenAICompatChat(ChatModel):
                              max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
                              timeout=timeout or float(os.getenv("LLM_TIMEOUT", "30")))
 
-    def _chat(self, messages, system, max_tokens, temperature) -> ChatReply:
+    def _request(self, messages, system, max_tokens, temperature) -> tuple[list[dict], dict[str, Any]]:
         msgs = ([{"role": "system", "content": system}] if system else []) + messages
         kwargs: dict[str, Any] = {self.tokens_param: max_tokens, "temperature": temperature}
         if self.reasoning_effort:
             kwargs["reasoning_effort"] = self.reasoning_effort
         if self.extra_body:
             kwargs["extra_body"] = self.extra_body
+        return msgs, kwargs
+
+    def _stream(self, messages, system, max_tokens, temperature):
+        msgs, kwargs = self._request(messages, system, max_tokens, temperature)
+        events = self.client.chat.completions.create(model=self.model, messages=msgs, stream=True,
+                                                     stream_options={"include_usage": True}, **kwargs)
+        parts: list[str] = []
+        finish, model, usage = "", "", None
+        for ev in events:
+            model = getattr(ev, "model", "") or model
+            if getattr(ev, "usage", None):
+                usage = ev.usage          # the include_usage event may arrive with no choices
+            for c in ev.choices or []:
+                delta = getattr(c.delta, "content", None) if c.delta else None
+                if delta:
+                    parts.append(delta)
+                    yield delta
+                finish = c.finish_reason or finish
+        yield ChatReply(text="".join(parts), input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                        output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                        model=model or self.model, stop_reason=finish, raw=None)
+
+    def _chat(self, messages, system, max_tokens, temperature) -> ChatReply:
+        msgs, kwargs = self._request(messages, system, max_tokens, temperature)
         r = self.client.chat.completions.create(model=self.model, messages=msgs, **kwargs)
         c = r.choices[0]
         usage = getattr(r, "usage", None)

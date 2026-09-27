@@ -10,9 +10,9 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.1.0** (Phase A), tag `v1.1.0`, on `main` |
 | In progress | **Phase B** (streaming, parallelism, caching) → v1.2.0, branch `feature/phase-b-streaming` |
-| Next task | B1 — streaming in the LLM layer |
+| Next task | B2 — `answer_stream()` in the orchestrator |
 | Last eval | 2026-09-23, `eval/results/20260923T1743.json`: correctness 85%, faithful 100%, hit 93%, citations 100% |
-| Tests | 99 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 103 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
 ## How to update this file (every session)
@@ -44,7 +44,7 @@ Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faste
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
-| B1 | `ChatModel.stream()` + OpenAI-compatible streaming; one `calls.csv` row per stream | ⬜ | unit test with fake client; live Gemini stream | |
+| B1 | `ChatModel.stream()` + OpenAI-compatible streaming; one `calls.csv` row per stream | ✅ | unit test with fake client; live Gemini stream | `tests/test_stream.py` (4). Live 2026-09-27: 8 deltas, first at 2.6–3.4 s, one `calls.csv` row. Found + fixed: provider errors crashed instead of raising `LLMError`; `thinking_budget: 0` is rejected (HTTP 400) by flash-lite |
 | B2 | `answer_stream()` events (Stage / Token / Replace / Final); `answer()` drains it; verify before Final | ⬜ | unit tests: event order, Replace on failed verify, LLM error mid-stream | |
 | B3 | UI renders stages + tokens live; no extra rerun | ⬜ | manual in browser | |
 | B4 | Parallel: BM25 ∥ embedding; documents ∥ database for `both` | ⬜ | unit test; timing | |
