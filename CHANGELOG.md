@@ -21,8 +21,15 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   (`Catalog.tables`, rendered only when selected via `render_selected()`, sensitive columns never
   shown, at most 40 columns each). `exclude_tables:` patterns in the catalog YAML drop history
   copies, spreadsheet imports and scratch tables; sensitive and empty tables are never offered.
+- C4: the SQL guard can allow raw discovered tables (`allowed_tables`, the catalog's full offered
+  set) while forbidding `SELECT *` on them and requiring a `WHERE` on tables over
+  `data.big_table_rows` (1M). Always on, for every query: no column or table with a sensitive name,
+  and no `FOR XML/JSON`, `@@` globals, `SUSER_*`, `SYSTEM_USER`, `HOST_NAME`, `ORIGINAL_LOGIN`.
 
 ### Fixed
+- The curated "orders per factory shipping this month" few-shot example had `GROUP BY … ORDER BY`
+  without `TOP`, which the guard always rejects, so any generated query imitating it failed once
+  and cost an extra LLM call. It now has `TOP (50)`, and a test keeps every example guard-clean.
 - `discover_schema.py` read the connection string from `os.environ` before `.env` was loaded.
 
 ## [1.2.0] — 2026-09-27 — Phase B: streaming, parallelism, caching

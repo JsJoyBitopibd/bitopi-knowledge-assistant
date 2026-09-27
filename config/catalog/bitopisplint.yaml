@@ -222,7 +222,7 @@ examples:
 
   - question: How many orders per factory are shipping this month?
     sql: |
-      SELECT Factory, COUNT(*) AS Orders
+      SELECT TOP (50) Factory, COUNT(*) AS Orders
       FROM rag.vw_ExportOrder
       WHERE ShipDate >= @monthStart AND ShipDate < DATEADD(MONTH, 1, @monthStart)
       GROUP BY Factory
