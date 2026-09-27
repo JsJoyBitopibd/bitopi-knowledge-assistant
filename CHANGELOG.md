@@ -11,6 +11,16 @@ each phase is in `docs/ROADMAP.md`.
 Work in progress on branch `feature/phase-c-schema-rag`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
 
+### Added
+- C1: `scripts/discover_schema.py --json` writes `config/catalog/discovered/<db>.json` (git-ignored):
+  every table and view with columns and types, primary and foreign keys, row counts and
+  `MS_Description` text, from `sys.*` only. Optional `--samples` reads up to 30 distinct values of
+  short text columns in small tables, never from a sensitive column. `data/sensitive.py`: one
+  word-based definition of sensitive names (`EmpNID`, `DOB`, `BasicSalary` yes; `ManID` no).
+
+### Fixed
+- `discover_schema.py` read the connection string from `os.environ` before `.env` was loaded.
+
 ## [1.2.0] — 2026-09-27 — Phase B: streaming, parallelism, caching
 
 Eval (62 cases, reranker on, `eval/results/20260927T1214.json`): correctness 85% (unchanged),

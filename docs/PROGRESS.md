@@ -10,7 +10,7 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.2.0** (Phase B), tag `v1.2.0`, on `main` |
 | In progress | **Phase C** (large database: schema RAG) → v1.3.0, branch `feature/phase-c-schema-rag` |
-| Next task | C1 — schema discovery (drafted with C2–C5 in the working tree; verify + commit one by one) |
+| Next task | C2 — catalog tiers (drafted with C3–C5 in the working tree; verify + commit one by one) |
 | Last eval | 2026-09-27, `eval/results/20260927T1214.json`: correctness 85%, faithful 100%, hit 91%, citations 100% |
 | Tests | 126 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
@@ -52,11 +52,28 @@ Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faste
 | B6 | SQL Server connection pool, `NOCOUNT`, `fetchmany`, heavy-tool timeout tier | ✅ | unit test with fake connections; live DB ping | `tests/test_pool.py` (6). `db_ping.py`: both DBs OK. Live: count tool 266 ms fresh → 4 ms pooled; `eo_by_id` 382 ms → 124 ms (≈120 ms is the query itself). No `SELECT 1` health check (one more round trip per query); stale session retried once instead |
 | B✓ | Phase gate: full eval, no metric drops > 5 points | ✅ | `scripts/eval.py` (62 cases) | `eval/results/20260927T1214.json` (rerank on): correctness 85% → 85%, faithful 100%, citations 100%, not-found 100%, refuse 100%, hit 93% → 91% (−2, within the 5-point rule). Changed cases: 37 and 54 better; 7 (table, judge 1.0 → 0.5) and 55 (200-row PCD list answered not-found) worse. Case 55 rerun 3× directly: 3/3 answered — model variance on large results, addressed by C8 |
 
-## Phase C — Large database: schema RAG ⬜
+## Phase C — Large database: schema RAG (v1.3.0) 🔄
 
-C1 discovery · C2 catalog model · C3 schema index · C4 guard at scale · C5 plug into SQL
-generation · C6 pre-computed aggregates · C7 zero-LLM data answers · C8 data UX. Not started.
-Expected to fix eval misses 56, 60, 61.
+Goal: answer data questions beyond the 8 curated views by letting SQL generation see the few raw
+tables a question needs, under a stricter guard. Order (ROADMAP): C1 → C5, then C7, C8, C6.
+
+The eval misses the roadmap attributed to Phase C are not missing-table problems — the curated views
+cover all three (checked 2026-09-27): **56** "How many TAL orders ship next week?" — the fixed tool
+returns the count, the model calls it not-found (→ C7 templated answers); **60** a `both` question
+where rows and documents each held half the answer and the model gave up; **61** a `both` question
+routed to `data` only (router).
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| C1 | `discover_schema.py --json` → `config/catalog/discovered/<db>.json` (tables, columns, PK, FK, rows, descriptions; optional samples) | ✅ | unit tests; live read-only run on both DBs | `tests/test_discovery.py` (25). Live 2026-09-27 (sys.* only, ~10 s): BitopiSplint 1,129 tables + 214 views, 22,698 columns, 160 FKs, 371 sensitive columns; Production 274 + 5, 50 FKs, 13 sensitive. Markdown mode still works. **Samples not run on production**: a full `--samples` pass = ~6,700 DISTINCT queries; to be done later only for tables the index selects |
+| C2 | Catalog tiers: curated views + discovered tables, `exclude_tables`, sensitive/empty tables never offered | ⬜ | unit tests; real catalogs load | |
+| C3 | Schema index: hybrid table search + FK neighbours + join hints; `scripts/index_schema.py` | ⬜ | unit tests; vectors built; live selection spot-check | |
+| C4 | Guard at scale: raw-table allow-list, no `SELECT *` on raw, WHERE on >1M-row tables, sensitive names, new deny tokens | ⬜ | ~20 adversarial tests; existing guard tests green | |
+| C5 | SQL generation uses the selected tables (prompt v4) + full allow-list guard | ⬜ | live data questions outside the curated views; data eval cases | |
+| C7 | Zero-LLM data answers: templated fixed-tool results, more fixed tools, clarification | ⬜ | unit tests; eval | |
+| C8 | Data UX: result table, CSV download, chart, follow-ups | ⬜ | browser | |
+| C6 | Pre-computed aggregates in local SQLite for heavy queries | ⬜ | unit tests; live refresh | |
+| C✓ | Phase gate: full eval, no metric drops > 5 points | ⬜ | `scripts/eval.py` (62 cases) | |
 
 ## Phase D — 60K pages ⬜
 
