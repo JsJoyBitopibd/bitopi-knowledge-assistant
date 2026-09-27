@@ -64,6 +64,7 @@ All runs: 62 golden cases, gemini-3.5-flash-lite, reranker on. Per-case comparis
 | v1.1.0 Phase A | `20260923T1743.json` | 93% | 100% | 85% | 100% | 100% | 100% |
 | v1.2.0 Phase B | `20260927T1214.json` | 91% | 100% | 85% | 100% | 100% | 100% |
 | v1.3.0 Phase C | `20260927T1347.json` | **98%** | 98% | **89%** | 100% | 100% | 100% |
+| v1.5.0 Phase D (ONNX reranker) | `20260927T1710.json` | 96% | **100%** | **90%** | 100% | 100% | 100% |
 
 **Phase C gains:** cases 55, 56, 60, 61 went from 0 to fully correct — templated fixed-tool answers
 (55: a 200-row list, 56: a count), the `eo_by_po` "IT **po**licy" false match (60), a `both`
@@ -79,7 +80,6 @@ word-for-word the one Phase A's judge rated faithful.
 
 **Tooling fix:** `eval.py` compared a `--kind` subset run with the previous run's totals and printed
 false BLOCKs; it now compares with the most recent earlier run covering the same cases, on those cases.
-| v1.5.0 Phase D (ONNX reranker) | `20260927T1710.json` | 96% | **100%** | **90%** | 100% | 100% | 100% |
 
 **Phase D notes:** the hit-rate dip is one case (61) that hit a Gemini rate-limit mid-run; it passes on
 re-run (`both` cases 3/3). Cases 2, 22, 33, 37 — "terser" in v1.3.0 — are complete again with the same
