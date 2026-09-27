@@ -8,10 +8,10 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.2.0** (Phase B), tag `v1.2.0`, on `main` |
-| In progress | **Phase C** (large database: schema RAG) → v1.3.0, branch `feature/phase-c-schema-rag` |
-| Next task | C✓ — Phase C gate: full 62-case eval (rerank on), then release v1.3.0 |
-| Last eval | 2026-09-27, `eval/results/20260927T1214.json`: correctness 85%, faithful 100%, hit 91%, citations 100% |
+| Released | **v1.3.0** (Phase C), tag `v1.3.0`, on `main` |
+| In progress | **Phase E3** (cheaper re-ingest: embedding cache + chunk-level diff), branch `feature/phase-e3-reingest` |
+| Next task | E3, then E4 (README "new version of a document"), then Phase D (D1–D4) |
+| Last eval | 2026-09-27, `eval/results/20260927T1347.json`: correctness 89%, faithful 98%, hit 98%, citations 100% |
 | Tests | 254 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
 
@@ -52,7 +52,7 @@ Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faste
 | B6 | SQL Server connection pool, `NOCOUNT`, `fetchmany`, heavy-tool timeout tier | ✅ | unit test with fake connections; live DB ping | `tests/test_pool.py` (6). `db_ping.py`: both DBs OK. Live: count tool 266 ms fresh → 4 ms pooled; `eo_by_id` 382 ms → 124 ms (≈120 ms is the query itself). No `SELECT 1` health check (one more round trip per query); stale session retried once instead |
 | B✓ | Phase gate: full eval, no metric drops > 5 points | ✅ | `scripts/eval.py` (62 cases) | `eval/results/20260927T1214.json` (rerank on): correctness 85% → 85%, faithful 100%, citations 100%, not-found 100%, refuse 100%, hit 93% → 91% (−2, within the 5-point rule). Changed cases: 37 and 54 better; 7 (table, judge 1.0 → 0.5) and 55 (200-row PCD list answered not-found) worse. Case 55 rerun 3× directly: 3/3 answered — model variance on large results, addressed by C8 |
 
-## Phase C — Large database: schema RAG (v1.3.0) 🔄
+## Phase C — Large database: schema RAG (v1.3.0) ✅
 
 Goal: answer data questions beyond the 8 curated views by letting SQL generation see the few raw
 tables a question needs, under a stricter guard. Order (ROADMAP): C1 → C5, then C7, C8, C6.
@@ -73,7 +73,7 @@ routed to `data` only (router).
 | C7 | Zero-LLM data answers: templated fixed-tool results, more fixed tools, clarification | ✅ | unit tests; eval | Templated answers ✅: `tests/test_templated.py` (10), `tests/test_fixed_tools.py` (9). Data + both eval cases (13): correctness **9/13 → 13/13** vs Phase B on the same cases (`eval/results/20260927T1307.json`); cases 55 and 56 answered with no model call. Also fixed: `eo_by_po` matched "IT **po**licy" as PO 'licy' (case 60), `both` questions with a policy noun missed the documents (case 61), multi-part answers collapsed to not-found (case 60). **More fixed tools** mined from `logs/chat.csv` (18 real questions): upcoming PCDs (all / by buyer / by factory), buyer list, cancelled orders (count / list) — live 0.1–0.5 s, **0 model calls**; "0 cancelled this month" cross-checked (none in Sep 2026; last one dated 5 Oct 2026 — a future date, worth flagging to the data owners). **Clarification**: `config/clarify.yaml` (which order? which factory?) asks instead of guessing; no golden question triggers it. 230 tests |
 | C8 | Data UX: result table, CSV download, chart, follow-ups | ✅ | browser | `tests/test_present.py` (5). Browser 2026-09-27: "orders per factory this month" → table + bar chart (BGL/RHL/TAL) + Download CSV in the `[D1]` card; "What is the next PCD?" → table + CSV, no chart (7 columns); two turns, unique widget keys, no errors. Fixed: "Row key: ; ;" on aggregates; duplicate PDF-download keys when two turns cite the same chunk; a pointless 27.6 s rewrite call on short self-contained follow-ups (now skipped when a fixed tool matches). **Deferred**: per-tool follow-up suggestion chips |
 | C6 | Pre-computed aggregates in local SQLite for heavy queries | ✅ | unit tests; live refresh | `tests/test_aggregates.py` (12). Live 2026-09-27: `pcd_history_by_eo` was **10.3 s + HYT00 timeout** (cold); `refresh_aggregates.py` copied 4,235,069 rows in 33–35 s (one read-only scan, 363 MB); lookups now 28–134 ms, **5/5 orders identical to live**. Found + fixed: order IDs are stored in mixed case (`tal-22-523-81` / `TAL-22-523-81`) and SQL Server matches both — the copy compared case-sensitively (7 vs 9 rows); columns are now `COLLATE NOCASE`. `docker-compose.yml` service `aggregates` refreshes every 24 h; README runbook added |
-| C✓ | Phase gate: full eval, no metric drops > 5 points | ⬜ | `scripts/eval.py` (62 cases) | |
+| C✓ | Phase gate: full eval, no metric drops > 5 points | ✅ | `scripts/eval.py` (62 cases) | `eval/results/20260927T1347.json` vs v1.2.0 on the same 62 cases: correctness **85% → 89%**, hit **91% → 98%**, faithful 100% → 98%, citations 100%, not-found 100%, refuse 100%. Better: 55, 56, 60, 61 (0 → 1). Worse: 6, 22, 33, 37 (1.0 → 0.5, document answers terser — follow-up below), 4 (faithful, judge noise: same answer as Phase A). `eval.py` fixed to compare on the same cases (it printed a false BLOCK) |
 
 ## Phase D — 60K pages ⬜
 
@@ -93,12 +93,20 @@ D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D
 - Streamlit's file watcher logs ~50 harmless `ModuleNotFoundError: torchvision` tracebacks at start
   (it scans transformers' image modules). Fix: `server.fileWatcherType = "none"` in
   `.streamlit/config.toml` for production, or install torchvision. Cosmetic.
-- Data answers the model wrongly reports as not-found (seen 2026-09-27, both older than Phase B):
-  a count of **0** ("How many PPM meetings does TAL have this week?" → rows `[[0]]`), and a list of
-  **200 rows** ("Which TAL orders ship in the next 30 days?"). Planned fix: Phase C7 templated
-  answers (scalar → "Meetings: 0 [D1]") and C8 result tables.
+- ~~Data answers wrongly reported as not-found (a count of 0, a 200-row list)~~ — fixed in v1.3.0 by
+  C7 templated answers (eval cases 55, 56).
+- **Document answers got terser in v1.3.0** (eval cases 6, 22, 33, 37: correct fact, qualifier left
+  out). Try a `system_answer.txt` rule to keep the conditions, purpose and exceptions a source attaches
+  to a fact; verify with a documents-only eval (`eval.py --kind direct,table`). See `docs/tuning_log.md`.
+- Deferred from C: per-tool follow-up suggestion chips (C8); `discover_schema.py --samples` only for
+  the tables the schema index actually selects (a full pass is ~6,700 production queries) (C1).
+- Raw tables store some codes, not names (e.g. `tblSampleRequestMaster.Buyer` = `C/09/7`); the
+  code → name mapping is not in `Contact_Master.ContactNo` (an int). Needs a curated view or a hint.
 
 ## Open items outside the code
+
+- **Data anomaly to report**: `dbo.CancellExportOrderList` has a cancellation dated **5 Oct 2026**
+  (in the future on 2026-09-27).
 
 - **Gemini billing** must be enabled before multi-user use (free tier; company data needs a paid key).
 - **DBA request**: `docs/schema/rag_views_*.sql` views, `rag_reader` login to replace `sa`, index on
@@ -114,3 +122,4 @@ D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D
 | 2026-09-23 | v1.1.0: Phase A done, eval correctness 85% |
 | 2026-09-27 | Phase A merged to `main`; PRD v1.2 spec committed; tags v1.0.0/v1.1.0; tracking docs added; Phase B started |
 | 2026-09-27 | v1.2.0: Phase B done (B1–B6 + gate), merged to `main`, tagged. Phase C drafted (C1–C5 in working tree) |
+| 2026-09-27 | v1.3.0: Phase C done (C1–C8 + gate; correctness 85% → 89%), merged to `main`, tagged. E3 next |

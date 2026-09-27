@@ -54,3 +54,28 @@ but the golden set is the contract, so this run does not pass M3's correctness b
 - `rag.vw_PCDChangeHistory` can exceed the 10 s guard timeout: `dbo.ExportOrderBack` (4M+ rows) is
   indexed only on `Serial`, so filtering by `ExportOrderID` is a full scan. The index a DBA should
   add is in `docs/schema/rag_views_bitopisplint.sql`.
+
+## Speed/UX/scale phases (2026-09-23 → 27)
+
+All runs: 62 golden cases, gemini-3.5-flash-lite, reranker on. Per-case comparisons use the same cases.
+
+| Run | File | Hit | Faithful | Correct | Citations | Not-found | Refuse |
+|---|---|---|---|---|---|---|---|
+| v1.1.0 Phase A | `20260923T1743.json` | 93% | 100% | 85% | 100% | 100% | 100% |
+| v1.2.0 Phase B | `20260927T1214.json` | 91% | 100% | 85% | 100% | 100% | 100% |
+| v1.3.0 Phase C | `20260927T1347.json` | **98%** | 98% | **89%** | 100% | 100% | 100% |
+
+**Phase C gains:** cases 55, 56, 60, 61 went from 0 to fully correct — templated fixed-tool answers
+(55: a 200-row list, 56: a count), the `eo_by_po` "IT **po**licy" false match (60), a `both`
+question the router sent to `data` (61), and the multi-part answer rule (60). Data + both cases
+alone: 9/13 → 13/13.
+
+**Phase C costs (document answers, a tuning follow-up):** cases 6, 22, 33, 37 dropped 1.0 → 0.5. All
+four answers are correct but terser than in v1.2.0 — the qualifier after the fact is left out
+("for trend analysis and audit", "verified weekly", "before being dispatched to the site"). Likely
+from the v5/v6 edits to `system_answer.txt`; to test next: a rule to keep the conditions, purpose and
+exceptions a source attaches to a fact. Case 4 (faithful 1.0 → 0.0) is judge noise: the answer is
+word-for-word the one Phase A's judge rated faithful.
+
+**Tooling fix:** `eval.py` compared a `--kind` subset run with the previous run's totals and printed
+false BLOCKs; it now compares with the most recent earlier run covering the same cases, on those cases.

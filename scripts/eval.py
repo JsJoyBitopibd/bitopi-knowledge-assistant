@@ -96,13 +96,24 @@ def main():
     print(f"n={summary['n']} hit={summary['hit_rate']:.0%} faithful={summary['faithfulness']:.0%} "
           f"correct={summary['correctness']:.0%} citations_valid={summary['citation_validity']:.0%} "
           f"not_found={summary['not_found_ok']:.0%} refuse={summary['refuse_ok']:.0%}  model={summary['model']}")
-    prev = sorted(out.glob("*.json"))[:-1]
-    if prev:
-        last = json.loads(prev[-1].read_text(encoding="utf-8"))["summary"]
-        for k in ("hit_rate", "faithfulness", "correctness", "citation_validity"):
-            drop = last.get(k, 0) - summary[k]
-            flag = "  <-- BLOCK: dropped more than 5 points" if drop > 0.05 else ""
-            print(f"  {k:<18} {last.get(k, 0):.0%} -> {summary[k]:.0%}{flag}")
+    # Compare like with like: the most recent earlier run that covered every case of this one, scored on
+    # exactly these cases. (Comparing a --kind subset with a different run's totals printed false BLOCKs.)
+    ids = {r["id"] for r in rows}
+    base = None
+    for f in sorted(out.glob("*.json"))[:-1][::-1]:
+        old = {r["id"]: r for r in json.loads(f.read_text(encoding="utf-8"))["rows"]}
+        if ids <= set(old):
+            base = (f.name, [old[i] for i in sorted(ids)])
+            break
+    if base:
+        fname, old_rows = base
+        print(f"  vs {fname} on the same {len(ids)} cases:")
+        for k, col in (("hit_rate", "hit"), ("faithfulness", "faithful"), ("correctness", "correct"),
+                       ("citation_validity", "citation_valid")):
+            xs = [r[col] for r in old_rows if r.get(col) is not None]
+            before = sum(xs) / len(xs) if xs else 0.0
+            flag = "  <-- BLOCK: dropped more than 5 points" if before - summary[k] > 0.05 else ""
+            print(f"  {k:<18} {before:.0%} -> {summary[k]:.0%}{flag}")
 
 
 if __name__ == "__main__":

@@ -6,10 +6,17 @@ versions follow [Semantic Versioning](https://semver.org/). Each released versio
 Where things stand right now (done / in progress / next) is in `docs/PROGRESS.md`. The design behind
 each phase is in `docs/ROADMAP.md`.
 
-## [Unreleased] — Phase C: large database, schema RAG (target v1.3.0)
+## [Unreleased] — Phase E3: cheaper re-ingest
 
-Work in progress on branch `feature/phase-c-schema-rag`. Entries are added here as each task is
+Work in progress on branch `feature/phase-e3-reingest`. Entries are added here as each task is
 verified; see `docs/PROGRESS.md` for per-task status and evidence.
+
+## [1.3.0] — 2026-09-27 — Phase C: large database, schema RAG
+
+Eval (62 cases, reranker on, `eval/results/20260927T1347.json`, vs v1.2.0 on the same cases):
+correctness 85% → **89%**, hit rate 91% → **98%**, faithfulness 100% → 98%, citation validity 100%,
+not-found 100%, refuse 100%. Data + both cases 9/13 → 13/13. Known cost: four document answers
+are terser (cases 6, 22, 33, 37; see `docs/tuning_log.md`).
 
 ### Added
 - C1: `scripts/discover_schema.py --json` writes `config/catalog/discovered/<db>.json` (git-ignored):
@@ -62,6 +69,8 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   answer the covered parts instead of replying not-found.
 
 ### Fixed
+- `eval.py` compared a `--kind` subset run with the previous run's totals and printed false BLOCKs;
+  it now compares with the most recent earlier run covering the same cases, scored on those cases.
 - Aggregate results showed "Row key: ; ;" (the view's key columns are not in a GROUP BY result).
 - Two chat turns citing the same PDF chunk created duplicate download-button keys (a Streamlit error).
 - A short, self-contained follow-up ("What is the next PCD?") was sent through the rewrite model call;
