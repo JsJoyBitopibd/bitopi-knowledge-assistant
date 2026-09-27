@@ -19,6 +19,16 @@ Read `docs/PLAN.md` for the build order and acceptance tests, `docs/REFERENCE_FO
 the exact citation format, and `docs/DATA_ACCESS.md` for database rules. The PRD that governs
 this project is `docs/PRD_v1.2.pdf` (read it once; this file is the operational summary).
 
+## Start of every session: where are we?
+
+1. Read **`docs/PROGRESS.md`** — current version, branch, the next task, and what is verified.
+2. The design for the task is in `docs/ROADMAP.md` (speed/UX/scale Phases A–E).
+3. Keep the record current, as version control for the project's state: when a task is **verified**
+   (tests pass and the task's check in `docs/PROGRESS.md` has been run), update `docs/PROGRESS.md`
+   (status ✅, evidence, next task) and add a line under `[Unreleased]` in `CHANGELOG.md` **in the
+   same commit as the code**. Never mark a task ✅ on an unverified claim. A finished phase becomes
+   a version: move its changelog entries under `## [X.Y.Z]`, merge to `main`, tag `vX.Y.Z`.
+
 ---
 
 ## Non-negotiables (a "working" feature that breaks one of these is a bug)
@@ -70,6 +80,9 @@ this project is `docs/PRD_v1.2.pdf` (read it once; this file is the operational 
 ```
 CLAUDE.md                     ← this file
 README.md                     ← how to run (for humans)
+CHANGELOG.md                  ← release history (one section per version tag)
+docs/PROGRESS.md              ← status: done / in progress / next — read first each session
+docs/ROADMAP.md               ← speed/UX/scale plan, Phases A–E
 docs/PLAN.md                  ← milestones M0–M8 with acceptance tests   (build in this order)
 docs/REFERENCE_FORMAT.md      ← exact citation format for PDF and DB answers
 docs/DATA_ACCESS.md           ← read-only DB setup, catalog format, guard rules
