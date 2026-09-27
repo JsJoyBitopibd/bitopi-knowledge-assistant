@@ -17,7 +17,7 @@ It never guesses.
 
 Read `docs/PLAN.md` for the build order and acceptance tests, `docs/REFERENCE_FORMAT.md` for
 the exact citation format, and `docs/DATA_ACCESS.md` for database rules. The PRD that governs
-this project is `docs/PRD_v1.1.pdf` (read it once; this file is the operational summary).
+this project is `docs/PRD_v1.2.pdf` (read it once; this file is the operational summary).
 
 ---
 
@@ -46,16 +46,21 @@ this project is `docs/PRD_v1.1.pdf` (read it once; this file is the operational 
 | Area | Decision |
 |---|---|
 | Language | Python 3.11+ for everything in this repo (a later .NET port is out of scope here) |
-| Chat LLM | Commercial API via adapter. Default: OpenAI-compatible endpoint (Azure OpenAI / Azure AI Foundry, incl. Claude via Foundry). Second adapter: Anthropic direct. Chosen by `LLM_PROVIDER` in `.env`. |
+| Chat LLM | Commercial API via adapter. **Pilot: Google Gemini** through its OpenAI-compatible endpoint (`openai_compat`, paid/billing-enabled key only — never a free-tier key with company data). Production provider is picked by golden-set eval among Gemini on Vertex AI, Azure OpenAI / Azure AI Foundry (incl. Claude via Foundry) and Anthropic direct; the runner-up is the fallback. Chosen by `LLM_PROVIDER` in `.env`. |
 | Small model | Same provider's cheap tier for rewrite/route (`LLM_SMALL_MODEL`) |
 | Embeddings | `BAAI/bge-m3` via `sentence-transformers`, local CPU (fallback: Ollama `bge-m3` if `EMBED_BACKEND=ollama`) |
 | Reranker | `BAAI/bge-reranker-v2-m3` via `sentence-transformers` CrossEncoder, local CPU, switchable (`RERANK_ENABLED`) |
 | Vector store | Phase 1: Chroma (`data/index/chroma`), cosine. Behind `VectorStore` interface so Phase 2 can move to Qdrant without touching callers. |
-| Keyword search | BM25 (`rank_bm25`) over the same chunks, rebuilt after each ingest; merged with vectors by RRF (k=60) |
+| Keyword search | BM25 (`rank_bm25`) over the same chunks, rebuilt after each ingest; merged with vectors by RRF (k=60). From M7: incremental keyword index (Qdrant sparse vectors or SQL Server full-text) behind the `KeywordIndex` interface — no full rebuild |
+| Ingestion runtime | Pilot: one-shot `scripts/ingest.py`. From M7: a separate always-on worker (`scripts/ingest_worker.py`) with a job queue in the registry; the chat app never restarts to pick up documents. Incremental only: size+mtime pre-check, then SHA-256; embedding cache keyed by chunk-text hash |
+| Embedding hardware | CPU fp32 for the pilot. For bulk loads: GPU, or int8 ONNX bge-m3 on CPU — one backend per index, recorded as `embed_backend`; changing it needs the parity test in PLAN M7 or a full reindex |
 | PDF parsing | PyMuPDF (`pymupdf`); tables via `page.find_tables()` → Markdown; OCR via Tesseract (`eng+ben`) when a page has no text layer |
 | Registry | SQLite `data/index/registry.db` (documents, pages, chunks, ingest state). Phase 3 may move to SQL Server. |
 | UI | Streamlit `src/ragbot/app.py` for the pilot |
 | Config | `config/settings.yaml` (copy from `settings.example.yaml`) + `.env` for secrets |
+| Users & scope | Internal staff and external buyers. What a user may see (categories, buyers, factories) is enforced in code on retrieval filters and SQL parameters — never by the prompt |
+| Fine-tuning | None. It helps neither speed nor factual accuracy |
+| MCP | Later, optional: expose `search_documents` / `query_data` to other clients under the same guard, scope and citation rules. Not a performance fix |
 | Tests | `tests/golden.jsonl` + `scripts/eval.py`; a change that drops any score > 5 points is not merged |
 
 ---
@@ -65,10 +70,10 @@ this project is `docs/PRD_v1.1.pdf` (read it once; this file is the operational 
 ```
 CLAUDE.md                     ← this file
 README.md                     ← how to run (for humans)
-docs/PLAN.md                  ← milestones M0–M6 with acceptance tests   (build in this order)
+docs/PLAN.md                  ← milestones M0–M8 with acceptance tests   (build in this order)
 docs/REFERENCE_FORMAT.md      ← exact citation format for PDF and DB answers
 docs/DATA_ACCESS.md           ← read-only DB setup, catalog format, guard rules
-docs/PRD_v1.1.pdf             ← product requirements (background)
+docs/PRD_v1.2.pdf             ← product requirements (background; v1.1 kept for history)
 data/pdfs/                    ← DROP PDFs HERE. Subfolder name = category tag (e.g. SOP/, TAL/, Buyer/)
 data/index/                   ← generated: chroma/, registry.db, bm25.pkl, ingest_state.json  (git-ignored)
 config/settings.example.yaml  ← copy to settings.yaml
@@ -85,7 +90,8 @@ src/ragbot/                   ← the package
   data/                       ← catalog.py, guard.py, connectors.py (SQL Server, MySQL), tools.py
   agent/                      ← rewrite.py, router.py, answer.py, citations.py, orchestrator.py
   app.py                      ← Streamlit chat
-scripts/ingest.py             ← python scripts/ingest.py   (index data/pdfs)
+scripts/ingest.py             ← python scripts/ingest.py   (index data/pdfs, one shot)
+scripts/ingest_worker.py      ← M7: always-on incremental ingestion worker (not yet written)
 scripts/ask.py                ← python scripts/ask.py "question"
 scripts/eval.py               ← python scripts/eval.py     (golden set)
 tests/golden.jsonl            ← evaluation cases (grow this; never delete cases)
@@ -136,6 +142,11 @@ have not been run against real data or databases here; test them first.
   list failures (zero chunks, corrupt, encrypted) in `logs/ingest.log`.
 - Must handle 10,000 PDFs in one run without running out of memory (stream, don't hold all
   chunks in RAM).
+- **Worker mode (M7).** Same code path, driven by a job queue instead of one walk: scanner →
+  parse/OCR process pool → embed stage (with embedding cache) → single writer (per-document
+  delete-then-upsert). Resumable after a crash; never deletes on a single missed scan. The
+  retriever reloads the keyword index when `index_version` in `ingest_state.json` changes.
+  Details and acceptance tests: `docs/PLAN.md` → M7.
 
 ---
 
