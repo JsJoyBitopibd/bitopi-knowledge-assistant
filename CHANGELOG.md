@@ -19,6 +19,9 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   (`agent/events.py`). The draft is provisional: a draft that fails citation verification is voided
   with `Replace` (logged to `verify_failures.csv`) and only the verified `Final` enters history and
   `chat.csv`. `answer()` drains the stream, so `eval.py` and `ask.py` are unchanged.
+- B3: the chat UI shows each stage live ("Searching documents…", "Writing the answer…"), types
+  the draft as it streams, then shows the verified answer with "Answered in N s". References and
+  thumbs appear immediately (no extra page rerun); suggestion chips clear when a question is asked.
 
 ### Fixed
 - A failed LLM call raised a pydantic `ValidationError` instead of `LLMError`, so the friendly

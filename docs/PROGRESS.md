@@ -10,7 +10,7 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.1.0** (Phase A), tag `v1.1.0`, on `main` |
 | In progress | **Phase B** (streaming, parallelism, caching) → v1.2.0, branch `feature/phase-b-streaming` |
-| Next task | B3 — live streaming in the Streamlit UI |
+| Next task | B4 — parallel retrieval and database lookups |
 | Last eval | 2026-09-23, `eval/results/20260923T1743.json`: correctness 85%, faithful 100%, hit 93%, citations 100% |
 | Tests | 109 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-27 |
@@ -46,7 +46,7 @@ Targets: first token ≤ 3 s on a document question; `both` questions ~4 s faste
 |---|---|---|---|---|
 | B1 | `ChatModel.stream()` + OpenAI-compatible streaming; one `calls.csv` row per stream | ✅ | unit test with fake client; live Gemini stream | `tests/test_stream.py` (4). Live 2026-09-27: 8 deltas, first at 2.6–3.4 s, one `calls.csv` row. Found + fixed: provider errors crashed instead of raising `LLMError`; `thinking_budget: 0` is rejected (HTTP 400) by flash-lite |
 | B2 | `answer_stream()` events (Stage / Token / Replace / Final); `answer()` drains it; verify before Final | ✅ | unit tests: event order, Replace on failed verify, LLM error mid-stream | `tests/test_answer_stream.py` (6). Live 2026-09-27 (rerank off): 2 doc questions verified with correct `[P#]`; first token 3.9–6.1 s. Gemini sends short answers in 1–2 bursts, so first token ≈ full answer; model latency after "writing" is 3.6–3.8 s |
-| B3 | UI renders stages + tokens live; no extra rerun | ⬜ | manual in browser | |
+| B3 | UI renders stages + tokens live; no extra rerun | ✅ | manual in browser | Browser 2026-09-27, rerank ON: stage label updates live, chips clear on ask, "Answered in 19.2 s" / "17.9 s" (follow-up "Who approves it?" rewritten to Form IT-03), references + thumbs shown at once, thumbs-up logged to `chat.csv`, no app errors |
 | B4 | Parallel: BM25 ∥ embedding; documents ∥ database for `both` | ⬜ | unit test; timing | |
 | B5 | Caches: query embedding, documents-answer cache, SQL result cache (+ Refresh data) | ⬜ | unit tests: TTL, invalidation, `as_of` kept, refresh bypass | |
 | B6 | SQL Server connection pool, `NOCOUNT`, `fetchmany`, heavy-tool timeout tier | ⬜ | unit test with fake connections; live DB ping | |
@@ -70,6 +70,12 @@ D1 SQLite FTS5 keyword index · D2 Chroma tuning · D3 ingestion throughput · D
 | E2 | Hot reload of new PDFs (`index_version.py`) | ✅ | shipped in v1.1.0 |
 | E3 | Embedding cache + chunk-level diff | ⬜ | |
 | E4 | Document the "new version of a document" behavior in README | ⬜ | |
+
+## Small follow-ups noticed along the way
+
+- Streamlit's file watcher logs ~50 harmless `ModuleNotFoundError: torchvision` tracebacks at start
+  (it scans transformers' image modules). Fix: `server.fileWatcherType = "none"` in
+  `.streamlit/config.toml` for production, or install torchvision. Cosmetic.
 
 ## Open items outside the code
 
