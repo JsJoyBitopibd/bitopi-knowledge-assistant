@@ -21,6 +21,12 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   (`Catalog.tables`, rendered only when selected via `render_selected()`, sensitive columns never
   shown, at most 40 columns each). `exclude_tables:` patterns in the catalog YAML drop history
   copies, spreadsheet imports and scratch tables; sensitive and empty tables are never offered.
+- C3: schema index (`data/schema_index.py`): picks the few discovered tables a question needs by
+  merging vector search (bge-m3, precomputed by `scripts/index_schema.py` into
+  `data/index/schema/<db>.npz`), BM25 over table documents, and a table-name match, then adds
+  foreign-key neighbours and likely joins (shared key names). Works keyword-only when the vectors
+  are missing or stale. `index_schema.py --check` measures recall on `tests/schema_cases.jsonl`:
+  10/11 at k=6.
 - C4: the SQL guard can allow raw discovered tables (`allowed_tables`, the catalog's full offered
   set) while forbidding `SELECT *` on them and requiring a `WHERE` on tables over
   `data.big_table_rows` (1M). Always on, for every query: no column or table with a sensitive name,

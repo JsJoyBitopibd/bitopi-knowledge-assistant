@@ -1,0 +1,11 @@
+{"q": "How many suppliers do we have?", "db": "BitopiSplint", "accept": ["dbo.SupplierData", "dbo.Contact_Master", "dbo.tblSupplierEvaluationMaster"]}
+{"q": "List all buyer names", "db": "BitopiSplint", "accept": ["dbo.tblBuyerInfo", "dbo.Contact_Master"]}
+{"q": "Which export orders were cancelled this month?", "db": "BitopiSplint", "accept": ["dbo.CancellExportOrderList", "dbo.ExportOrderCancelled", "dbo.CancelledDataRepository"]}
+{"q": "Show the fabric booking summary for a style", "db": "BitopiSplint", "accept": ["dbo.vw_BookingSummery", "dbo.View_BOMnBooking"]}
+{"q": "How many sample indents did each buyer raise?", "db": "BitopiSplint", "accept": ["dbo.tblSampleIndent"]}
+{"q": "Style master details for a buyer style number", "db": "BitopiSplint", "accept": ["dbo.Style_Master"]}
+{"q": "Which departments does each buyer have?", "db": "BitopiSplint", "accept": ["dbo.BuyerDepartment", "dbo.tblBuyerMerchantDepartment"]}
+{"q": "Who attended the PPM meeting?", "db": "Production", "accept": ["PPM.PPMMeetingParticipants", "PPM.OtherAttendees"]}
+{"q": "Show the minutes of the last PPM meeting", "db": "Production", "accept": ["PPM.PPMMeetingMinutes"]}
+{"q": "Which PPM meetings were rescheduled?", "db": "Production", "accept": ["PPM.PPMMeetingRescheduleLog"]}
+{"q": "Merchandiser approval status for PPM", "db": "Production", "accept": ["PPM.MerchandiserApproval"]}
