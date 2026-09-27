@@ -11,7 +11,7 @@ keywords: [order, orders, eo, exportorder, po, exportpo, style, buyer, factory, 
 # copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
 exclude_tables: ["*back", "*backup*", "*$", "*$'", "*_old", "*_bak", "*.tmp*", "*.temp_*", "*_test", "*daytest"]
 rules:
-  - Use TOP (n), never LIMIT. Use half-open date ranges (col >= @from AND col < @to).
+  - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
   - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.
   - Reference views only as rag.<name> (rag.vw_ExportOrder, rag.vw_FileRef, ...).
   - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).

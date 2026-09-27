@@ -3,7 +3,7 @@ database: Production.PPM
 dialect: tsql
 connection_env: SQLSERVER_CONN
 rules:
-  - Use TOP (n), never LIMIT. Use half-open date ranges: col >= @from AND col < @to.
+  - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates: col >= '2026-09-01' AND col < '2026-10-01'.
   - Today is {today}. "This week" means Monday to next Monday. "Next week" means the following Monday to Monday.
   - Only reference views listed below, always with the rag. prefix.
   - Never compute totals in prose; return the rows or an aggregate.

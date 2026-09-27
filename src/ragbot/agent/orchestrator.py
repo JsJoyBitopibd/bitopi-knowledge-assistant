@@ -152,6 +152,11 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         out.not_found = True
         yield Final(_log(out, user)); return
 
+    # A single fixed-tool result has a known shape: write it from a template, no model call (C7).
+    if r == "data" and not chunks and len(results) == 1 and s.get("answer.templated", True):
+        if _templated_answer(out, results[0], nf):
+            yield Final(_log(out, user)); return
+
     yield Stage("writing", "Writing the answer…")
     yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
 
@@ -181,6 +186,25 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user))
+
+
+def _templated_answer(out: Answer, result: QueryResult, nf: str) -> bool:
+    """Fill `out` from agent/templated.py when the result is a fixed tool's and the text verifies."""
+    from ..data.tools import load_fixed_tools
+    from .templated import try_template
+    tool = next((t for t in load_fixed_tools() if t.get("name") == result.tool), None)
+    text = try_template(result, tool)
+    if not text:
+        return False
+    block, refs = sources_block([], [result])
+    ok, problems = verify(text, [], [result], nf)
+    if not ok:
+        out.warnings.append(f"template failed verification, using the model: {problems}")
+        return False
+    out.text, out.sources_text, out.not_found = text, block, False
+    out.references = [x for x in refs if x.marker in set(_MARK.findall(text))]
+    out.warnings.append("templated answer (no model call)")
+    return True
 
 
 def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chunks: list[Chunk],

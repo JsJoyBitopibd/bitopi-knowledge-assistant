@@ -26,7 +26,8 @@ _DATA_STRONG = re.compile(r"\b(EO\s*\d{2}-\d{4}|[A-Z]{2,4}-\d{2}-\d{2,5}(-\d+)?|
 # questions to the database (the 83%->85% correctness gap).
 _DOC_HINT = re.compile(r"\b(sop|policy|procedure|who approves|rule|comment sheet|tech pack|buyer (asked|comment)|manual|"
                        r"form\s+[A-Z]{2,}-\d+|licen[cs]es?|laptops?|desktops?|mailboxes?|servers?|endpoints?|"
-                       r"backups?|retention|working days|rto|rpo|recovery time)\b", re.I)
+                       r"backups?|retention|working days|rto|rpo|recovery time|"
+                       r"passwords?|privileged|it polic(?:y|ies)|it standards?)\b", re.I)
 
 
 def route(question: str, user: str = "") -> str:

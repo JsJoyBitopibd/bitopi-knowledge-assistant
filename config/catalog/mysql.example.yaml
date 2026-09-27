@@ -3,7 +3,7 @@ database: inventory
 dialect: mysql
 connection_env: MYSQL_CONN
 rules:
-  - Use LIMIT n, never TOP. Dates as half-open ranges: col >= :from AND col < :to.
+  - Use LIMIT n, never TOP. Dates as half-open ranges with literal dates: col >= '2026-09-01' AND col < '2026-10-01'.
   - Today is {today}.
   - Only reference views listed below, always with the rag. prefix.
 views:

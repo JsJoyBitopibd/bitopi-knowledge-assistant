@@ -57,7 +57,10 @@ def sources_block(chunks: list[Chunk], results: list[QueryResult], max_rows: int
             head = " | ".join(r.columns)
             body = "\n".join(" | ".join("" if v is None else str(v) for v in row) for row in r.rows[:max_rows])
             more = f"\n… {len(r.rows) - max_rows} more rows not shown" if len(r.rows) > max_rows else ""
-            parts.append(f"[{m}] DATABASE {r.database} ({r.engine}) · views: {', '.join(r.views)} · "
+            # the query's filter (factory, date window, order id …): without it neither the answering model
+            # nor a reviewer can tell WHICH orders a bare count of 632 refers to
+            filt = f" · filter: {', '.join(f'{k}={v}' for k, v in r.params.items())}" if r.params else ""
+            parts.append(f"[{m}] DATABASE {r.database} ({r.engine}) · views: {', '.join(r.views)}{filt} · "
                          f"{len(r.rows)} row(s) as of {r.as_of:%d %b %Y %H:%M}\n{head}\n{body}{more}")
         refs.append(Reference(marker=m, kind="data", database=r.database, engine=r.engine, views=r.views,
                               row_keys=r.row_keys, row_count=len(r.rows), as_of=r.as_of, tool=r.tool, sql=r.sql,
@@ -99,6 +102,9 @@ def verify(answer: str, chunks: list[Chunk], results: list[QueryResult], not_fou
     for i, r in enumerate(results, start=1):
         if f"D{i}" in used:
             pool += " " + " ".join(str(v) for row in r.rows for v in row) + " " + " ".join(r.columns)
+            # the [D#] reference card also shows the row count and the query parameters, so an answer
+            # may state them ("12 orders", "for TAL"); nothing else outside the rows is licensed
+            pool += f" {len(r.rows)} " + " ".join(str(v) for v in r.params.values())
     pool_nums = {_norm_num(x) for x in _NUM.findall(pool)}
     # plain digit runs too: "2026-10-12" (row dates) and "PCD-02" yield no _NUM match but must license 2026/10/12/02
     pool_nums |= set(_DIGIT_RUN.findall(pool))

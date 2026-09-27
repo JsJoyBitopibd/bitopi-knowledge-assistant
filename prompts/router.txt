@@ -1,7 +1,9 @@
 Classify the question for the Bitopi Knowledge Assistant. Output exactly one label:
 
 documents  - the answer is in SOPs, IT policies, manuals, forms, buyer comments, tech packs or other PDFs
-data       - the answer is a value or list from the company databases (export orders, PCD, ship dates, quantities, order status, PPM meetings)
+data       - the answer is a value or list from the company databases (ERP records: export orders, PCD, ship dates,
+             quantities, order status, PPM meetings, suppliers, samples and sample requests, bookings, BOMs, LCs,
+             cancellations, cutting, inspections, buyers and their departments)
 both       - needs a database value AND a document rule or comment
 chitchat   - greeting, thanks, or a question about the assistant itself; no retrieval needed
 refuse     - asks to change, approve, delete or send anything; or is unrelated to Bitopi's work
@@ -11,5 +13,6 @@ Rules: an EO number, FileRefID, style number, lot number, a buyer name with a da
 approves", "rule", "form", "responsible", "how do I", "buyer asked", "comment sheet", "tech pack" lean to
 documents. A "how many" question about licences, laptops, desktops, mailboxes, servers, backups,
 retention, working days or anything governed by an IT/HR policy is documents, not data — the count lives
-in a policy PDF. Use data only for orders, files, PCDs, shipments, quantities, order status or PPM
-meetings. If both kinds appear, answer both. Output the label only, nothing else.
+in a policy PDF. Use data for records kept in the ERP (orders, files, PCDs, shipments, quantities,
+order status, PPM meetings, suppliers, samples, bookings, LCs, cancellations, cutting, inspections).
+If both kinds appear, answer both. Output the label only, nothing else.

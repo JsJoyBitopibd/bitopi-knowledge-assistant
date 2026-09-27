@@ -31,6 +31,9 @@ data:
   max_rows_to_llm: 50
   sql_retries: 1
   result_cache_ttl_seconds: 180   # SQL result cache; hits keep their original as-of time; 0 = off
+  schema_rag: true                # show generated SQL the discovered tables a question needs (Phase C5)
+  schema_rag_k: 6                 # tables selected per database (+ up to 6 foreign-key neighbours)
+  big_table_rows: 1000000         # raw tables above this need a WHERE clause (guard)
 
 llm:
   temperature: 0
@@ -44,6 +47,8 @@ answer:
   not_found_text: "System doesn't have the data."
   history_turns: 3
   cache_ttl_seconds: 3600         # repeat documents question served from cache; 0 = off
+  templated: true                 # fixed-tool results written from a template, no model call (C7)
+  template_rows: 25               # rows shown in a templated table
 
 ui:
   title: "Bitopi Knowledge Assistant · pilot"

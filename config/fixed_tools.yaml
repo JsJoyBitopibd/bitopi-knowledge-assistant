@@ -8,9 +8,14 @@
 # today / this week / next week / next N days). Every tool declares its `database:` — validated
 # against the loaded catalog list at run time.
 
+# `answer:` (one value, e.g. a COUNT) / `answer_list:` (rows): the lead sentence of a templated
+# answer written with no model call (agent/templated.py). Placeholders: the tool's params,
+# {value} (the single value), {n} (row count). Use nothing else: the text must pass verify().
+
 - name: pcd_history_by_eo
   database: BitopiSplint
   description: History of PCD and ship-date changes for one export order.
+  answer_list: 'PCD and ship-date history for {eo}: {n} version(s)'
   match: '(?i)\b(pcd|cut\s*date|ship\s*date)\b.*\b(history|change|changes|changed)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b|\bhistory\b.*\b(pcd|ship\s*date)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'
   params:
     eo: { from_group: [3, 5] }
@@ -24,6 +29,7 @@
 - name: orders_count_by_factory_ship_window
   database: BitopiSplint
   description: Count of orders with ship date in a date window for one factory.
+  answer: '{factory} has {value} order(s) with a ship date {window}'
   match: '(?i)\bhow many\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(ship|shipping|shipment)\b.*\b(this week|next week|next \d+ days)\b'
   params:
     factory: { from_group: 1, upper: true }
@@ -36,6 +42,7 @@
 - name: ppm_meetings_count_by_factory_window
   database: Production
   description: Count of PPM meetings for one factory in a date window.
+  answer: '{factory} has {value} PPM meeting(s) {window}'
   match: '(?i)\bhow many\b.*\bppm\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(today|this week|next week|next \d+ days)\b'
   params:
     factory: { from_group: 1, upper: true }
@@ -48,6 +55,7 @@
 - name: orders_by_factory_pcd_window
   database: BitopiSplint
   description: Confirmed orders with PCD in a date window for one factory (TAL / RHL / BGL / KTL).
+  answer_list: '{n} {factory} order(s) have a PCD {window}'
   match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\bPCD\b.*\b(this week|next week|next \d+ days)\b|\b(this week|next week|next \d+ days)\b.*\bPCD\b.*\b(TAL|RHL|BGL|KTL)\b'
   params:
     factory: { from_group: [1, 4], upper: true }
@@ -63,6 +71,7 @@
 - name: orders_by_factory_ship_window
   database: BitopiSplint
   description: Orders with ship date in a date window for one factory.
+  answer_list: '{n} {factory} order(s) have a ship date {window}'
   match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\b(ship(?:ment|ping|-|\s+)?date|shipping)\b.*\b(this week|next week|next \d+ days)\b'
   params:
     factory: { from_group: 1, upper: true }
@@ -78,6 +87,7 @@
 - name: ppm_meetings_by_factory_window
   database: Production
   description: PPM meetings for one factory in a date window.
+  answer_list: '{n} PPM meeting(s) for {factory} {window}'
   match: '(?i)\bppm(?:\s+meetings?)?\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(today|this week|next week|next \d+ days)\b'
   params:
     factory: { from_group: 1, upper: true }
@@ -96,6 +106,7 @@
     All export orders under a file reference. FileRefNo is free text in this data (e.g.
     "121394 SS17", "FKS27DDRAYE//KIABI") rather than a structured code, so this only fires when
     the question quotes the value explicitly; anything else is left to generated SQL.
+  answer_list: '{n} order(s) under file reference {fr}'
   match: "(?i)\\bfile\\s*ref(?:erence)?(?:\\s*(?:no\\.?|number))?\\s*[:#]?\\s*['\"“]([^'\"”]{2,60})['\"”]"
   params:
     fr: { from_group: 1 }
@@ -110,7 +121,9 @@
 - name: eo_by_po
   database: BitopiSplint
   description: PCD, ship date, buyer and status for an export order by buyer PO number.
-  match: '(?i)\b(?:PO|Export\s*PO|Buyer\s*PO)\s*(?:number\s*)?([A-Z0-9][A-Z0-9/_-]{2,30})\b'
+  answer_list: '{n} export order(s) for PO {po}'
+  # \b after PO and a digit in the value: without them "IT policy" matched as PO 'licy' (2026-09-27)
+  match: '(?i)\b(?:PO|Export\s*PO|Buyer\s*PO)\b\s*(?:number|no\.?|#)?\s*:?\s*((?=[A-Z0-9/_-]*\d)[A-Z0-9][A-Z0-9/_-]{2,30})\b'
   requires: ['(?i)\b(pcd|ship\s*date|status|order|buyer|factory)\b']
   params:
     po: { from_group: 1 }
@@ -125,6 +138,7 @@
 - name: eo_by_id
   database: BitopiSplint
   description: PCD, ship date, buyer and status for one export order (by ExportOrderID like TAL-17-382-1).
+  answer_list: 'Export order {eo}'
   match: '(?i)\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'
   requires: ['(?i)\b(pcd|ship\s*date|status|order|buyer|factory|style)\b']
   params:

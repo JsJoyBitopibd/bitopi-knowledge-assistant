@@ -31,8 +31,29 @@ verified; see `docs/PROGRESS.md` for per-task status and evidence.
   set) while forbidding `SELECT *` on them and requiring a `WHERE` on tables over
   `data.big_table_rows` (1M). Always on, for every query: no column or table with a sensitive name,
   and no `FOR XML/JSON`, `@@` globals, `SUSER_*`, `SYSTEM_USER`, `HOST_NAME`, `ORIGINAL_LOGIN`.
+- C5: generated SQL can use raw tables. Per question, the selected discovered tables and likely joins
+  go in a `{tables}` section after the static catalogs (stable prompt prefix), and the guard checks
+  against each catalog's full offered set. Settings `data.schema_rag`, `data.schema_rag_k`,
+  `data.big_table_rows`. Answers questions no curated view covers, e.g. supplier counts.
+- C7 (part): fixed-tool results are answered from templates with no model call
+  (`agent/templated.py`; `answer:` / `answer_list:` in `config/fixed_tools.yaml`): a count as one
+  sentence, rows as a Markdown table, still checked by `verify()`. A date window keeps its phrase
+  ("next week") as a parameter. Data + both eval cases: 9/13 → 13/13 correct.
+- Each `[D#]` source now shows the query's filter (factory, dates, order id) to the answering model
+  and in the judge's view; `verify()` also accepts the row count and parameter values.
+
+### Changed
+- Prompts v5–v6 (`prompts/CHANGELOG.md`): SQL values as literals (only six date parameters exist);
+  the router treats all ERP records as data; "pcs" only for garment quantities; multi-part answers
+  answer the covered parts instead of replying not-found.
 
 ### Fixed
+- `eo_by_po` matched "IT **po**licy" as PO number 'licy', hijacking any question that mentioned a
+  policy and an order (eval case 60). "PO" must now be a whole word and the value contain a digit.
+- `both` questions with an order code and a password/IT-policy noun were routed to `data` only
+  (eval case 61).
+- The catalog rule "col >= @from AND col < @to" taught generated SQL parameters that do not exist
+  (only six date names are resolved), so such queries always failed.
 - The curated "orders per factory shipping this month" few-shot example had `GROUP BY … ORDER BY`
   without `TOP`, which the guard always rejects, so any generated query imitating it failed once
   and cost an extra LLM call. It now has `TOP (50)`, and a test keeps every example guard-clean.

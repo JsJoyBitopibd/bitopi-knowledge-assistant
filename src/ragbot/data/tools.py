@@ -82,6 +82,7 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
                 break
             if spec.get("type") == "date_window":
                 params["from"], params["to"] = _date_window(raw)
+                params[name] = raw.lower()   # the phrase ("next week"), for templated answers; not in the SQL
                 continue
             if spec.get("type") == "int":
                 raw = int(raw)
@@ -114,21 +115,50 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
 
 # ---------------------------------------------------------------- generated SQL
 def _views_in(sql: str, cat: Catalog) -> list[str]:
+    """Curated views and discovered tables the statement reads (for the [D#] reference)."""
     try:
         tree = parse_one(sql, read=cat.dialect)
         names = {".".join(p for p in [t.db, t.name] if p) for t in tree.find_all(exp.Table)}
     except Exception:
-        names = set(re.findall(r"\brag\.\w+", sql, re.IGNORECASE))
-    return sorted(n for n in names if cat.view(n))
+        names = set(re.findall(r"\b\w+\.\w+", sql, re.IGNORECASE))
+    return sorted(n for n in names if cat.view(n) or cat.table(n))
 
 
 def _keys_for(views: list[str], cat: Catalog) -> list[str]:
+    """Row-key columns for the [D#] reference: a curated view's key_columns, a raw table's primary key."""
     keys: list[str] = []
     for v in views:
         vw = cat.view(v)
-        if vw:
-            keys += [k for k in vw.key_columns if k not in keys]
+        cols = vw.key_columns if vw else (cat.table(v).primary_key if cat.table(v) else [])
+        keys += [k for k in cols if k not in keys]
     return keys
+
+
+def _schema_selection(question: str, cats: dict[str, Catalog]) -> dict[str, list[str]]:
+    """Phase C5: the discovered tables to show for this question, per database ({} when schema RAG is
+    off or no catalog has a discovered tier). Uses the same query vector as document retrieval."""
+    s = settings()
+    if not s.get("data.schema_rag", True) or not any(c.offered_tables for c in cats.values()):
+        return {}
+    from .schema_index import select_tables
+    k = int(s.get("data.schema_rag_k", 6))
+    qvec = None
+    try:
+        from ..retrieve.retriever import _embed_query
+        qvec = list(_embed_query(question))
+    except Exception:
+        pass   # keyword-only selection still works without the embedder
+    return {name: select_tables(question, c, k, qvec) for name, c in cats.items() if c.offered_tables}
+
+
+def _guard_for(sql: str, cat: Catalog, max_rows: int) -> str:
+    """Guard with the catalog's FULL offered set as the allow-list (security), independent of which
+    tables the prompt happened to show (relevance)."""
+    offered = cat.offered_tables
+    big_rows = int(settings().get("data.big_table_rows", 1_000_000))
+    return guard(sql, cat.view_names, cat.dialect, max_rows,
+                 allowed_tables=frozenset(t.name.lower() for t in offered),
+                 big_tables={t.name.lower(): t.rows for t in offered if t.rows and t.rows > big_rows})
 
 
 def _extract_params(sql: str, cat: Catalog) -> dict[str, Any]:
@@ -176,7 +206,15 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
     catalogs_text = "\n\n".join(
         f"=== Database: {name} ({c.dialect}) — {c.description or 'no description'} ===\n{c.render()}"
         for name, c in cats.items())
-    system = prompt("sql_generate").replace("{catalogs}", catalogs_text).replace("{today}", date.today().isoformat())
+    from .schema_index import join_hints
+    selected = _schema_selection(question, cats)
+    tables_text = "\n\n".join(t for t in (cats[n].render_selected(sel, join_hints(sel, cats[n]))
+                                          for n, sel in selected.items()) if t)
+    # Static text first (rules, curated views, examples), the per-question tables last: a stable
+    # prefix lets the provider reuse its cached prompt across questions.
+    system = (prompt("sql_generate").replace("{catalogs}", catalogs_text)
+              .replace("{tables}", tables_text or "(none selected for this question)")
+              .replace("{today}", date.today().isoformat()))
     messages = [{"role": "user", "content": question}]
     fallback = _pick_catalog(question, cats)
     last_err = ""
@@ -187,8 +225,9 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
         db_name, sql = _split_database_line(raw, cats, fallback.database)
         cat = cats[db_name]
         try:
-            safe = guard(sql, cat.view_names, cat.dialect, int(s["data.max_rows"]))
+            safe = _guard_for(sql, cat, int(s["data.max_rows"]))
             sql_exec, views = rewrite_virtual(safe, cat)
+            views += [n for n in _views_in(safe, cat) if not cat.view(n)]   # raw tables, for the [D#] reference
             params = _extract_params(safe, cat)
             cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
                                            display_sql=safe, user=user, refresh=refresh)

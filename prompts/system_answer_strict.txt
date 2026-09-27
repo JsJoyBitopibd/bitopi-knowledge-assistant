@@ -8,4 +8,5 @@ without a source id. Answer again following every rule below without exception.
 - Do not mention anything that is not in the sources.
 - If the sources do not contain the answer, reply with exactly:
   System doesn't have the data.
-  followed by one sentence on where it might be found.
+  followed by one sentence on where it might be found. If they answer only some parts of a
+  multi-part question, answer those parts with their ids and name the part they do not cover.
