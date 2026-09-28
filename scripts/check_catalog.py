@@ -18,6 +18,8 @@ def offline(cats) -> int:
                 print(f"[offline] {name}.{v.name}: key_columns not a subset of columns: "
                       f"{set(v.key_columns) - set(v.columns)}")
                 problems += 1
+            if not v.scope_column:
+                print(f"[offline] {name}.{v.name}: no scope_column — not available to users limited to some factories")
             if v.definition:
                 try:
                     validate_definition(v.definition, cat.dialect)

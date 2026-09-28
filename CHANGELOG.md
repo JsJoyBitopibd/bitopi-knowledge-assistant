@@ -8,7 +8,14 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
-Nothing yet. Next: Phase F (`docs/PROGRESS.md`).
+### Added
+- F4: every catalog view declares `scope_column:` (its factory column); the five views without one
+  (`vw_ExportOrderColorSize`, `vw_PCDChangeHistory`, `vw_CancelledExportOrder`,
+  `vw_PPMMeetingReschedule`, `vw_PPMDepartmentChecklist`) gained a `Factory` / `FactoryID` column
+  through joins. `scripts/gen_rag_views.py` generates the DBA's views with the per-user row filter on
+  `SESSION_CONTEXT(N'rag_factories')` (`src/ragbot/data/scope_sql.py`); `check_catalog.py` flags a view
+  without a scope column. The DBA request and the `rag_reader` permission scripts are kept in the
+  git-ignored `private/` folder, because the repository is public.
 
 ## [1.5.1] — 2026-09-28 — Hotfix H0: cautious deletes
 

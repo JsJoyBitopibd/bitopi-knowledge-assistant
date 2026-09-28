@@ -16,3 +16,6 @@ eval/results/
 config/catalog/discovered/
 # exported/quantized models (scripts/export_reranker_onnx.py); regenerate, never commit
 data/models/
+# the GitHub repo is public: documents that map internal systems (DBA requests with logins and the
+# list of sensitive tables) live here and are handed over directly, never committed
+private/

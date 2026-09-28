@@ -11,7 +11,7 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 | Released | **v1.5.1** (hotfix H0: cautious deletes), tag `v1.5.1`, on `main` |
 | Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
 | In progress | nothing |
-| Next task | **F4** — DBA request (then **F1**, login + per-user scoping) |
+| Next task | **F1** — login + per-user scoping (F4 DBA request sent 2026-09-28; F2 waits for the DBA) |
 | Last eval | 2026-09-27, `eval/results/20260927T1710.json`: correctness 90%, faithful 100%, hit 96% (one rate-limit miss), citations 100% |
 | Tests | 282 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-28 |
@@ -114,7 +114,7 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
-| F4 | DBA request: `rag.*` views carrying a `Factory` column and the SESSION_CONTEXT scope predicate (PRD FR-4.4), `rag_reader` login, `IX_ExportOrderBack_ExportOrderID`. Written to the git-ignored `private/` folder (the repo is public) and sent by the user | ⬜ | the user has the document | |
+| F4 | DBA request: `rag.*` views carrying a `Factory` column and the SESSION_CONTEXT scope predicate (PRD FR-4.4), `rag_reader` login, `IX_ExportOrderBack_ExportOrderID`. Written to the git-ignored `private/` folder (the repo is public) and sent by the user | ✅ | the user has the document | Sent to the user 2026-09-28: `private/DBA_REQUEST.md`, `rag_reader_option_a.sql` (SELECT + DENY on 31 sensitive tables and 343 sensitive columns in 122 objects, from discovery), `rag_reader_option_b.sql` (schema `rag` only), `docs/schema/rag_views_*.sql`. **Every view now has a factory column** (`scope_column:` in the catalog; 5 views gained one through joins to FileRef / PPMMeetings): `check_catalog.py --live` 0 problems; every row resolves to a factory (0 missing; full count on the 3 smaller views, 20–50K-row samples on the large ones); the history view's join costs nothing warm (0.32 s vs 0.37–0.51 s). The generated views filter on `SESSION_CONTEXT(N'rag_factories')` (`src/ragbot/data/scope_sql.py`, CHARINDEX so any compatibility level works); proven on the real engine with plain SELECTs (session value replaced by a literal): `TAL,RHL` → only those factories on all 8 views, `*` → all, unset → 0 rows. `tests/test_scope_sql.py` (3). Waiting on the DBA → F2 |
 | F1 | Login with AD username + password (LDAP) and per-user scoping (PRD FR-4.1, 4.3, 4.5–4.8): scope is a pre-filter in vector and keyword search, a view-level predicate on every data query, part of both cache keys, and logged with every request; admin details for admins only | ⬜ | unit tests; `eval.py --kind scope` **0 leaks** on ≥ 30 adversarial cases; browser: two users with different factories get different documents/rows for the same question; full eval, no drop > 5 | |
 | F2 | Switch SQL Server from `sa` to `rag_reader` once the DBA delivers F4 (config + catalog: `definition:` fields removed) | ⏸ | `db_ping.py` shows `rag_reader`; `check_catalog.py --live`; data eval cases | Blocked on the DBA |
 | F3 | Gemini billing: a paid key. PRD FR-8.9 forbids free-tier keys with company data, so this is needed now, not only at rollout | ⏸ | one `ask.py` call logged in `calls.csv`; an eval run without 429s | User action |
@@ -169,6 +169,9 @@ G3, `--samples` for selected tables → G2, raw-table code → name → G1, Gemi
   `config/catalog/*.yaml`) and that the app connects as `sa`. Recommended: make it private. New
   internal-system documents (F4) are kept in the git-ignored `private/` folder.
 - Gemini billing → F3; DBA request → F4/F2; auth and per-user scoping → F1.
+- **Unit codes without a name** (found in F4): the data also holds orders and files of units with raw
+  company codes `01`, `02`, `03`, `07` (no TAL/RHL/... short name in the view mapping). A user limited
+  to named factories never sees them; to scope users of those units, IT must say which units they are.
 - Not planned yet: buyer portal accounts (PRD FR-4.2, PRD Phase 3) and MySQL row scope; the
   chunk-id / `source` format for same-name files (H1 refuses the duplicate instead — changing the
   format is a decision); choosing the production LLM provider (golden-set eval across providers).

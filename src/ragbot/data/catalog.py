@@ -37,6 +37,7 @@ class View:
     key_columns: list[str]
     columns: dict[str, str]
     definition: str | None = None  # T-SQL SELECT; excluded from render(); wrapped as CTE at execution
+    scope_column: str | None = None  # column with the factory short name; per-user row scope filters on it
 
 
 @dataclass
@@ -198,8 +199,12 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                     validate_definition(defn, d["dialect"])
                 except Exception as e:
                     raise RuntimeError(f"{f.name} view {v['name']} has invalid definition: {e}") from e
+            scope = v.get("scope_column")
+            if scope and scope not in v.get("columns", {}):
+                # a scope filter on a column the view does not have would fail every restricted query
+                raise RuntimeError(f"{f.name} view {v['name']}: scope_column {scope!r} is not one of its columns")
             views.append(View(v["name"], v.get("grain", ""), v.get("description", ""), v.get("key_columns", []),
-                              v.get("columns", {}), definition=defn))
+                              v.get("columns", {}), definition=defn, scope_column=scope))
         cats[d["database"]] = Catalog(d["database"], d["dialect"], d["connection_env"], d.get("rules", []),
                                       views, d.get("examples", []), d.get("description", ""), d.get("keywords", []),
                                       tables=_load_discovered(folder, d["database"]),

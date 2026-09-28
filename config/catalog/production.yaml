@@ -15,8 +15,12 @@ rules:
   - Reference views only as rag.<name> (rag.vw_PPMMeeting, rag.vw_PPMMeetingReschedule, rag.vw_PPMDepartmentChecklist).
   - If a question needs a column not listed here, return "System doesn't have the data."
 
+# `scope_column:` names the column holding the factory short name (TAL, RHL, ...). Per-user row scope
+# (PRD FR-4.4) filters on it: a user limited to some factories only sees rows of those factories, and a
+# view without a scope column is not available to such a user at all.
 views:
   - name: rag.vw_PPMMeeting
+    scope_column: FactoryID
     grain: one row per PPM meeting; MeetingId is unique.
     description: >
       Pre-Production Meeting (PPM) records with the factory, unit, style, file, PO number, order quantity,
@@ -75,6 +79,7 @@ views:
       FROM PPM.PPMMeetings m
 
   - name: rag.vw_PPMMeetingReschedule
+    scope_column: FactoryID
     grain: one row per reschedule log entry.
     description: History of PPM meeting reschedules with old/new dates and remarks.
     key_columns: [LogId, MeetingId]
@@ -92,6 +97,7 @@ views:
       Remarks: reason / remarks
       CreatedBy: user who logged the reschedule
       CreatedDate: log timestamp
+      FactoryID: factory short name of the meeting — TAL, BGL, RHL; raw company code for other units
     definition: |
       SELECT
         r.LogId,
@@ -106,10 +112,16 @@ views:
         CAST(r.NewPCD AS date) AS NewPCD,
         r.Remarks,
         r.CreatedBy,
-        CAST(r.CreatedDate AS date) AS CreatedDate
+        CAST(r.CreatedDate AS date) AS CreatedDate,
+        CASE m.FactoryID
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE m.FactoryID
+        END AS FactoryID
       FROM PPM.PPMMeetingRescheduleLog r
+      LEFT JOIN PPM.PPMMeetings m ON m.MeetingId = r.MeetingId
 
   - name: rag.vw_PPMDepartmentChecklist
+    scope_column: FactoryID
     grain: one row per checklist item per department per meeting.
     description: Department completion checklist for each PPM meeting.
     key_columns: [ChecklistItemId, MeetingId]
@@ -123,6 +135,7 @@ views:
       IsCompleted: whether the item is completed (1/0)
       CompletedDate: date completed
       CompletedBy: user who completed the item
+      FactoryID: factory short name of the meeting — TAL, BGL, RHL; raw company code for other units
     definition: |
       SELECT
         c.ChecklistItemId,
@@ -133,8 +146,13 @@ views:
         c.IsRequired,
         c.IsCompleted,
         CAST(c.CompletedDate AS date) AS CompletedDate,
-        c.CompletedBy
+        c.CompletedBy,
+        CASE m.FactoryID
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE m.FactoryID
+        END AS FactoryID
       FROM PPM.DepartmentCompletionChecklist c
+      LEFT JOIN PPM.PPMMeetings m ON m.MeetingId = c.MeetingId
 
 examples:
   - question: How many PPM meetings are scheduled at TAL next week?

@@ -17,8 +17,12 @@ rules:
   - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
   - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System doesn't have the data."
 
+# `scope_column:` names the column holding the factory short name (TAL, RHL, ...). Per-user row scope
+# (PRD FR-4.4) filters on it: a user limited to some factories only sees rows of those factories, and a
+# view without a scope column is not available to such a user at all.
 views:
   - name: rag.vw_ExportOrder
+    scope_column: Factory
     grain: one row per confirmed export order; ExportOrderID is unique.
     description: >
       Confirmed export orders with the plan cut date (PCD), ship date, factory, merchandiser, buyer name
@@ -78,6 +82,7 @@ views:
       LEFT JOIN dbo.Style_Master sm   ON sm.StyleId    = eo.StyleID
 
   - name: rag.vw_FileRef
+    scope_column: Factory
     grain: one row per file reference (order file); FileRefID is unique.
     description: >
       Buyer file references with product category, fabric/trims in-house dates and current status.
@@ -130,6 +135,7 @@ views:
       LEFT JOIN dbo.Style_Master sm      ON sm.StyleId      = fr.StyleID
 
   - name: rag.vw_ExportOrderColorSize
+    scope_column: Factory
     grain: one row per export order per colour per size.
     description: Breakdown of an export order into colours and sizes with quantities.
     key_columns: [ExportOrderID, ColorName, SizeCode]
@@ -141,6 +147,7 @@ views:
       SizeCode: size (e.g. S, M, L, XL)
       SizeQty: pieces for this colour/size
       ColorQty: total pieces for the colour
+      Factory: factory short name of the order — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
     definition: |
       SELECT
         eo.ExportOrderID,
@@ -149,12 +156,18 @@ views:
         ec.Shade,
         ecs.SizeCode,
         ecs.SizeQty,
-        ec.ColorQty
+        ec.ColorQty,
+        CASE fr.Factory
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE fr.Factory
+        END AS Factory
       FROM dbo.ExportOrder eo
       INNER JOIN dbo.ExportColor ec      ON ec.ExportOrderID = eo.ExportOrderID
       INNER JOIN dbo.ExportColorSize ecs ON ecs.ExportColorID = ec.ExportColorID AND ecs.ExportOrderID = eo.ExportOrderID
+      LEFT JOIN dbo.FileRef fr           ON fr.FileRefID = eo.FileRefID
 
   - name: rag.vw_PCDChangeHistory
+    scope_column: Factory
     grain: one row per (ExportOrderID, version) of PCD/ship-date history.
     description: >
       History of PCD and ship-date changes from the ExportOrderBack audit table (4M+ rows).
@@ -171,6 +184,7 @@ views:
       ShipDate: ship date at that version
       UpdatedBy: username who updated
       DateUpdated: date the change was recorded
+      Factory: factory short name of the order — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
     definition: |
       SELECT
         eob.ExportOrderID,
@@ -178,10 +192,17 @@ views:
         CAST(eob.PCD      AS date) AS PCD,
         CAST(eob.ShipDate AS date) AS ShipDate,
         eob.UpdatedBy,
-        CAST(eob.DateUpdated AS date) AS DateUpdated
+        CAST(eob.DateUpdated AS date) AS DateUpdated,
+        CASE fr.Factory
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE fr.Factory
+        END AS Factory
       FROM dbo.ExportOrderBack eob
+      LEFT JOIN dbo.ExportOrder eo ON eo.ExportOrderID = eob.ExportOrderID
+      LEFT JOIN dbo.FileRef fr     ON fr.FileRefID = eo.FileRefID
 
   - name: rag.vw_CancelledExportOrder
+    scope_column: Factory
     grain: one row per cancelled export order.
     description: Register of cancelled export orders with cancellation date and reason (remarks).
     key_columns: [ExportOrderID]
@@ -197,6 +218,7 @@ views:
       CancelledBy: user who cancelled
       CancelledDate: date of cancellation
       Remarks: cancellation remarks / reason
+      Factory: factory short name of the order — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
     definition: |
       SELECT
         cel.ExportOrderID,
@@ -209,8 +231,14 @@ views:
         cel.ExportOrderStatus,
         cel.CancelledBy,
         cel.CancelledDate,
-        cel.Remarks
+        cel.Remarks,
+        CASE fr.Factory
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE fr.Factory
+        END AS Factory
       FROM dbo.CancellExportOrderList cel
+      LEFT JOIN dbo.ExportOrder eo ON eo.ExportOrderID = cel.ExportOrderID
+      LEFT JOIN dbo.FileRef fr     ON fr.FileRefID = eo.FileRefID
 
 examples:
   - question: Which TAL orders have PCD next week?

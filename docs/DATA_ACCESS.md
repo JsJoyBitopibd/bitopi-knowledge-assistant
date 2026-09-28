@@ -138,9 +138,14 @@ silently truncate), no nested `WITH`, no reference back into `rag.*`, and every 
 (`schema.table`) with a schema other than `rag`.
 
 `scripts/gen_rag_views.py` renders the same `definition:` blocks into
-`docs/schema/rag_views_<db>.sql` — the `CREATE SCHEMA rag` / `CREATE VIEW` / `CREATE LOGIN rag_reader`
-script in §1, ready for a DBA to run. Once that happens, delete the `definition:` field from a view's
-YAML entry and the identical SQL runs directly against the real `rag.*` view — no other code changes.
+`docs/schema/rag_views_<db>.sql` — the `CREATE SCHEMA rag` / `CREATE VIEW` script, ready for a DBA to
+run. Views with a `scope_column:` are generated with the per-user row filter (PRD FR-4.4,
+`src/ragbot/data/scope_sql.py`): they return only the rows of the factories named in the connection's
+session context `rag_factories` (`TAL,RHL`, or `*`), and nothing when it is not set. The login and its
+permissions are sent to the DBA separately (the repository is public, and the DENY list names the
+sensitive tables). Once the views exist, delete the `definition:` field from a view's YAML entry and the
+identical SQL runs directly against the real `rag.*` view; the connector then sets the session context
+per user (Phase F2).
 
 Every connection still opens with `autocommit=False`, and the connector issues an explicit
 `ROLLBACK` in a `finally` block before closing, whether the query succeeded or failed
