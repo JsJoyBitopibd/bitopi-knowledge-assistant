@@ -107,3 +107,18 @@ starts; seconds, nearest-rank p50 / p95. Stage keys: `ragbot/trace.py`. Files: `
 | Run | Group (n) | total p50 / p95 | first token p50 / p95 | Main stages p50 | Notes |
 |---|---|---|---|---|---|
 | 2026-09-28 20:32 (`20260928T2032.json`) | fixed tools (10) | 0.14 / 0.71 | — (templated, no model call) | data 0.14, data.db 0.12, route 0.00 (regex) | Partial baseline: Gemini returned 503 all evening, so the documents, model-SQL, both and not-found groups wait. The p95 is the first question, which also loads the fixed tools and catalogs (0.3 s) and opens the first database connection (0.26 s). |
+| 2026-09-28 20:40 (`20260928T2040.json`, `--retrieval-only`) | documents + not-found search (33) | 4.16 / 5.91 | — (no model call) | **rerank 3.87** (93%), embed 0.46, vector 0.01, keyword 0.01, fetch 0.00 | Retrieval baseline: ONNX int8 reranker, 10 candidates, max length 512, onnxruntime default threads (10 on this 6P+4E i7-13620H). The reranker is the retrieval cost; a documents answer is ~10 s end to end (B2), so this is ~40% of it. |
+| 2026-09-28 21:11 (`20260928T2111.json`, `--retrieval-only`) | same 33, **8 candidates, max length 384** | **3.22 / 4.43** | — | rerank 2.91, embed 0.27 | I2 candidate: −0.94 s p50 (−23%). Not applied yet: the G and H gate evals run first with the v1.6.0 settings, then the I2 gate eval with these. |
+
+**I2 reranker experiments (2026-09-28).** onnxruntime threads, micro-benchmark over the real 10 candidates
+of 12 golden questions (s per question, 2 interleaved rounds): default (10) 3.90, 8 3.87, 6 (P-cores
+only) 4.05, 4 4.20, **16 5.62–6.25** — the default is already best; hyperthreads hurt. Max length
+384 instead of 512: 3.51 (−10%, most pairs are shorter than 384 tokens). The reranker costs ~0.39 s
+per pair on this CPU, so the lever is the candidate count. `hit_rate.py` (30 questions, gate ≥ 29/30):
+
+| rerank_candidates | RERANK_MAX_LENGTH | Hit rate | Time (30 q) |
+|---|---|---|---|
+| 10 (v1.6.0) | 512 | 29/30 (miss: laptops/desktops, p39) | 168 s |
+| 8 | 512 | 30/30 | 143 s |
+| 10 | 384 | 29/30 (same miss) | 144 s |
+| 8 | 384 | 29/30 (same miss) | 126 s |

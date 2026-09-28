@@ -5,6 +5,8 @@ stage (ragbot/trace.py), end to end and to the first answer token.
                                                   #           3 both, 3 not-found
     python scripts/latency.py --group documents   # one group only
     python scripts/latency.py --repeat 2          # each question twice (still no cache hits)
+    python scripts/latency.py --retrieval-only    # documents search only (no model call): the 33 documents
+                                                  # and not-found questions
 
 The questions come from tests/golden.jsonl (a fixed selection) plus tests/latency_cases.jsonl, which
 holds questions no fixed tool matches (the golden set's data questions are all fixed tools). Every
@@ -17,10 +19,12 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from ragbot import trace
 from ragbot.agent import orchestrator
 from ragbot.agent.orchestrator import answer
 from ragbot.auth.models import Scope
 from ragbot.config import env, settings
+from ragbot.models import Answer
 from ragbot.retrieve import retriever
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +65,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--group", choices=("documents", "data", "sql", "both", "not_found"))
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--retrieval-only", action="store_true")
     a = ap.parse_args()
     cases = [json.loads(l) for l in (ROOT / "tests" / "golden.jsonl").read_text(encoding="utf-8").splitlines()
              if l.strip()]
@@ -69,6 +74,8 @@ def main() -> None:
               "both": groups["both"], "not_found": groups["not_found"]}
     if a.group:
         groups = {a.group: groups[a.group]}
+    if a.retrieval_only:
+        groups = {g: v for g, v in groups.items() if g in ("documents", "not_found")}
 
     scope = Scope.unrestricted()
     retriever.retrieve("warm up the models", scope=scope)      # model loading is not a question's latency
@@ -81,7 +88,12 @@ def main() -> None:
                 n += 1
                 orchestrator._ANSWERS.clear()
                 retriever._embed_query.cache_clear()
-                ans = answer(c["q"], user="latency", refresh=True, scope=scope)
+                if a.retrieval_only:
+                    tr, ctx = trace.start()
+                    ctx.run(retriever.retrieve, c["q"], scope=scope)
+                    ans = Answer(text="", route="documents", request_id=tr.id, timings=tr.snapshot())
+                else:
+                    ans = answer(c["q"], user="latency", refresh=True, scope=scope)
                 row = {"id": c["id"], "group": group, "route": ans.route, "not_found": ans.not_found,
                        "error_kind": ans.error_kind, "request_id": ans.request_id, "timings": ans.timings}
                 (failed if ans.error_kind else runs).append(row)
@@ -119,7 +131,7 @@ def main() -> None:
         "ts": datetime.now().isoformat(timespec="seconds"), "model": env("LLM_MODEL", ""),
         "rerank": {"enabled": env("RERANK_ENABLED", "true"), "backend": env("RERANK_BACKEND", "torch"),
                    "max_length": env("RERANK_MAX_LENGTH", ""), "candidates": s.get("retrieval.rerank_candidates")},
-        "repeat": a.repeat, "summary": summary, "runs": runs, "failed": failed}, indent=1), encoding="utf-8")
+        "repeat": a.repeat, "retrieval_only": a.retrieval_only, "summary": summary, "runs": runs, "failed": failed}, indent=1), encoding="utf-8")
     print(f"\nwritten {out.relative_to(ROOT)}")
     sys.exit(1 if failed and not runs else 0)
 
