@@ -8,13 +8,13 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.6.0** (Phase F: sign-in and per-user scope), tag `v1.6.0`, on `main` |
+| Released | **v1.7.0** (Phase G: polish), tag `v1.7.0`, on `main` |
 | Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
-| In progress | **Phase G** on `feature/phase-g-polish`: G1, G3, G4 ✅; G2 code ✅, live sampling run waits for a go-ahead; gate eval waits for Gemini (503 since ~18:30) |
-| Next task | When Gemini recovers: G gate eval, then re-run the 3 `both` cases and `scope_check.py` model cases on v1.6.0. Then Phase H (ingestion robustness). Waiting on others: F2 (DBA), F3 (billing), G2 go-ahead |
-| Last eval | 2026-09-28, `eval/results/20260928T1820.json`: correctness 93%, faithful 100%, hit 98%, citations 100%; leak suite 34 cases, 0 leaks |
-| Tests | 340 passing (`.venv\Scripts\python -m pytest -q`) |
-| Last updated | 2026-09-28 |
+| In progress | **Phase H** (ingestion robustness) on `feature/phase-h-ingest`, then Phase I on `feature/phase-i-speed` |
+| Next task | The leak suite's 7 model cases (the Gemini free-tier daily quota ran out after the G gate); then the H gate eval → v1.8.0. Waiting on others: F2 (DBA), F3 (billing), G2 go-ahead |
+| Last eval | 2026-09-29, `eval/results/20260929T0040.json` (G gate): correctness 92%, faithful 100%, hit 98%, citations 100%; leak suite 27 non-model cases, 0 leaks |
+| Tests | 377 passing (`.venv\Scripts\python -m pytest -q`) |
+| Last updated | 2026-09-29 |
 
 ## How to update this file (every session)
 
@@ -120,7 +120,7 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 | F3 | Gemini billing: a paid key. PRD FR-8.9 forbids free-tier keys with company data, so this is needed now, not only at rollout | ⏸ | one `ask.py` call logged in `calls.csv`; an eval run without 429s | User action |
 | F✓ | Phase gate (F1 + F4 released as v1.6.0; F2 and F3 follow when the DBA and billing are done) | ✅ | full eval, no drop > 5 points; scope leaks 0 | **Full eval** `eval/results/20260928T1820.json` (62 cases, ONNX reranker, as an unrestricted user) vs v1.5.0 on the same cases: hit 96% → **98%**, faithfulness 100% → 100%, correctness 90% → **93%**, citations 100%, not-found 100%, refuse 100%; changed cases 6 (0.5 → 1.0) and 61 (0 → 1.0, v1.5.0's rate-limit miss). That run used the code just before the review fixes; on the final code: `hit_rate.py` **29/30** (same miss), the 10 data answers re-run are word-for-word the gate run's, and the gate run executed no model-written SQL (`sql.csv`: fixed tools and cache hits only), so the stricter CTE rule — the only review fix on an unrestricted user's path — cannot change it. The re-run of the 3 `both` cases and the leak suite's 7 model cases on the final code hit Gemini **503 "high demand"** (19:00–19:10+) — to be re-run when it recovers; the leak suite's 27 other cases on the final code: 0 leaks (`eval/scope/scope_20260928T1836.json`), and its 2 model-written statements get the same guard verdicts as before. 340 tests |
 
-### Phase G — Polish (v1.7.0) 🔄 — G1, G3, G4 done on `feature/phase-g-polish`; G2 live run and the gate pending
+### Phase G — Polish (v1.7.0) ✅ — G2's live sampling run waits for the user's go-ahead
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
@@ -128,7 +128,7 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 | G2 | `discover_schema.py --samples` only for the tables the schema index selects (a full pass is ~6,700 production queries); samples merged into the JSON, not wiped by the next run | 🔄 | unit test; live run only with the user's go-ahead (read-only production queries) | Code ✅: `generate_and_run` logs the tables it was shown (`logs/schema_select.csv`); `--samples --tables-from-logs` (or `--tables`) samples only those plus the raw tables generated SQL read; earlier samples are carried into the new file. `tests/test_schema_samples.py` (3). Today's logs select 12 BitopiSplint + 2 Production tables ≈ **122 queries**. **Live run waits for the user's go-ahead** (then `index_schema.py` for the changed database) |
 | G3 | Follow-up question chips per fixed tool; `example_params` on every fixed tool so `check_catalog.py --live` smoke-tests them (it tests none today) | ✅ | unit test; browser | `follow_ups:` on 13 fixed tools, filled with the answer's parameters (in the user's scope); every filled follow-up reaches a fixed tool — no model call on click. An `example:` question per tool instead of `example_params` (it also tests the routing): `check_catalog.py` checks each reaches its tool; `--live` ran **15/15 OK**. Browser: "How many TAL orders are shipping next week?" → 432 (0.3 s) + 2 chips → click → 200 TAL orders with a PCD (0.2 s), chips only under the latest answer (a first version left the old ones on screen — fixed), kept across a rerun. `tests/test_follow_ups.py` (30) |
 | G4 | Streamlit noise: `.streamlit/config.toml` (also copied into the Docker image), deprecated `use_container_width`; `chat.csv` header on disk is missing the `error_kind` column | ✅ | clean startup log; `chat.csv` parses with a header that matches its rows | Startup log: **0 torchvision tracebacks** (about 50 before; `server.fileWatcherType = "none"`, in the Docker image too); `width="stretch"`, no deprecation warning; the `chat.csv` header was fixed in v1.6.0 (`logs.append_row`) |
-| G✓ | Phase gate | ⏸ | full eval, no drop > 5 points | Waiting for Gemini (503 "high demand" since ~18:30 on 28 Sep); G1 changes what the SQL model is shown, so the eval runs before the merge. 377 tests |
+| G✓ | Phase gate | ✅ | full eval, no drop > 5 points | **Full eval** `eval/results/20260929T0040.json` (62 cases) vs v1.6.0 (`20260928T1820.json`) on the same cases: hit 98% → 98%, faithfulness 100% → 100%, correctness 93% → 92% (only case 37 changed, 1.0 → 0.5 — it has swung between runs before: v1.3.0 terser, v1.5.0 complete), citations, not-found, refuse 100%. The golden set has no model-written SQL, so G1's join is confirmed only by its own check (see G1). Leak suite on this code, no-model cases: 27, 0 leaks (`eval/scope/scope_20260929T0042.json`); its 7 model cases wait for the next day's quota (the eval spent it). Gemini recovered at ~23:35 after a 5-hour 503 outage. 377 tests |
 
 ### Phase H — Ingestion robustness (v1.8.0) ⬜
 
@@ -190,3 +190,4 @@ G3, `--samples` for selected tables → G2, raw-table code → name → G1, Gemi
 | 2026-09-28 | Two sessions' plans merged into Phases F–I (H0 hotfix first, then F → G → H → I), written here and in ROADMAP. GitHub Releases created for v1.2.0–v1.5.0 (Phases B–D had tags only). H0 next |
 | 2026-09-28 | v1.5.1: hotfix H0 — an empty or offline PDF folder can no longer empty the index (two-scan removal rule, mass-disappearance stop, `reindex.py` checks the folder first). F4 next |
 | 2026-09-28 | F4 DBA request sent (views with factory filter, `rag_reader` options, index). v1.6.0: F1 sign-in (AD/LDAP) + per-user scope in search and every SQL statement; leak suite 34 cases, 0 leaks; an independent review found a guard hole from its first version (forward-referenced CTE names read base tables, confirmed on the server) — fixed. Correctness 93%. Gemini 503 outage at the end of the day. G next |
+| 2026-09-29 | v1.7.0: Phase G gate passed after Gemini's 5-hour outage (correctness 92%, hit 98%, faithful 100%); leak suite no-model cases 0 leaks. The free-tier daily quota ran out right after the gate — F3 (billing) matters. H next |

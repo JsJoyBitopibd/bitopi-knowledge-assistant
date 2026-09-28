@@ -8,6 +8,14 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-09-29 — Phase G: polish
+
+Eval (62 cases, `eval/results/20260929T0040.json`, vs v1.6.0 on the same cases): hit rate 98% → 98%,
+faithfulness 100%, correctness 93% → 92% (case 37: 1.0 → 0.5, a case that has swung between runs before),
+citation validity, not-found and refuse 100%. Leak suite on this code: the 27 cases that need no model call,
+0 leaks (`eval/scope/scope_20260929T0042.json`). G2's live sampling run (about 122 read-only queries) is
+still to do, with the user's go-ahead.
+
 ### Added
 - G3: follow-up question chips under fixed-tool answers (`follow_ups:` in `config/fixed_tools.yaml`,
   filled with the answer's parameters; each reaches a fixed tool, so a click needs no model call). Every
