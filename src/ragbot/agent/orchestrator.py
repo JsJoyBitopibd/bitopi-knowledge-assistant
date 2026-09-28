@@ -21,6 +21,7 @@ from ..auth.models import Scope
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
 from ..llm import get_chat
+from ..logs import append_row
 from ..llm.base import ChatReply, LLMError
 from ..models import Answer, Chunk, QueryResult, Usage
 from ..retrieve.retriever import retrieve
@@ -85,7 +86,7 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
             yield Replace("provider error")
         out = Answer(text=friendly_llm(e.kind), question=question, error_kind=e.kind, not_found=True)
         out.warnings.append(f"llm {e.kind}: {e}")
-        yield Final(_log(out, user))
+        yield Final(_log(out, user, scope))
 
 
 def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
@@ -108,7 +109,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             a = hit.model_copy(deep=True)
             a.usage = Usage()
             a.warnings = ["answer cache hit"]
-            yield Final(_log(a, user)); return
+            yield Final(_log(a, user, scope)); return
 
     yield Stage("understanding", "Understanding the question…")
     q = standalone_question(question, history, user) if history else question
@@ -117,10 +118,10 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
 
     if r == "refuse":
         out.text = prompt("refusal").strip()
-        yield Final(_log(out, user)); return
+        yield Final(_log(out, user, scope)); return
     if r == "chitchat":
         out.text = prompt("chitchat").strip()
-        yield Final(_log(out, user)); return
+        yield Final(_log(out, user, scope)); return
 
     chunks: list[Chunk] = []
     results: list[QueryResult] = []
@@ -130,7 +131,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         ask = needs_clarification(q)
         if ask:   # a missing order id / factory: ask instead of guessing (config/clarify.yaml)
             out.text, out.route = ask, "clarify"
-            yield Final(_log(out, user)); return
+            yield Final(_log(out, user, scope)); return
     if r in ("data", "both"):
         from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
     if r == "both":
@@ -152,6 +153,11 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
         denied = any(x.denied for x in results)
         results = [x for x in results if not x.error]
+        if r == "data" and denied and not any(x.rows for x in results):
+            # The question names a factory outside the user's scope: say so now. A document search and a
+            # model call cannot answer it, and would only hide the reason behind a generic not-found.
+            out.text, out.not_found = nf + " " + prompt("scope_denied").strip(), True
+            yield Final(_log(out, user, scope)); return
         if r == "data" and not any(x.rows for x in results) and not chunks:
             # data route found nothing usable: fall back to documents once (a PDF may hold it)
             yield Stage("searching", "Searching documents…")
@@ -161,12 +167,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
                                else "No document or database view in the system covers this question.")
         out.not_found = True
-        yield Final(_log(out, user)); return
+        yield Final(_log(out, user, scope)); return
 
     # A single fixed-tool result has a known shape: write it from a template, no model call (C7).
     if r == "data" and not chunks and len(results) == 1 and s.get("answer.templated", True):
         if _templated_answer(out, results[0], nf):
-            yield Final(_log(out, user)); return
+            yield Final(_log(out, user, scope)); return
 
     yield Stage("writing", "Writing the answer…")
     yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
@@ -186,7 +192,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             yield Stage("writing", "Writing the answer…")
             yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
             if not retry.not_found:
-                yield Final(_log(retry, user)); return
+                yield Final(_log(retry, user, scope)); return
             out = retry
 
     if out.not_found and not out.text:
@@ -196,7 +202,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # short cache in data/cache.py) and a not-found may become answerable after the next ingest.
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
-    yield Final(_log(out, user))
+    yield Final(_log(out, user, scope))
 
 
 def _templated_answer(out: Answer, result: QueryResult, nf: str) -> bool:
@@ -281,32 +287,23 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
     out.text = ""
 
 
-def log_feedback(user: str, index: int, thumb: Any, answer_text: str) -> None:
+def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str = "") -> None:
     """Thumbs up/down from the UI go to logs/chat.csv as a feedback row (docs/PLAN.md M5)."""
-    f = log_dir() / "chat.csv"
-    new = not f.exists()
-    with open(f, "a", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        if new:
-            w.writerow(_CHAT_HEADER)
-        w.writerow([datetime.now().isoformat(timespec="seconds"), user, "feedback", f"turn {index}", "", "",
-                    "", "", "", f"thumb={thumb} | {answer_text[:200]}"])
+    append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "feedback",
+                                          f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}", ""])
 
 
-_CHAT_HEADER = ["ts", "user", "route", "question", "rewritten", "not_found", "refs", "in_tokens", "out_tokens",
-                "warnings", "error_kind"]
+# `scope` (PRD FR-6.2): what the user was allowed to see when they asked, so an administrator can
+# reconstruct what each user saw (FR-4.8).
+_CHAT_HEADER = ["ts", "user", "scope", "route", "question", "rewritten", "not_found", "refs", "in_tokens",
+                "out_tokens", "warnings", "error_kind"]
 
 
-def _log(a: Answer, user: str) -> Answer:
-    f = log_dir() / "chat.csv"
-    new = not f.exists()
-    with open(f, "a", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        if new:
-            w.writerow(_CHAT_HEADER)
-        w.writerow([datetime.now().isoformat(timespec="seconds"), user, a.route, a.question, a.rewritten_question,
-                    a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
-                    a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind])
+def _log(a: Answer, user: str, scope: Scope) -> Answer:
+    append_row("chat.csv", _CHAT_HEADER, [
+        datetime.now().isoformat(timespec="seconds"), user, scope.key(), a.route, a.question, a.rewritten_question,
+        a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
+        a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind])
     return a
 
 

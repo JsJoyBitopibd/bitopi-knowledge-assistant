@@ -133,9 +133,11 @@ def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, 
     try:
         cols, rows = aggregates.run_local(sql, params, int(settings()["data.max_rows"]))
     except Exception as e:
-        _log("local", tool["name"], sql, sql, params, 0, (time.perf_counter() - t0) * 1000, error=str(e)[:300], user=user)
+        _log("local", tool["name"], sql, sql, params, 0, (time.perf_counter() - t0) * 1000, error=str(e)[:300], user=user,
+             scope=scope.key())
         return None
-    _log("local", tool["name"], sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user)
+    _log("local", tool["name"], sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user,
+         scope=scope.key())
     views = _views_in(tool["sql"], cat)
     return QueryResult(database=cat.database, engine="local", views=views, sql=sql, sql_executed=sql,
                        params=params, tool=tool["name"], columns=cols, rows=rows,

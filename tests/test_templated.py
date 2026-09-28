@@ -79,7 +79,7 @@ def test_date_window_param_keeps_the_phrase():
 def wired(monkeypatch):
     orch._ANSWERS.clear()
     monkeypatch.setattr(base, "_log_call", lambda *a: None)
-    monkeypatch.setattr(orch, "_log", lambda a, user: a)
+    monkeypatch.setattr(orch, "_log", lambda a, user, scope=None: a)
     monkeypatch.setattr(orch, "_log_verify_failure", lambda *a: None)
     monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
     monkeypatch.setattr(orch, "_route", lambda q, user: "data")

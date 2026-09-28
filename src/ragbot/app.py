@@ -17,6 +17,8 @@ import streamlit as st  # noqa: E402
 
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
 from ragbot.agent.orchestrator import answer_stream, log_feedback  # noqa: E402
+from ragbot.auth.filters import scope_where  # noqa: E402
+from ragbot.auth.providers import sign_in  # noqa: E402
 from ragbot.config import log_dir, settings  # noqa: E402
 from ragbot.data import present  # noqa: E402
 from ragbot.index_version import index_version  # noqa: E402
@@ -25,6 +27,36 @@ from ragbot.store import Registry  # noqa: E402
 s = settings()
 st.set_page_config(page_title=s["ui.title"], layout="centered")
 st.title(s["ui.title"])
+
+_SIGN_IN_ERRORS = {
+    "invalid": "User name or password is wrong.",
+    "not_enrolled": "Your account is not enabled for the assistant yet. Ask IT to add you to an assistant group.",
+    "locked": "Too many failed attempts. Wait a few minutes and try again.",
+    "unavailable": "The sign-in service cannot be reached. Try again, or tell IT.",
+}
+
+
+def _sign_in_form() -> None:
+    """PRD FR-4.1: nothing below this renders until the user has signed in. Signing in starts a fresh
+    conversation, so no answer given to someone else can be seen or re-rendered."""
+    with st.form("sign_in"):
+        name = st.text_input("User name", placeholder="your Windows (domain) account")
+        pw = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        res = sign_in(name, pw)
+        if res.user is not None:
+            st.session_state.clear()
+            st.session_state.user = res.user
+            st.rerun()
+        st.error(_SIGN_IN_ERRORS.get(res.reason, _SIGN_IN_ERRORS["invalid"]))
+    st.stop()
+
+
+if "user" not in st.session_state:
+    _sign_in_form()
+me = st.session_state.user
+scope = me.scope
 
 
 @st.cache_resource(show_spinner=False)
@@ -52,10 +84,16 @@ with st.status("Loading models…", expanded=False) as _status:
 
 
 @st.cache_data(ttl=300)
-def _categories(_version: int) -> list[str]:
-    # _version (ingest_state.json mtime) keys the cache so a newly ingested category appears here.
+def _categories(_version: int, allowed: tuple) -> list[str]:
+    """Categories of the documents this user may see (for the filter only; the search itself applies the
+    scope). _version (ingest_state.json mtime) keys the cache so a newly ingested category appears here;
+    `allowed` is the user's document filter as a tuple of (field, values)."""
+    sql, args = "SELECT DISTINCT category FROM document WHERE status='ok'", []
+    for field, values in allowed:
+        sql += f" AND {field} IN ({','.join('?' * len(values))})"
+        args += list(values)
     try:
-        rows = Registry().db.execute("SELECT DISTINCT category FROM document WHERE status='ok' ORDER BY category")
+        rows = Registry().db.execute(sql + " ORDER BY category", args)
         cats = [r[0] for r in rows if r[0]]
         return cats or ["General"]
     except Exception:
@@ -93,20 +131,52 @@ if "history" not in st.session_state:
 if "pending_q" not in st.session_state:
     st.session_state.pending_q = None
 
+user = me.name
 with st.sidebar:
-    user = st.text_input("Your name", value="")
-    cats = st.multiselect("Document categories (empty = all)", _categories(ver))
-    admin = st.toggle("Admin details", value=False, help="Show routing and token counts under each answer")
+    st.caption(f"Signed in as **{me.display}** ({me.name})")
+    if st.button("Sign out"):
+        st.session_state.clear()          # the next person starts with no history, refs or PDF buttons
+        st.rerun()
+    allowed = tuple(sorted((k, tuple(v)) for k, v in scope_where(scope).items()))
+    cats = st.multiselect("Document categories (empty = all)", _categories(ver, allowed))
+    # route, tokens and raw warnings (which can quote database errors) are for administrators only
+    admin = st.toggle("Admin details", value=False, help="Show routing and token counts under each answer") \
+        if scope.is_admin else False
     if st.button("Clear chat"):
         st.session_state.history = []
         st.rerun()
     st.caption(_index_caption(ver))
+    if scope.is_admin:
+        # PRD FR-4.8: a user's effective scope and the audit trail of what they asked and were shown
+        with st.expander("Access and audit (admin)"):
+            st.caption("Your scope")
+            st.code(scope.key(), language=None)
+            who = st.text_input("Look up a user", placeholder="account name")
+            if who:
+                from ragbot.auth.providers import account_name
+                from ragbot.logs import rows_for_user
+                rows = rows_for_user("chat.csv", account_name(who) or who.strip())
+                asked = [r for r in rows if r.get("route") != "feedback"]
+                if not rows:
+                    st.caption("No questions logged for this account.")
+                else:
+                    last = next((r.get("scope") for r in reversed(asked) if r.get("scope")), "")
+                    st.caption(f"{len(asked)} question(s), last {asked[-1]['ts'] if asked else '—'}")
+                    if last:
+                        st.code(last, language=None)
+                    import csv as _csv
+                    import io as _io
+                    buf = _io.StringIO()
+                    w = _csv.DictWriter(buf, fieldnames=list(rows[-1].keys()), extrasaction="ignore")
+                    w.writeheader(); w.writerows(rows)
+                    st.download_button("Download this user's log", buf.getvalue().encode("utf-8"),
+                                       file_name=f"audit_{account_name(who) or 'user'}.csv", mime="text/csv")
 
 
 def feedback(i: int) -> None:
     val = st.session_state.get(f"fb{i}")
     turn = st.session_state.history[i]
-    log_feedback(user, i, val, turn["text"])
+    log_feedback(user, i, val, turn["text"], scope.key())
 
 
 def show_result(res, key: str) -> None:
@@ -209,7 +279,7 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool = 
     status = st.status("Understanding the question…", expanded=False)
     draft = st.empty()
     text, final = "", None
-    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh):
+    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh, scope=scope):
         if isinstance(ev, Stage):
             status.update(label=ev.label, state="running")
         elif isinstance(ev, Token):

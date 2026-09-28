@@ -42,7 +42,7 @@ def wire(monkeypatch):
     logged = []
     orch._ANSWERS.clear()
     monkeypatch.setattr(base, "_log_call", lambda *a: None)
-    monkeypatch.setattr(orch, "_log", lambda a, user: logged.append(a) or a)
+    monkeypatch.setattr(orch, "_log", lambda a, user, scope=None: logged.append(a) or a)
     monkeypatch.setattr(orch, "_log_verify_failure", lambda *a: None)
     monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
     monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [_chunk()])

@@ -236,10 +236,10 @@ def test_a_denied_question_says_not_found_and_why(monkeypatch):
     import ragbot.index_version as iv
     monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
     monkeypatch.setattr(orch, "_route", lambda q, user: "data")
-    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: pytest.fail("no document search"))
     monkeypatch.setattr(tools, "needs_clarification", lambda q: None)
     monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
         database="DB", engine="sqlserver", views=[], sql="", columns=[], rows=[], denied=True, error="outside")])
-    monkeypatch.setattr(orch, "_log", lambda a, user: a)
+    monkeypatch.setattr(orch, "_log", lambda a, user, scope=None: a)
     a = orch.answer("How many RHL orders ship next week?", scope=TAL)
     assert a.not_found and a.text.startswith("System doesn't have the data.") and "access" in a.text

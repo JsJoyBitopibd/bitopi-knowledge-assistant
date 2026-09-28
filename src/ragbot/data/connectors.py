@@ -19,7 +19,6 @@ whose statement failed for any other reason is closed, never returned to the poo
 """
 from __future__ import annotations
 
-import csv
 import queue
 import re
 import threading
@@ -31,16 +30,15 @@ from urllib.parse import urlparse
 from ..config import env, log_dir, settings
 
 
+SQL_HEADER = ["ts", "user", "scope", "engine", "tool", "rows", "ms", "error", "params", "sql", "sql_exec"]
+
+
 def _log(engine: str, tool: str, display_sql: str, sql_exec: str, params: dict, rows: int, ms: float,
-        error: str = "", user: str = "") -> None:
-    f = log_dir() / "sql.csv"
-    new = not f.exists()
-    with open(f, "a", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        if new:
-            w.writerow(["ts", "user", "engine", "tool", "rows", "ms", "error", "params", "sql", "sql_exec"])
-        w.writerow([datetime.now().isoformat(timespec="seconds"), user, engine, tool, rows, f"{ms:.0f}", error,
-                    params, display_sql, sql_exec])
+         error: str = "", user: str = "", scope: str = "") -> None:
+    """One row per statement in logs/sql.csv (PRD FR-3.8), with the scope it ran under (FR-6.2)."""
+    from ..logs import append_row
+    append_row("sql.csv", SQL_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, engine, tool, rows,
+                                       f"{ms:.0f}", error, params, display_sql, sql_exec])
 
 
 def _positional(sql: str, marker: str) -> tuple[str, list[str]]:
@@ -118,8 +116,8 @@ def _is_link_error(e: Exception) -> bool:
 
 
 def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVER_CONN", display_sql: str = "",
-                  tool: str = "generated", user: str = "",
-                  timeout: Optional[int] = None) -> tuple[list[str], list[list[Any]]]:
+                  tool: str = "generated", user: str = "", timeout: Optional[int] = None,
+                  scope: str = "") -> tuple[list[str], list[list[Any]]]:
     s = settings()
     timeout = timeout or int(s["data.timeout_seconds"])
     max_rows = int(s["data.max_rows"])
@@ -141,13 +139,13 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
             cur.close()
             ok = True
             _log("sqlserver", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000,
-                 user=user)
+                 user=user, scope=scope)
             return cols, rows
         except Exception as e:
             if attempt == 1 and reused and _is_link_error(e):
                 continue   # a stale pooled connection: drop it (finally) and retry once on a fresh one
             _log("sqlserver", tool, display_sql or sql, sql, params, 0, (time.perf_counter() - t0) * 1000,
-                 error=str(e)[:300], user=user)
+                 error=str(e)[:300], user=user, scope=scope)
             raise
         finally:
             if cn is not None:
@@ -156,7 +154,8 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
 
 
 def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN", display_sql: str = "",
-             tool: str = "generated", user: str = "", timeout: Optional[int] = None) -> tuple[list[str], list[list[Any]]]:
+             tool: str = "generated", user: str = "", timeout: Optional[int] = None,
+             scope: str = "") -> tuple[list[str], list[list[Any]]]:
     import mysql.connector
     timeout = timeout or int(settings()["data.timeout_seconds"])
     u = urlparse(env(conn_env))  # mysql://user:pwd@host:3306/rag
@@ -175,11 +174,12 @@ def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN",
         cur.execute(q, args)
         cols = [d[0] for d in cur.description] if cur.description else []
         rows = [list(r) for r in cur.fetchall()] if cur.description else []
-        _log("mysql", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user)
+        _log("mysql", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user,
+             scope=scope)
         return cols, rows
     except Exception as e:
         _log("mysql", tool, display_sql or sql, sql, params, 0, (time.perf_counter() - t0) * 1000,
-             error=str(e)[:300], user=user)
+             error=str(e)[:300], user=user, scope=scope)
         raise
     finally:
         if cn is not None:
