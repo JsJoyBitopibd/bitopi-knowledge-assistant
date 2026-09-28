@@ -148,10 +148,17 @@ def get_index(cat: Catalog) -> SchemaIndex:
 
 
 def fk_neighbours(names: list[str], cat: Catalog) -> list[str]:
-    """Tables one foreign key away from any of `names` (either direction), offered ones only."""
+    """Tables one foreign key away from any of `names` (either direction), plus the tables their code
+    columns point at (catalog `hints:`, e.g. Contact_Master for a Buyer code) — offered ones only."""
     offered = {t.name.lower(): t.name for t in cat.offered_tables}
     want = {n.lower() for n in names}
     out: list[str] = []
+    # hint targets first: select_tables keeps only the first few neighbours, and the table that names a
+    # selected table's codes is the one a "which buyer ..." question cannot do without
+    for n in names:
+        for h in cat.hints_for(n):
+            if h.target_table.lower() in offered:
+                out.append(offered[h.target_table.lower()])
     for t in cat.offered_tables:
         for fk in t.foreign_keys:
             a, b = t.name.lower(), fk["ref_table"].lower()
@@ -173,10 +180,13 @@ def select_tables(question: str, cat: Catalog, k: int = 8, qvec: Optional[list[f
 
 
 def join_hints(names: list[str], cat: Catalog) -> list[str]:
-    """Likely join conditions between selected tables that have no declared foreign key: a column of
+    """Likely join conditions between selected tables that have no declared foreign key: the catalog's
+    code-column hints (a Buyer code -> Contact_Master.ContactID, with where the name is), then a column of
     one table with the same name as another table's single-column primary key (e.g. BuyerID)."""
     tabs = [t for t in (cat.table(n) for n in names) if t]
-    hints = []
+    selected = {t.name.lower() for t in tabs}
+    hints = [f"{t.name}.{h.column} = {h.target}" + (f"  ({h.note})" if h.note else "")
+             for t in tabs for h in cat.hints_for(t.name) if h.target_table.lower() in selected]
     for b in tabs:
         if len(b.primary_key) != 1:
             continue

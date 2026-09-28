@@ -10,6 +10,17 @@ keywords: [order, orders, eo, exportorder, po, exportpo, style, buyer, factory, 
 # Discovered tables never offered to the SQL model (fnmatch, case-insensitive): history/backup
 # copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
 exclude_tables: ["*back", "*backup*", "*$", "*$'", "*_old", "*_bak", "*.tmp*", "*.temp_*", "*_test", "*daytest"]
+# Code columns in raw tables that hold another table's key, with no declared foreign key (schema RAG
+# shows the join and pulls the target table in). Listed per table: checked read-only on 2026-09-28 that
+# the codes resolve (tblSampleRequestMaster 5,000 of 5,000 sampled Buyer codes, BillsOfExchange 1,993 of
+# 2,000, BuyerDormantData and ContractMaster all; FileRef is how the curated views get the buyer name).
+# Other tables' Buyer columns hold something else (e.g. dbo.CheckAnit: 0 of 2,000 resolve), so they are
+# not listed.
+hints:
+  - column: Buyer
+    target: dbo.Contact_Master.ContactID
+    note: "a buyer code such as C/09/7; the buyer's name is dbo.Contact_Master.ContactName"
+    tables: [dbo.FileRef, dbo.tblSampleRequestMaster, dbo.BillsOfExchange, dbo.BuyerDormantData, dbo.ContractMaster]
 rules:
   - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
   - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.

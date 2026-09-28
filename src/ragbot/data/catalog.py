@@ -80,6 +80,21 @@ class Table:
 
 
 @dataclass
+class Hint:
+    """A code column that holds another table's key where discovery found no foreign key (catalog YAML
+    `hints:`), e.g. `Buyer` = `dbo.Contact_Master.ContactID` ('C/09/7' -> ContactName 'H&M'). Listed per
+    table, because the same column name means different things in different tables."""
+    column: str
+    target: str                      # schema.table.column
+    tables: list[str]
+    note: str = ""
+
+    @property
+    def target_table(self) -> str:
+        return self.target.rsplit(".", 1)[0]
+
+
+@dataclass
 class Catalog:
     database: str
     dialect: str                     # "tsql" | "mysql"
@@ -91,6 +106,11 @@ class Catalog:
     keywords: list[str] = field(default_factory=list)  # words that hint at this database (routing fallback)
     tables: list[Table] = field(default_factory=list)          # discovered tier (may be empty)
     exclude_tables: list[str] = field(default_factory=list)    # fnmatch patterns, e.g. "dbo.*Back", "HR.*"
+    hints: list[Hint] = field(default_factory=list)            # code columns -> the table that names them
+
+    def hints_for(self, table: str) -> list[Hint]:
+        low = table.lower()
+        return [h for h in self.hints if low in {t.lower() for t in h.tables}]
 
     @property
     def engine(self) -> str:
@@ -137,7 +157,7 @@ class Catalog:
         out += [t.render() for t in picked]
         hints = list(join_hints)
         if hints:
-            out.append("Likely joins (same key name, no declared foreign key):")
+            out.append("Likely joins (no declared foreign key):")
             out += [f"    {h}" for h in hints]
         return "\n".join(out)
 
@@ -205,8 +225,13 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                 raise RuntimeError(f"{f.name} view {v['name']}: scope_column {scope!r} is not one of its columns")
             views.append(View(v["name"], v.get("grain", ""), v.get("description", ""), v.get("key_columns", []),
                               v.get("columns", {}), definition=defn, scope_column=scope))
+        hints = []
+        for h in d.get("hints") or []:
+            if len(str(h.get("target", "")).split(".")) != 3 or not h.get("column") or not h.get("tables"):
+                raise RuntimeError(f"{f.name}: a hint needs column, target (schema.table.column) and tables: {h}")
+            hints.append(Hint(h["column"], h["target"], list(h["tables"]), h.get("note", "")))
         cats[d["database"]] = Catalog(d["database"], d["dialect"], d["connection_env"], d.get("rules", []),
                                       views, d.get("examples", []), d.get("description", ""), d.get("keywords", []),
                                       tables=_load_discovered(folder, d["database"]),
-                                      exclude_tables=d.get("exclude_tables", []))
+                                      exclude_tables=d.get("exclude_tables", []), hints=hints)
     return cats
