@@ -39,6 +39,31 @@ starts reasoning/"thinking" and eats the whole token budget, tune `LLM_EXTRA_BOD
 `LLM_SMALL_EXTRA_BODY` (thinking budget) or `LLM_REASONING_EFFORT` — see the comments in
 `.env.example`.
 
+### Sign-in and who sees what (Phase F1)
+
+Every user signs in; what they may see is their **scope**, applied as filters in document search and
+in every SQL statement (never by the prompt). Setup:
+
+1. `copy config\scopes.example.yaml config\scopes.yaml` and replace the example group names with the
+   real Active Directory groups: for each group, the factories whose documents and database rows its
+   members may see (`"*"` = all), optional departments, and the highest confidentiality. A user's scope
+   is the union over their groups; a user in none of the listed groups cannot sign in. `admins:` lists
+   the groups that see admin details and the audit panel.
+2. Active Directory: in `config/settings.yaml` set `auth.provider: ldap`; in `.env` set `LDAP_HOST`,
+   `LDAP_DOMAIN`, `LDAP_BASE_DN` (LDAPS on 636 by default; `LDAP_USE_SSL=false` uses StartTLS on 389;
+   plain LDAP is never used). No service account is needed: the user's own password is checked.
+   For development only, `auth.provider: local` with users added by `python scripts/add_local_user.py`.
+3. Tag documents: the factory comes from the first folder (`data/pdfs/TAL/...`), everything else is
+   group-wide; a `meta.yaml` in a folder sets department / confidentiality (see `data/pdfs/README.md`).
+4. **After upgrading an existing index, run `python scripts/ingest.py` once**: it tags the documents
+   indexed before F1 without re-embedding them. Until then a user limited to some factories sees no
+   documents (untagged chunks are skipped, never shown).
+5. Check with `python scripts/scope_check.py`: an adversarial suite on a throwaway index plus the live
+   databases (read-only); it must report 0 leaks.
+
+Every question in `logs/chat.csv` and every statement in `logs/sql.csv` records the user and their
+scope; admins can look up a user's scope and download their log in the sidebar ("Access and audit").
+
 ## Folders
 
 - `data/pdfs/` — drop PDFs here. Subfolder = category tag used for filtering and shown in references.
