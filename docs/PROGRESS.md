@@ -8,12 +8,13 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.5.0** (Phase D), tag `v1.5.0`, on `main` — **the Phase A–E roadmap is complete** |
-| In progress | nothing; see "Small follow-ups" and "Open items" below for what remains |
-| Next task | Your choice: follow-ups below (document-answer tuning, schema samples, follow-up chips), or the open items (Gemini billing, DBA request, auth / per-user scoping — PRD FR-4) |
+| Released | **v1.5.0** (Phase D), tag `v1.5.0`, on `main` — the Phase A–E roadmap is complete |
+| Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
+| In progress | nothing |
+| Next task | **H0** — cautious deletes (PRD FR-2.14): an empty or offline PDF folder must never empty the index |
 | Last eval | 2026-09-27, `eval/results/20260927T1710.json`: correctness 90%, faithful 100%, hit 96% (one rate-limit miss), citations 100% |
 | Tests | 273 passing (`.venv\Scripts\python -m pytest -q`) |
-| Last updated | 2026-09-27 |
+| Last updated | 2026-09-28 |
 
 ## How to update this file (every session)
 
@@ -94,32 +95,83 @@ routed to `data` only (router).
 | E3 | Embedding cache + chunk-level diff | ✅ | `tests/test_embedding_cache.py` (6). Live 2026-09-27 in a throwaway index, 60-page IT SOP manual (98 chunks): cold ingest **243 s** (98 embedded) → one-page revision **6.9 s** (1 embedded, 97 cached, 1 stale row pruned) → unchanged re-run 0.0 s; revised text indexed on p12; vectors = registry chunks = 98. **Decision:** no chunk-level diff in the vector store — with cached vectors, replacing a document's rows costs milliseconds and keeps every chunk's metadata (`doc_hash`, `ingested_at`) consistent, which a diff would leave stale. Upgrade path: an index built before E3 seeds the cache from its stored vectors on the first ingest (live index 2026-09-27: 250/250 chunks seeded, 0 re-embedded) |
 | E4 | Document the "new version of a document" behavior in README | ✅ | README "Revising a document" + "Add documents". Claims verified live in the throwaway index: `_v3` beside `_v2` → v2 superseded in registry and vectors, added in 6.4 s with 0 chunks embedded (all cached); deleting `_v3` → v2 restored |
 
+## Plan after v1.5.0 — Phases F–I
+
+Merged on 2026-09-28 from two sessions' proposals, with the other session's plan first (F: ready for
+more users, G: polish) and this session's code findings after it (H: ingestion robustness, I: speed).
+One exception agreed with the user: the empty-folder wipe fix (H0) goes first as a hotfix, so the
+ingestion worker can run unattended while F1 is built. Design per task: `docs/ROADMAP.md`
+"Phases F–I". Order: H0 → F4 (request drafted, DBA works in parallel) → F1 → F2 (when the DBA is
+done) → G1–G4 → H1–H4 → I1 → I2–I5.
+
+### Hotfix H0 — cautious deletes (v1.5.1) ⬜
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| H0 | PRD FR-2.14: a missing or empty PDF folder deletes nothing; a file leaves the index only after **two consecutive scans** miss it; more than 5 % of known files missing in one scan → no deletions, alert in `ingest.log` + `ingest_state.json`. Same area: one unreadable file no longer aborts the whole run (the worker exited); the summary's `failed` counts this run, not the registry total | ⬜ | unit tests (missing root, empty root, two-scan rule, counter reset, > threshold, unreadable file); live `ingest_worker.py --once` against a throwaway index with its folder renamed → alert, `inspect.py --stats` unchanged | |
+
+### Phase F — Ready for more users (v1.6.0) ⬜
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| F4 | DBA request: `rag.*` views carrying a `Factory` column and the SESSION_CONTEXT scope predicate (PRD FR-4.4), `rag_reader` login, `IX_ExportOrderBack_ExportOrderID`. Written to the git-ignored `private/` folder (the repo is public) and sent by the user | ⬜ | the user has the document | |
+| F1 | Login with AD username + password (LDAP) and per-user scoping (PRD FR-4.1, 4.3, 4.5–4.8): scope is a pre-filter in vector and keyword search, a view-level predicate on every data query, part of both cache keys, and logged with every request; admin details for admins only | ⬜ | unit tests; `eval.py --kind scope` **0 leaks** on ≥ 30 adversarial cases; browser: two users with different factories get different documents/rows for the same question; full eval, no drop > 5 | |
+| F2 | Switch SQL Server from `sa` to `rag_reader` once the DBA delivers F4 (config + catalog: `definition:` fields removed) | ⏸ | `db_ping.py` shows `rag_reader`; `check_catalog.py --live`; data eval cases | Blocked on the DBA |
+| F3 | Gemini billing: a paid key. PRD FR-8.9 forbids free-tier keys with company data, so this is needed now, not only at rollout | ⏸ | one `ask.py` call logged in `calls.csv`; an eval run without 429s | User action |
+| F✓ | Phase gate | ⬜ | full eval, no drop > 5 points; scope leaks 0 | |
+
+### Phase G — Polish (v1.7.0) ⬜
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| G1 | Raw-table codes → names (e.g. `tblSampleRequestMaster.Buyer` = `C/09/7`): an optional `hints:` key in the catalog YAML feeding the schema index's join hints | ⬜ | read-only check that the code is a `Contact_Master.ContactID`; unit test; `index_schema.py --try` shows the join | |
+| G2 | `discover_schema.py --samples` only for the tables the schema index selects (a full pass is ~6,700 production queries); samples merged into the JSON, not wiped by the next run | ⬜ | unit test; live run only with the user's go-ahead (read-only production queries) | |
+| G3 | Follow-up question chips per fixed tool; `example_params` on every fixed tool so `check_catalog.py --live` smoke-tests them (it tests none today) | ⬜ | unit test; browser | |
+| G4 | Streamlit noise: `.streamlit/config.toml` (also copied into the Docker image), deprecated `use_container_width`; `chat.csv` header on disk is missing the `error_kind` column | ⬜ | clean startup log; `chat.csv` parses with a header that matches its rows | |
+| G✓ | Phase gate | ⬜ | full eval, no drop > 5 points | |
+
+### Phase H — Ingestion robustness (v1.8.0) ⬜
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| H1 | Two PDFs with the same file name in different folders overwrite each other (`source` is the bare name): the second is refused and listed as failed | ⬜ | unit test | |
+| H2 | `inspect.py --check` (registry vs Chroma vs `chunk_fts`, exit 1 on mismatch); a failed re-ingest keeps the old version (today the vectors are deleted first and the old registry rows stay) | ⬜ | tests with a planted orphan in each store; exit 0 on the live index | |
+| H3 | Worker: `ingest.py` and `reindex.py` take the same lock; resume after a crash; failed files retried up to 3 times; `ingest_state.json` written atomically and only when something changed (today every `--once` pass flushes the app's caches) + a heartbeat file; sidebar status line | ⬜ | tests; kill the worker mid-batch → restart → `--check` clean | |
+| H4 | Run the worker and the nightly aggregates refresh as scheduled tasks (runbook in README; the tasks are created by the user). The local copy was last refreshed 27 Sep 14:59 | ⏸ | `schtasks /query` lists both; aggregates `as_of` is from last night | User action |
+| H✓ | Phase gate | ⬜ | full eval, no drop > 5 points | |
+
+### Phase I — Speed (v1.9.0) ⬜
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| I1 | Measure: per-stage timings and a request id in the logs; `scripts/latency.py` prints p50/p95 per stage, end-to-end and first token over 50 questions | ⬜ | baseline row in `docs/tuning_log.md` | |
+| I2 | Document answers p50 ≤ 8 s (about 10 s today) | ⬜ | `latency.py`; `hit_rate.py` ≥ 29/30; eval | |
+| I3 | First token ≤ 3 s (3.9–6.1 s measured in B2), or the provider limit measured and recorded | ⬜ | `latency.py` first-token column | |
+| I4 | Load test: chat p95 rises < 20 % while the worker ingests 100–1,000 PDFs; throughput recorded | ⬜ | `latency.py` during an ingest in a throwaway index | |
+| I5 | Bulk ingestion: `embed_backend` stored with the index and checked at start; int8 ONNX bge-m3 behind the parity test (needs the user's approval, as D4 did) | ⬜ | parity cosine ≥ 0.99 on 1,000 chunks; `hit_rate.py` drop ≤ 1 | |
+| I✓ | Phase gate | ⬜ | full eval, no drop > 5 points | |
+
 ## Small follow-ups noticed along the way
 
-- Streamlit's file watcher logs ~50 harmless `ModuleNotFoundError: torchvision` tracebacks at start
-  (it scans transformers' image modules). Fix: `server.fileWatcherType = "none"` in
-  `.streamlit/config.toml` for production, or install torchvision. Cosmetic.
+The open follow-ups from Phases A–E are now tasks above: torchvision noise → G4, follow-up chips →
+G3, `--samples` for selected tables → G2, raw-table code → name → G1, Gemini rate limits → F3.
+
 - ~~Data answers wrongly reported as not-found (a count of 0, a 200-row list)~~ — fixed in v1.3.0 by
   C7 templated answers (eval cases 55, 56).
 - ~~Document answers got terser in v1.3.0~~ — run-to-run variance: cases 22, 33, 37 (and 2) were
   complete again in the v1.5.0 gate with the same prompts. Watch it, no change needed now.
-- The Gemini free tier rate-limits bursts (one 429 in 541 calls on 2026-09-27, during back-to-back
-  evals). Billing (open item) removes it; the app already shows a friendly message.
-- Deferred from C: per-tool follow-up suggestion chips (C8); `discover_schema.py --samples` only for
-  the tables the schema index actually selects (a full pass is ~6,700 production queries) (C1).
-- Raw tables store some codes, not names (e.g. `tblSampleRequestMaster.Buyer` = `C/09/7`); the
-  code → name mapping is not in `Contact_Master.ContactNo` (an int). Needs a curated view or a hint.
 
 ## Open items outside the code
 
 - **Data anomaly to report**: `dbo.CancellExportOrderList` has a cancellation dated **5 Oct 2026**
   (in the future on 2026-09-27).
-
-- **Gemini billing** must be enabled before multi-user use (free tier; company data needs a paid key).
-- **DBA request**: `docs/schema/rag_views_*.sql` views, `rag_reader` login to replace `sa`, index on
-  `dbo.ExportOrderBack(ExportOrderID)`.
-- **Auth and per-user data scoping** (PRD FR-4): not planned in a phase yet. Any cache must key on
-  the user's scope once this lands.
+- **The GitHub repo is public.** It already shows internal schema details (`docs/schema/*.sql`,
+  `config/catalog/*.yaml`) and that the app connects as `sa`. Recommended: make it private. New
+  internal-system documents (F4) are kept in the git-ignored `private/` folder.
+- Gemini billing → F3; DBA request → F4/F2; auth and per-user scoping → F1.
+- Not planned yet: buyer portal accounts (PRD FR-4.2, PRD Phase 3) and MySQL row scope; the
+  chunk-id / `source` format for same-name files (H1 refuses the duplicate instead — changing the
+  format is a decision); choosing the production LLM provider (golden-set eval across providers).
 
 ## Session log
 
@@ -132,3 +184,4 @@ routed to `data` only (router).
 | 2026-09-27 | v1.3.0: Phase C done (C1–C8 + gate; correctness 85% → 89%), merged to `main`, tagged. E3 next |
 | 2026-09-27 | Aggregates refreshed (4.2M rows, 32 s). v1.4.0: E3 embedding cache (one-page revision 243 s → 6.9 s) + E4 README; live index seeded; hit_rate 29/30. D1 next |
 | 2026-09-27 | v1.5.0: Phase D done (D1 FTS5, D2 filter pushdown, D3/D4 batch size + int8 ONNX reranker; correctness 90%, faithful 100%). Document answers ~10 s. Roadmap A–E complete |
+| 2026-09-28 | Two sessions' plans merged into Phases F–I (H0 hotfix first, then F → G → H → I), written here and in ROADMAP. GitHub Releases created for v1.2.0–v1.5.0 (Phases B–D had tags only). H0 next |

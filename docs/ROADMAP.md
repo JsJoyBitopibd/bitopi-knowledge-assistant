@@ -1,6 +1,7 @@
 # Roadmap: fast, user-friendly Bitopi Knowledge Assistant at scale
 
-The speed / UX / scale plan (Phases A–E). This file is the design; **what is done and what is next
+The speed / UX / scale plan (Phases A–E, released as v1.1.0–v1.5.0) and the plan after it
+(**Phases F–I**, at the end of this file). This file is the design; **what is done and what is next
 lives in `docs/PROGRESS.md`**, and each release is recorded in `CHANGELOG.md`. All paths below are
 relative to the repo root.
 
@@ -143,6 +144,8 @@ Verification: with the app running, copy a PDF into `data/pdfs/General/`, wait o
 
 A1 → A2 → A4 (one day: biggest pain relief) → A3 → A5 → **E1 → E2** (documents become self-updating) → B1–B3 → B4–B6 → C1–C5 → C7 → C8 → C6 → **E3** → D1 → D2 → D3 → D4. Send the DBA request (C6) at the start; it runs in parallel.
 
+After v1.5.0 (Phases F–I below): **H0** (hotfix) → **F4** (request drafted; the DBA works in parallel) → **F1** → F2 (when the DBA is done) → G1–G4 → H1–H4 → I1 → I2–I5.
+
 ## Verification (after each phase)
 
 1. `pytest -q` — existing 99 + new tests (`test_guard.py` additions, `test_keyword.py`, `test_schema_index.py`, `_classify`).
@@ -152,3 +155,227 @@ A1 → A2 → A4 (one day: biggest pain relief) → A3 → A5 → **E1 → E2** 
 5. Timing: `logs/calls.csv` (route→answer gap = retrieval+rerank, target ≤ 6 s; LLM `seconds`), `logs/sql.csv` (`ms`, `cache:` rows). Targets: fixed-tool question < 0.5 s and 0 LLM calls; document question P50 ≤ 8 s, first token ≤ 3 s; generated-SQL question ≤ 2 LLM calls.
 6. Manual: follow-up with a pronoun (rewrite fires) vs without (skipped); bad API key → friendly quota message, no traceback; click a PDF reference in the browser; ask the same data question twice → same `as_of`, `cache:` row; two browser tabs concurrently (pool); the "blood group" probe → not-found.
 7. Freshness (Phase E): add a PDF while the app runs → cited after one worker pass with no restart; delete it → not-found on the next pass; insert-then-ask on the DB side is immediate (no ingest involved).
+
+---
+
+# Phases F–I — after v1.5.0
+
+Merged on 2026-09-28 from two sessions' proposals: the other session's plan first (F: ready for more
+users, G: polish), this session's code findings after it (H: ingestion robustness, I: speed), and the
+empty-folder wipe fix pulled forward as hotfix H0. Status lives in `docs/PROGRESS.md`. Each phase ends
+with the gate above (tests, `hit_rate.py`, full eval with no drop > 5 points) and becomes a version.
+
+**The GitHub repo is public.** New documents that map internal systems (the F4 DBA request: logins,
+the DENY list of sensitive tables) go into the git-ignored `private/` folder and are handed to the
+user; they are not committed.
+
+## H0 — Hotfix: cautious deletes (PRD FR-2.14) → v1.5.1
+
+Problem: `ingest_folder()` (`src/ragbot/ingest/pipeline.py`) deletes every registry source that the
+current walk did not see. `Path.rglob` on a missing folder returns nothing (no error), so one pass
+over an offline share or a wrong mount empties the index, and the worker triggers that pass by
+itself as soon as its snapshot changes.
+
+- **Missing or empty folder**: if `pdf_root` is not a directory, or the walk finds no PDFs while the
+  registry knows at least one source → log an error, put an `alert` in the summary and in
+  `ingest_state.json`, change nothing.
+- **Two-scan rule**: `document.missed_scans` (added with `ALTER TABLE` on older registries). A full
+  scan resets it to 0 for every file it sees and adds 1 for every known file it misses; a file is
+  deleted when the count reaches 2. It lives in the registry, so `ingest_worker.py --once` from Task
+  Scheduler behaves exactly like the loop.
+- **Mass-disappearance stop**: if the missing files exceed `max(ingest.removal_alert_min_files,
+  ingest.removal_alert_fraction × known)` (defaults 3 and 5 %) → alert, and neither count nor delete
+  (a transient outage must not count toward the two-scan rule). The floor keeps normal deletions
+  possible in a small corpus.
+- **Same area**: `sha256()` moves inside the per-file `try` (an unreadable file becomes a `failed`
+  row instead of aborting the run and killing the worker); the summary's `failed` is this run's count
+  (it was overwritten by the registry-wide total).
+- Tests in a throwaway index: missing root, empty root, one file gone for one then two scans, file back
+  after one missed scan, more than the threshold missing, unreadable file.
+
+## Phase F — Ready for more users → v1.6.0
+
+### F4 — DBA request (first, so the DBA works in parallel)
+`private/DBA_REQUEST.md`, assembled from `docs/DATA_ACCESS.md` and `docs/schema/rag_views_*.sql`:
+schema `rag` and its views, each exposing a `Factory` column and filtering on
+`SESSION_CONTEXT(N'factories')` (row-level security as the alternative) — the same predicate F1
+applies in code; login `rag_reader`; `IX_ExportOrderBack_ExportOrderID`. Two access options for the
+DBA, because the virtual views, generated SQL over raw tables, `discover_schema.py`,
+`check_catalog.py --live` and `refresh_aggregates.py` all read base tables today: (a) SELECT on `rag`
+plus the base tables with explicit DENY on HR / credential / sensitive tables, or (b) strict FR-3.1
+views-only, in which case raw-table answers are switched off (remove
+`config/catalog/discovered/*.json`) and the maintenance scripts get a separate login.
+
+### F1 — Login + per-user scoping (PRD FR-4.1, 4.3, 4.5–4.8, FR-6.2)
+
+Today identity is a free-text "Your name" box (`src/ragbot/app.py`) that only reaches the logs;
+retrieval never sees the user; the caller's `where` overrides the default filters
+(`retriever.py`); the keyword search silently ignores filter keys other than
+`superseded`/`category`/`source`; 8 of the 15 fixed tools have no factory filter and the other 7 take
+the factory from the question text; both caches carry a TODO that scope must join the key; the admin
+toggle is open to everyone; the app listens on 0.0.0.0:8501 with no auth layer.
+
+**Scope model** — `src/ragbot/auth/models.py`: frozen `Scope(factories, departments,
+confidentiality_max, buyer_codes=None (= all), is_admin)` with `unrestricted()`, `all_factories`,
+`db_factories()`, `allowed_levels()`, `allows_factory()` and `key()` (canonical, order-independent;
+used in cache keys and logs); `User(name, groups, scope)`. `ALL` / `Common` are always included.
+`scope` is a **required keyword-only argument** of `answer()`, `answer_stream()`, `retrieve()` and
+`answer_from_data()` — a forgotten call site fails loudly instead of silently seeing everything;
+`scripts/ask.py`, `eval.py`, `hit_rate.py` pass `Scope.unrestricted()` explicitly. (Worker threads
+do not inherit a ContextVar, so an explicit argument is also the only reliable way through the
+`ThreadPoolExecutor`s in the orchestrator and the retriever.)
+
+**Sign-in** — `src/ragbot/auth/providers.py`: `LdapProvider` (`ldap3`; NTLM bind as `DOMAIN\user`
+over LDAPS/StartTLS; an empty password is refused before binding, because AD accepts it as an
+anonymous bind; the username is escaped in the search filter; direct `memberOf` groups) and
+`LocalProvider` (`config/users.yaml`, bcrypt; dev and tests only). `src/ragbot/auth/scopes.py`:
+`config/scopes.yaml` maps AD groups to partial scopes, a user's scope is the union over their groups,
+a user in no mapped group is not enrolled (login refused); `admins:` lists admin groups. Settings
+`auth.provider: ldap|local`; `.env` `LDAP_HOST`, `LDAP_DOMAIN`, `LDAP_BASE_DN`, `LDAP_USE_SSL`.
+`app.py`: login form first, `st.session_state.user`, logout, per-session attempt throttle,
+**history and pending questions cleared on login/logout** (earlier turns re-render their references
+and PDF buttons), admin details only for admins. Passwords are never logged or stored. Later option:
+Streamlit's `st.login()` (OIDC) if the company has Entra ID.
+
+**Documents (FR-4.3, 4.5, 4.6)** — chunk and document attributes `factory` (`TAL|RHL|BGL|KTL|CKDL|ALL`),
+`department` (all `Common` in the pilot — plumbing only), `confidentiality`
+(`public|internal|restricted`, default `internal`), `buyer_code` (empty for staff documents).
+`src/ragbot/ingest/meta.py: attributes_for(path, root)`: factory from the first folder when it is a
+known factory code, otherwise `ALL`; an optional `meta.yaml` in any folder (inherited downwards)
+overrides, which is how restricted folders are marked. Six places must change together or the keyword
+path ignores scope: `Chunk` fields + `metadata()`, `chunk_fts` DDL (four new UNINDEXED columns),
+both FTS inserts, `_chunk_from_record`, the `document` table, and the keyword filter (which becomes
+a generic list-column filter) — one round-trip test covers all six. `chunk_fts` is recreated when
+`PRAGMA table_info` shows the old shape (FTS5 cannot add columns) and reseeded through `seed_fts`,
+which reads the attributes from `document`. An unchanged file whose attributes changed (moved folder,
+edited `meta.yaml`) is retagged without re-embedding (`Registry.retag`,
+`ChromaStore.set_attributes`, generalising `set_superseded`). `scripts/tag_documents.py` (idempotent,
+`--dry-run`) tags the existing index and **must run before scope is enabled**: untagged chunks fail
+closed (a Chroma `where` on a missing key and a NULL FTS column both exclude them). It refuses
+same-named files with different attributes.
+
+**Retrieval** — `src/ragbot/auth/filters.py: scope_where(scope)` (empty for unrestricted users; the
+factory list always contains `ALL`). `retrieve()` rejects scope keys in the caller's `where` and merges
+`scope_where(scope)` last, so a caller can only narrow; `_passes` checks the same fields as a second
+line of defence. The sidebar category list is filtered per scope for convenience only.
+
+**Data (FR-4.4): the scope predicate lives in the view, not around the query.** Wrapping the executed
+SQL as `SELECT * FROM (<sql>) q WHERE q.Factory IN (…)` does not work: aggregates (`COUNT(*)`,
+`DISTINCT Buyer`) have no Factory column to filter on, the guard's `TOP (200)` runs before the outer
+filter (a TAL user would get "TAL rows among everyone's first 200"), and the guard runs before the
+virtual-view rewrite, so it could not see the predicate. Instead `rewrite_virtual()`
+(`src/ragbot/data/virtual.py`) — which every executed statement already passes through (fixed tools,
+generated SQL, `refresh_aggregates.py`) — emits each view as
+`rag_vw_X AS (SELECT * FROM (<definition>) v WHERE v.<scope_column> IN ('TAL'))`. The values come
+from `config/scopes.yaml` and are validated (`^[A-Z0-9]{2,6}$`), never from user input.
+`View.scope_column` is declared per view in the catalog YAML; `assert_scoped()` re-checks the
+rewritten SQL (same pattern as the existing DENY re-scan) and raises when a restricted user touches a
+view without a scope column (fail closed). This is byte-for-byte what the DBA's SESSION_CONTEXT view
+will do, so switching to the server views later is config only (`data.scope_mode: session_context`;
+the connector then sets the session context on every pool checkout inside the retry loop, with
+`@read_only = 0`, and clears it on release).
+- Views without a factory today (`vw_ExportOrderColorSize`, `vw_PCDChangeHistory`,
+  `vw_PPMMeetingReschedule`, `vw_PPMDepartmentChecklist`) get `Factory` through joins (to
+  `FileRef` / `PPMMeetings`), also in `docs/schema/rag_views_*.sql`. `vw_CancelledExportOrder` only
+  has a free-text `FileRefNo`; until the DBA confirms a join, the two cancelled-order tools are for
+  unrestricted users only.
+- Fixed tools that take a factory from the question validate it against the scope and return an
+  explicit "outside your scope" answer (otherwise the view filter would produce a false "RHL has 0
+  meetings").
+- Raw discovered tables have no common scope column: for restricted users the allow-list is empty and
+  schema selection is skipped, so the model is not invited to write SQL the guard will refuse.
+- The local aggregate copy (`pcd_history`) gets a Factory column at its next refresh; the local query
+  is scoped the same way, and falls back to the live query when the column is missing.
+- Scope values never go into `QueryResult.params` (shown in "show SQL", sent in the prompt, and
+  treated as citable by `verify()`).
+
+**Caches** — `scope.key()` joins the documents-answer key (looked up before routing, so every route
+is affected) and the SQL result-cache key (`src/ragbot/data/cache.py`), which the predicate would
+cover implicitly but the session-context mode would not.
+
+**Audit and admin (FR-4.8, FR-6.2)** — `src/ragbot/logs.py: append_row(name, header, row)`, which
+rotates a file whose header differs (never rewrites in place); used for `chat.csv` (fixing today's
+header mismatch), `sql.csv` and `calls.csv`. `chat.csv` and `sql.csv` gain `scope`. Admin sidebar:
+own effective scope, scope lookup by username, export of a user's `chat.csv` rows.
+
+**Tests** — scope union and keys; `scope_where` for Chroma and FTS (an RHL chunk never comes back for
+a TAL user, a code that exists only in a restricted chunk returns nothing); retriever spy (the scope
+reaches both indexes, reserved keys are rejected); virtual-view predicate (every CTE scoped, a view
+without a scope column fails closed, injection-shaped values rejected, output still parses and passes
+the DENY re-scan); fixed-tool factory check with no DB call; both cache keys per scope; local and LDAP
+providers (fake `ldap3`: empty password never binds, filter escaped); log rotation; `meta.yaml`
+inheritance and retagging. Adversarial suite `tests/scope_cases.jsonl` (≥ 30 for the pilot, 50 by
+PRD Phase 3) run by `scripts/eval.py --kind scope` with local users (`tal_internal`, `rhl_internal`,
+`all_internal`, `admin`): cross-factory document and data questions, restricted documents, a forced
+category filter, follow-ups, prompt injection ("ignore your scope…", `Factory IN ('RHL')` in the
+question), the cache (unrestricted user asks, TAL user asks the same), a raw-table probe, a superseded
+restricted revision. Pass = no out-of-scope reference, row or source text in any answer. **Zero leaks
+is the release condition.**
+
+Order inside F1: F4 → scope model, scopes.yaml, local provider → document attributes, FTS reshape,
+`tag_documents.py` → retrieval + caches → view predicate, fixed tools, aggregates, raw-table gate →
+LDAP provider, login UI, admin panel → audit columns → adversarial suite → gate. New dependency:
+`ldap3` (pure Python; `bcrypt` is already installed).
+
+### F2 — `sa` → `rag_reader` (after the DBA delivers)
+`.env` login, restart `app` and `aggregates`, `python scripts/db_ping.py` (prints the login name),
+`check_catalog.py --live`, delete the `definition:` fields once the server views exist,
+`data.scope_mode: session_context`; update `docs/DATA_ACCESS.md` and README.
+
+### F3 — Gemini billing (user)
+Paid key in `.env` (PRD FR-8.9: free-tier keys are never used with company data). Check: one
+`scripts/ask.py` call logged; an eval run with no 429.
+
+## Phase G — Polish → v1.7.0
+
+- **G1 raw-table codes → names.** Read-only check that a code such as `C/09/7` is a
+  `dbo.Contact_Master.ContactID` (the PK, varchar; `ContactNo` is an int, which is why the earlier probe
+  failed). Then an optional `hints:` key in the curated catalog YAML (`{table, column, joins, note}`),
+  merged into the discovered `Table` objects in `data/catalog.py` so `join_hints()` / `fk_neighbours()`
+  (`data/schema_index.py`) pull `Contact_Master` in; the hints' hash joins the schema-index cache key.
+- **G2 samples for selected tables.** `discover_schema.py --samples --tables …` that merges samples
+  into the existing JSON (today a run without `--samples` wipes them); the table list comes from the
+  raw tables in generated SQL (`logs/sql.csv`) plus a new `logs/schema_select.csv` written by
+  `generate_and_run()`. Then `index_schema.py` for that database. Live run only with the user's
+  go-ahead.
+- **G3 follow-up chips.** `follow_ups:` templates per fixed tool (filled by `templated._fill`),
+  `Answer.follow_ups`, buttons under the latest turn reusing the `pending_q` mechanism, kept in the
+  history entry; `example_params` on every fixed tool.
+- **G4 noise and log hygiene.** `.streamlit/config.toml` (`server.fileWatcherType = "none"`), added to
+  the Dockerfile COPY list; `width="stretch"` instead of `use_container_width`; every log file goes
+  through `append_row` (introduced in F1).
+
+## Phase H — Ingestion robustness (rest of PRD FR-2.14, PLAN M7) → v1.8.0
+
+- **H1 same-name PDFs.** A name seen twice in one walk → the second file is a `failed` row ("duplicate
+  file name, already indexed from <folder>"). Changing `source` to the relative path would change
+  every chunk id (CLAUDE.md fixes the format), so that stays a decision.
+- **H2 `inspect.py --check`** compares registry `chunk` ids, Chroma ids and `chunk_fts` ids, reports
+  orphans each way, ok documents with no chunks and superseded-flag mismatches, exits 1 on any
+  mismatch. `ingest_folder` deletes a document's old vectors only after the new chunks are embedded, so
+  a failed re-ingest leaves the old version whole.
+- **H3 worker.** Lock helpers move to `src/ragbot/ingest/lock.py` and are taken by `ingest.py` and
+  `reindex.py` too; `ingest_run.status` marks a crashed run; `document.attempts` retries failed files
+  up to 3 times; `ingest_state.json` is written atomically and only when something changed, plus a
+  `last_scan.json` heartbeat; sidebar "Index updated … · last scan … · N failed".
+- **H4 services.** README runbook for two Task Scheduler entries (worker `--once` every 10 min,
+  `refresh_aggregates.py` nightly) and the docker-compose services; the user creates them.
+
+## Phase I — Speed (PLAN M8) → v1.9.0
+
+- **I1 measure.** `Answer.timings` and `Answer.request_id`; `perf_counter()` around rewrite, route,
+  embed, vector, keyword, rerank, SQL, LLM (with time to first token) and verify; `request_id` in
+  `chat.csv`, `calls.csv`, `sql.csv`; `scripts/latency.py` over `tests/latency_cases.jsonl` (50 cases
+  from the golden set) prints p50/p95 per stage, end-to-end and first token into
+  `eval/latency/<ts>.json`. New fields only — the Stage names are pinned by
+  `tests/test_answer_stream.py`.
+- **I2 documents p50 ≤ 8 s**, levers chosen from I1: fewer or shorter rerank candidates (gate
+  `hit_rate.py` ≥ 29/30), onnxruntime thread settings, more router short-cuts, a prefix-stable answer
+  prompt for Gemini's implicit caching.
+- **I3 first token ≤ 3 s**: if Gemini's one-or-two-burst streaming is the limit, show the references as
+  soon as retrieval finishes and record the limit; the provider itself is chosen by the golden-set eval.
+- **I4 load test**: 100–1,000 generated PDFs (copies with a changed cover page) into a throwaway index
+  while `latency.py` runs; p95 rise < 20 %; throughput into `docs/tuning_log.md`.
+- **I5 bulk ingestion**: `embed_backend` stored next to `embed_model` and checked at start;
+  `scripts/export_embedder_onnx.py` (same recipe as the reranker, no `optimum`) and `scripts/parity.py`
+  (1,000 chunks, cosine ≥ 0.99, hit-rate drop ≤ 1) before any switch — with the user's approval.

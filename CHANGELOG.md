@@ -8,7 +8,11 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
-Nothing yet. What remains is listed in `docs/PROGRESS.md` ("Small follow-ups", "Open items").
+### Docs
+- Plan for Phases F–I (after v1.5.0) in `docs/PROGRESS.md` and `docs/ROADMAP.md`, merged from two
+  sessions' proposals: hotfix H0 (an empty or offline PDF folder must not empty the index), F ready
+  for more users (login + per-user scoping, `rag_reader`, billing, DBA request), G polish, H ingestion
+  robustness, I speed. The open follow-ups and open items from Phases A–E are now tasks in it.
 
 ## [1.5.0] — 2026-09-27 — Phase D: 60K pages
 
