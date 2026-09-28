@@ -317,6 +317,26 @@ Order inside F1: F4 → scope model, scopes.yaml, local provider → document at
 LDAP provider, login UI, admin panel → audit columns → adversarial suite → gate. New dependency:
 `ldap3` (pure Python; `bcrypt` is already installed).
 
+**As built (v1.6.0, 2026-09-28) — where it differs from the design above:**
+- Sign-in binds as `user@domain` with SIMPLE authentication over LDAPS or StartTLS (never plain),
+  not NTLM: NTLM in ldap3 needs MD4, which OpenSSL 3 no longer provides.
+- No `scripts/tag_documents.py`: the ingest pass itself retags any unchanged file whose tags differ
+  from its folder's, and a registry from before F1 gets NULL tags, so the first `ingest.py` run (or
+  worker pass) after the upgrade tags everything without re-embedding. The vector store is updated
+  before the registry, so a failure is retried on the next pass.
+- `vw_CancelledExportOrder` gets its factory through `ExportOrderID` → `ExportOrder` → `FileRef` (every
+  row resolved live), so the cancelled-order tools work for factory-limited users.
+- Factory codes are validated as `^[A-Z0-9]{1,8}$` (or `*`); raw unit codes such as `01` are valid.
+- `append_row` writes `chat.csv` and `sql.csv` (both gained `scope`); `calls.csv` is unchanged.
+- The adversarial suite is `scripts/scope_check.py`, which builds its own throwaway index from generated
+  PDFs (so the live index never holds test documents) and uses in-code scopes rather than local users.
+- A fixed tool that refuses a factory answers at once ("System doesn't have the data." + the access
+  sentence), without the document fallback.
+- Found by the independent review and fixed: the guard now accepts a bare name as a CTE only where SQL
+  binds it to one (after its declaration, or in the main query), since SQL Server binds a forward
+  reference to the real base table; `assert_scoped` checks every table of the final statement; a chunk
+  without tags no longer inherits the permissive model defaults.
+
 ### F2 — `sa` → `rag_reader` (after the DBA delivers)
 `.env` login, restart `app` and `aggregates`, `python scripts/db_ping.py` (prints the login name),
 `check_catalog.py --live`, delete the `definition:` fields once the server views exist,

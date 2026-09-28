@@ -65,6 +65,7 @@ All runs: 62 golden cases, gemini-3.5-flash-lite, reranker on. Per-case comparis
 | v1.2.0 Phase B | `20260927T1214.json` | 91% | 100% | 85% | 100% | 100% | 100% |
 | v1.3.0 Phase C | `20260927T1347.json` | **98%** | 98% | **89%** | 100% | 100% | 100% |
 | v1.5.0 Phase D (ONNX reranker) | `20260927T1710.json` | 96% | **100%** | **90%** | 100% | 100% | 100% |
+| v1.6.0 Phase F (sign-in, per-user scope; run as an unrestricted user) | `20260928T1820.json` | **98%** | **100%** | **93%** | 100% | 100% | 100% |
 
 **Phase C gains:** cases 55, 56, 60, 61 went from 0 to fully correct — templated fixed-tool answers
 (55: a 200-row list, 56: a count), the `eo_by_po` "IT **po**licy" false match (60), a `both`
@@ -85,3 +86,14 @@ false BLOCKs; it now compares with the most recent earlier run covering the same
 re-run (`both` cases 3/3). Cases 2, 22, 33, 37 — "terser" in v1.3.0 — are complete again with the same
 prompts, so that was run-to-run variance. Speed: `hit_rate.py` (30 questions, reranker on) >600 s →
 387 s (batch size 1) → 174 s (int8 ONNX); document answers in the app ~10 s.
+
+**Phase F notes (2026-09-28):** the golden set runs as an unrestricted user, so it checks that scoping
+changed nothing for everyone else; leaks are measured separately by `scripts/scope_check.py` (34
+cases, 0 leaks; reports in `eval/scope/`). Changed cases vs v1.5.0: 6 (0.5 → 1.0) and 61 (0 → 1.0,
+v1.5.0's rate-limit miss). The run itself used the code before the review fixes (stricter CTE rule).
+It executed no model-written SQL (only fixed tools and cache hits in `sql.csv`), so that rule cannot
+change it; re-run on the final code, the 10 data answers were word-for-word the same, and the 3 `both`
+cases and the judge calls hit Gemini 503 "high demand" (`20260928T1858.json`, 9 unscored) — to be re-run
+when the provider recovers. `hit_rate.py` on the final code: 29/30. Machine note: this laptop ran CPU-heavy
+jobs 4–6× slower than on 27 Sep all day (`hit_rate.py` ~20 min vs 174 s; the nightly copy 146 s vs
+33 s, which also gained the Factory join) — the code paths behind those timings did not change.

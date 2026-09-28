@@ -8,6 +8,19 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+Nothing yet. Next: Phase G (`docs/PROGRESS.md`).
+
+## [1.6.0] — 2026-09-28 — Phase F: sign-in and per-user scope
+
+Eval (62 cases, `eval/results/20260928T1820.json`, as an unrestricted user, vs v1.5.0 on the same cases):
+correctness 90% → **93%**, hit rate 96% → **98%**, faithfulness 100%, citation validity 100%, not-found
+100%, refuse 100%. Leak suite (`scripts/scope_check.py`): 34 adversarial cases, **0 leaks**. F2 (switch to
+`rag_reader`) waits for the DBA; F3 (Gemini billing) for the user.
+
+**Upgrading an existing installation:** copy `config/scopes.example.yaml` to `config/scopes.yaml` with the
+real AD groups, set `auth.provider` and the `LDAP_*` values, then run `python scripts/ingest.py` once to tag
+the documents already indexed (nothing is re-embedded). Until then, factory-limited users see no documents.
+
 ### Added
 - **F1: sign-in and per-user scope** (PRD FR-4.1, 4.3–4.8, 6.2). Users sign in with their Active
   Directory account (LDAPS/StartTLS; `auth.provider: local` with bcrypt users for development); AD groups
@@ -42,6 +55,10 @@ each phase is in `docs/ROADMAP.md`.
 - `logs/chat.csv` had 10 header columns and 11 per row; every log now goes through one writer that renames
   a file with an older header aside.
 - `scripts/inspect.py --search` would have failed now that a scope is required.
+- `eval.py` compared a run with whatever file sorted last in `eval/results/` (the gate run crashed on a
+  leak-suite report); it now compares only with earlier eval runs, `--compare <file>` re-compares a saved
+  run, and a judge call the provider cannot answer leaves the case unscored instead of losing the run.
+  Leak-suite reports moved to `eval/scope/`.
 
 ## [1.5.1] — 2026-09-28 — Hotfix H0: cautious deletes
 

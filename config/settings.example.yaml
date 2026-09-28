@@ -15,6 +15,11 @@ auth:
   max_failures: 5          # failed sign-ins per account ...
   lockout_seconds: 600     # ... within this window, then the account waits
 
+scope:
+  # a first folder under data/pdfs with one of these names holds that factory's documents (data/pdfs/TAL/…);
+  # any other folder's documents are group-wide (factory ALL) unless a meta.yaml says otherwise
+  factory_codes: [TAL, RHL, BGL, KTL, CKDL]
+
 ingest:
   chunk_target_chars: 2400     # ~600 tokens
   chunk_min_chars: 400
