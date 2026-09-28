@@ -1,0 +1,5 @@
+{"id": "s1", "group": "sql", "q": "Which buyers had the most sample requests this year? Top 5."}
+{"id": "s2", "group": "sql", "q": "Which buyer has the most cancelled export orders this year?"}
+{"id": "s3", "group": "sql", "q": "Which factory had the most PCD changes in the last 30 days?"}
+{"id": "s4", "group": "sql", "q": "How many PPM meetings were rescheduled this month?"}
+{"id": "s5", "group": "sql", "q": "How many active buyers are there in the group?"}

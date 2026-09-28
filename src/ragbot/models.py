@@ -119,3 +119,5 @@ class Answer(BaseModel):
     error_kind: str = ""         # "" on success; else quota|timeout|auth|db|other — UI shows a soft message
     results: list[QueryResult] = Field(default_factory=list)   # database results in [D1], [D2] … order (UI table/CSV)
     follow_ups: list[str] = Field(default_factory=list)        # suggested next questions (fixed-tool answers only)
+    request_id: str = ""         # joins this answer's rows in chat.csv, calls.csv and sql.csv (ragbot/trace.py)
+    timings: dict[str, float] = Field(default_factory=dict)    # seconds per stage, "total" end to end

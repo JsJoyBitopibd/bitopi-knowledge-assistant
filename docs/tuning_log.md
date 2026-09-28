@@ -97,3 +97,13 @@ cases and the judge calls hit Gemini 503 "high demand" (`20260928T1858.json`, 9 
 when the provider recovers. `hit_rate.py` on the final code: 29/30. Machine note: this laptop ran CPU-heavy
 jobs 4–6× slower than on 27 Sep all day (`hit_rate.py` ~20 min vs 174 s; the nightly copy 146 s vs
 33 s, which also gained the Factory join) — the code paths behind those timings did not change.
+
+## Latency by stage (Phase I, `scripts/latency.py`)
+
+Every question cold (no answer, embedding or SQL result cache), models loaded before the clock
+starts; seconds, nearest-rank p50 / p95. Stage keys: `ragbot/trace.py`. Files: `eval/latency/`
+(git-ignored).
+
+| Run | Group (n) | total p50 / p95 | first token p50 / p95 | Main stages p50 | Notes |
+|---|---|---|---|---|---|
+| 2026-09-28 20:32 (`20260928T2032.json`) | fixed tools (10) | 0.14 / 0.71 | — (templated, no model call) | data 0.14, data.db 0.12, route 0.00 (regex) | Partial baseline: Gemini returned 503 all evening, so the documents, model-SQL, both and not-found groups wait. The p95 is the first question, which also loads the fixed tools and catalogs (0.3 s) and opens the first database connection (0.26 s). |

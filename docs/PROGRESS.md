@@ -10,10 +10,10 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 |---|---|
 | Released | **v1.8.0** (Phase H: ingestion robustness), tag `v1.8.0`, on `main` |
 | Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
-| In progress | **Phase I** (speed) on `feature/phase-i-speed` |
+| In progress | **Phase I** (speed) on `feature/phase-i-speed`: I1 code ✅, its baseline waits for the full `latency.py` run |
 | Next task | I1 baseline (`scripts/latency.py`, full), then I2 (apply 8 candidates + max length 384, gate eval), I4's full-chat check, I3 from the first-token numbers. Waiting on others: F2 (DBA), F3 (billing), G2 go-ahead, H4 scheduled tasks, I5 approval |
 | Last eval | 2026-09-29, `eval/results/20260929T0919.json` (H gate): correctness 91%, faithful 100%, hit 96% (one 429 quota error), citations 100%; leak suite 34 cases, 0 leaks |
-| Tests | 390 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 396 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-29 |
 
 ## How to update this file (every session)
@@ -140,11 +140,11 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 | H4 | Run the worker and the nightly aggregates refresh as scheduled tasks (runbook in README; the tasks are created by the user). The local copy was last refreshed 27 Sep 14:59 | ⏸ | `schtasks /query` lists both; aggregates `as_of` is from last night | Runbook ✅ (README "Running ingestion and the aggregates refresh unattended": two `schtasks` commands under a service account that can read the share, exit codes 0/2/3, docker-compose already runs both). **User action**: create the tasks |
 | H✓ | Phase gate | ✅ | full eval, no drop > 5 points | **Full eval** `eval/results/20260929T0919.json` (62 cases) vs v1.7.0 (`20260929T0040.json`): hit 98% → 96%, faithfulness 100% → 100%, correctness 92% → 91%, citations, not-found, refuse 100%. Changed cases: 28 (hit 1 → 0, correct 0.5 → 0: its answer call got a **429 per-minute quota error** from the provider — asked again on this code it gives v1.7.0's answer, page 12 cited), 2 (1.0 → 0.5, run-to-run variance: the second sentence left out, as in v1.3.0), 37 (0.5 → 1.0). **Leak suite: all 34 cases, 0 leaks** (the 7 model cases too — this also closes v1.6.0's open re-run: scope code unchanged since F). Run with a key the user supplied for the day (the old key's free-tier quota was spent). 390 tests |
 
-### Phase I — Speed (v1.9.0) ⬜
+### Phase I — Speed (v1.9.0) 🔄 — I1 code done on `feature/phase-i-speed`; its baseline waits for Gemini
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
-| I1 | Measure: per-stage timings and a request id in the logs; `scripts/latency.py` prints p50/p95 per stage, end-to-end and first token over 50 questions | ⬜ | baseline row in `docs/tuning_log.md` | |
+| I1 | Measure: per-stage timings and a request id in the logs; `scripts/latency.py` prints p50/p95 per stage, end-to-end and first token over 50 questions | 🔄 | baseline row in `docs/tuning_log.md` | Code ✅: `src/ragbot/trace.py` (a request per `answer_stream()`, run in its own context; `trace.submit` carries it into pool threads); timings for route, rewrite, retrieve (embed / vector / keyword / fetch / rerank), data (+ `data.db`), answer, verify, every model call by purpose (+ time to its first token), `first_token` and `total`; `Answer.request_id` / `Answer.timings`; `request_id` in `chat.csv`, `calls.csv`, `sql.csv` (+ `seconds`, `timings` in `chat.csv`); admins see the timings under each answer. `scripts/latency.py`: 30 documents, 10 fixed-tool, 5 model-written SQL (`tests/latency_cases.jsonl`: the golden set has none), 3 both, 3 not-found, all cold. `tests/test_timings.py` (6: no-op outside a request, caller context untouched, worker threads, one documents answer's rows share its id, the both route's `sql.csv` row written in a worker thread, provider failure). **Partial baseline** in `tuning_log.md`: fixed tools total p50 0.14 s / p95 0.71 s. Documents, model-SQL, both and not-found wait for Gemini (503) |
 | I2 | Document answers p50 ≤ 8 s (about 10 s today) | ⬜ | `latency.py`; `hit_rate.py` ≥ 29/30; eval | |
 | I3 | First token ≤ 3 s (3.9–6.1 s measured in B2), or the provider limit measured and recorded | ⬜ | `latency.py` first-token column | |
 | I4 | Load test: chat p95 rises < 20 % while the worker ingests 100–1,000 PDFs; throughput recorded | ⬜ | `latency.py` during an ingest in a throwaway index | |

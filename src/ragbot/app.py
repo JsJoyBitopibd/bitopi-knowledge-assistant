@@ -211,7 +211,7 @@ with st.sidebar:
 def feedback(i: int) -> None:
     val = st.session_state.get(f"fb{i}")
     turn = st.session_state.history[i]
-    log_feedback(user, i, val, turn["text"], scope.key())
+    log_feedback(user, i, val, turn["text"], scope.key(), turn.get("request_id", ""))
 
 
 def show_result(res, key: str) -> None:
@@ -265,7 +265,13 @@ def render_answer(a, turn: int) -> None:
         st.caption("No source in the system covers this question.")
     show_refs(a.references, a.results, turn)
     if admin:
+        t = a.timings
+        # where the seconds went (ragbot/trace.py); the request id finds the answer's rows in the logs
+        took = " · ".join(f"{k} {t[k]:.1f}s" for k in ("route", "retrieve", "data", "first_token", "answer")
+                          if k in t)
         st.caption(f"route: {a.route} · tokens in/out: {a.usage.input_tokens}/{a.usage.output_tokens}"
+                   + (f" · {t['total']:.1f}s ({took})" if "total" in t else "")
+                   + (f" · request {a.request_id}" if a.request_id else "")
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
 
 
@@ -365,7 +371,8 @@ if q:
         i = len(st.session_state.history)   # index this assistant turn will have in history
         render_answer(a, i)
         st.session_state.history.append({"role": "assistant", "text": a.text, "refs": a.references, "q": q,
-                                         "results": a.results, "follow_ups": a.follow_ups})
+                                         "results": a.results, "follow_ups": a.follow_ups,
+                                         "request_id": a.request_id})
         # Feedback now, not after a rerun; the history loop re-renders it with the same key next run.
         refresh_button(i, q, a.references)
         follow_up_chips(i, a.follow_ups)

@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Iterator, Optional
 
+from .. import trace
 from ..auth.models import Scope
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
@@ -72,10 +73,12 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
     """Streaming entry point. Always ends with exactly one Final. A provider failure (quota, timeout,
     auth) becomes a soft answer the UI can show instead of a traceback; the raw cause stays in
     warnings and the call log. refresh=True reads the database live (skips the SQL result cache).
-    scope: what this user may see (PRD FR-4); required, so no call can forget it."""
+    scope: what this user may see (PRD FR-4); required, so no call can forget it.
+    Each call is one request (ragbot/trace.py): the Final answer carries its request_id and timings."""
     drafting = False
+    _, ctx = trace.start()
     try:
-        for ev in _answer_stream(question, history, where, user, refresh, scope):
+        for ev in trace.run_steps(ctx, _answer_stream(question, history, where, user, refresh, scope)):
             if isinstance(ev, Token):
                 drafting = True
             elif isinstance(ev, Replace):
@@ -86,7 +89,7 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
             yield Replace("provider error")
         out = Answer(text=friendly_llm(e.kind), question=question, error_kind=e.kind, not_found=True)
         out.warnings.append(f"llm {e.kind}: {e}")
-        yield Final(_log(out, user, scope))
+        yield Final(ctx.run(_log, out, user, scope))
 
 
 def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
@@ -112,8 +115,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             yield Final(_log(a, user, scope)); return
 
     yield Stage("understanding", "Understanding the question…")
-    q = standalone_question(question, history, user) if history else question
-    r = _route(q, user)
+    q = question
+    if history:
+        with trace.span("rewrite"):
+            q = standalone_question(question, history, user)
+    with trace.span("route"):
+        r = _route(q, user)
     out = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
 
     if r == "refuse":
@@ -138,8 +145,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         # Independent sources: search the documents while the database query (and its SQL-generation
         # call) runs, instead of one after the other. A worker's exception re-raises in .result().
         yield Stage("searching+querying", "Searching documents and querying the database…")
-        docs_f = _POOL.submit(retrieve, q, where=where, scope=scope)
-        data_f = _POOL.submit(answer_from_data, q, user, refresh, scope=scope)
+        docs_f = trace.submit(_POOL, retrieve, q, where=where, scope=scope)
+        data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope)
         chunks = docs_f.result()[:top]
         results = list(data_f.result())
     elif r == "documents":
@@ -175,7 +182,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             yield Final(_log(out, user, scope)); return
 
     yield Stage("writing", "Writing the answer…")
-    yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
+    with trace.span("answer"):
+        yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
 
     # A "data" question that the rows could not answer may still be answerable from the documents —
     # the router mistakes policy questions phrased as counts ("how many licences does the Group
@@ -190,7 +198,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             retry = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
             retry.warnings = out.warnings
             yield Stage("writing", "Writing the answer…")
-            yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
+            with trace.span("answer"):
+                yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
             if not retry.not_found:
                 yield Final(_log(retry, user, scope)); return
             out = retry
@@ -263,6 +272,7 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
                 reply = item
             elif item:
                 drafted = True
+                trace.first("first_token")        # when the user saw the first word of an answer
                 yield Token(item)
         assert reply is not None
         usage.input_tokens += reply.input_tokens; usage.output_tokens += reply.output_tokens
@@ -273,7 +283,8 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
             if drafted:
                 yield Replace("empty reply")
             continue
-        ok, problems = verify(text, chunks, results, nf)
+        with trace.span("verify"):
+            ok, problems = verify(text, chunks, results, nf)
         if ok:
             out.not_found = text.startswith(nf)
             if out.not_found:
@@ -300,23 +311,31 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
     out.text = ""
 
 
-def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str = "") -> None:
+def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str = "",
+                 request_id: str = "") -> None:
     """Thumbs up/down from the UI go to logs/chat.csv as a feedback row (docs/PLAN.md M5)."""
     append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "feedback",
-                                          f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}", ""])
+                                          f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}",
+                                          "", request_id, "", ""])
 
 
 # `scope` (PRD FR-6.2): what the user was allowed to see when they asked, so an administrator can
-# reconstruct what each user saw (FR-4.8).
+# reconstruct what each user saw (FR-4.8). `request_id` joins the row to its calls.csv and sql.csv rows;
+# `seconds` and `timings` (JSON, ragbot/trace.py) say where the time went.
 _CHAT_HEADER = ["ts", "user", "scope", "route", "question", "rewritten", "not_found", "refs", "in_tokens",
-                "out_tokens", "warnings", "error_kind"]
+                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings"]
 
 
 def _log(a: Answer, user: str, scope: Scope) -> Answer:
+    """Every Final answer passes here: stamp it with its request's id and timings, and log it."""
+    t = trace.current()
+    if t is not None:
+        a.request_id, a.timings = t.id, t.snapshot()
     append_row("chat.csv", _CHAT_HEADER, [
         datetime.now().isoformat(timespec="seconds"), user, scope.key(), a.route, a.question, a.rewritten_question,
         a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
-        a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind])
+        a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind, a.request_id,
+        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else ""])
     return a
 
 

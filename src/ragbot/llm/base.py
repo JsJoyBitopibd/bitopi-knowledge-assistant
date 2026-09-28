@@ -5,7 +5,6 @@ logs/calls.csv (data-minimisation audit, FR-8.4): who/what was sent (ids and cou
 """
 from __future__ import annotations
 
-import csv
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -13,7 +12,7 @@ from typing import Any, Iterator, Optional, Union
 
 from pydantic import BaseModel
 
-from ..config import log_dir
+from .. import trace
 
 
 class LLMError(RuntimeError):
@@ -63,6 +62,8 @@ class ChatModel(ABC):
             _log_call(self.name, ChatReply(stop_reason=f"error:{kind}"), time.perf_counter() - t0,
                       purpose, sent_chunk_ids or [], sent_rows, user)
             raise LLMError(kind, str(e)[:300]) from e
+        finally:
+            trace.add(f"llm.{purpose}", time.perf_counter() - t0)
         _log_call(self.name, reply, time.perf_counter() - t0, purpose, sent_chunk_ids or [], sent_rows, user)
         return reply
 
@@ -87,33 +88,37 @@ class ChatModel(ABC):
                 if isinstance(item, ChatReply):
                     if not item.text:
                         item.text = "".join(parts)
+                    trace.add(f"llm.{purpose}", time.perf_counter() - t0)
                     _log_call(self.name, item, time.perf_counter() - t0, purpose, sent_chunk_ids or [],
                               sent_rows, user)
                     yield item
                     return
+                if not parts:
+                    trace.first(f"llm.{purpose}.first_token", time.perf_counter() - t0)
                 parts.append(item)
                 yield item
         except LLMError:
             raise
         except Exception as e:
             kind = self._classify(e)
+            trace.add(f"llm.{purpose}", time.perf_counter() - t0)
             _log_call(self.name, ChatReply(stop_reason=f"error:{kind}"), time.perf_counter() - t0,
                       purpose, sent_chunk_ids or [], sent_rows, user)
             raise LLMError(kind, str(e)[:300]) from e
         # The adapter ended without a final ChatReply: synthesize one so callers can rely on it.
         reply = ChatReply(text="".join(parts), stop_reason="stop")
+        trace.add(f"llm.{purpose}", time.perf_counter() - t0)
         _log_call(self.name, reply, time.perf_counter() - t0, purpose, sent_chunk_ids or [], sent_rows, user)
         yield reply
 
 
+CALLS_HEADER = ["ts", "user", "purpose", "provider", "model", "input_tokens", "output_tokens", "seconds",
+                "stop_reason", "chunks_sent", "rows_sent", "chunk_ids", "request_id"]
+
+
 def _log_call(provider: str, r: ChatReply, seconds: float, purpose: str, chunk_ids: list[str], rows: int, user: str) -> None:
-    f = log_dir() / "calls.csv"
-    new = not f.exists()
-    with open(f, "a", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        if new:
-            w.writerow(["ts", "user", "purpose", "provider", "model", "input_tokens", "output_tokens",
-                        "seconds", "stop_reason", "chunks_sent", "rows_sent", "chunk_ids"])
-        w.writerow([datetime.now().isoformat(timespec="seconds"), user, purpose, provider, r.model,
-                    r.input_tokens, r.output_tokens, f"{seconds:.2f}", r.stop_reason,
-                    len(chunk_ids), rows, ";".join(chunk_ids)])
+    """One row per model call in logs/calls.csv, with the request that made it (ragbot/trace.py)."""
+    from ..logs import append_row
+    append_row("calls.csv", CALLS_HEADER, [datetime.now().isoformat(timespec="seconds"), user, purpose, provider,
+                                           r.model, r.input_tokens, r.output_tokens, f"{seconds:.2f}", r.stop_reason,
+                                           len(chunk_ids), rows, ";".join(chunk_ids), trace.request_id()])

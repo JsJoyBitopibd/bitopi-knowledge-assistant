@@ -30,15 +30,19 @@ from urllib.parse import urlparse
 from ..config import env, log_dir, settings
 
 
-SQL_HEADER = ["ts", "user", "scope", "engine", "tool", "rows", "ms", "error", "params", "sql", "sql_exec"]
+SQL_HEADER = ["ts", "user", "scope", "engine", "tool", "rows", "ms", "error", "params", "sql", "sql_exec",
+              "request_id"]
 
 
 def _log(engine: str, tool: str, display_sql: str, sql_exec: str, params: dict, rows: int, ms: float,
          error: str = "", user: str = "", scope: str = "") -> None:
-    """One row per statement in logs/sql.csv (PRD FR-3.8), with the scope it ran under (FR-6.2)."""
+    """One row per statement in logs/sql.csv (PRD FR-3.8), with the scope it ran under (FR-6.2) and the
+    request that ran it (ragbot/trace.py); its time counts toward the request's "data.db"."""
+    from .. import trace
     from ..logs import append_row
+    trace.add("data.db", ms / 1000)
     append_row("sql.csv", SQL_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, engine, tool, rows,
-                                       f"{ms:.0f}", error, params, display_sql, sql_exec])
+                                       f"{ms:.0f}", error, params, display_sql, sql_exec, trace.request_id()])
 
 
 def _positional(sql: str, marker: str) -> tuple[str, list[str]]:

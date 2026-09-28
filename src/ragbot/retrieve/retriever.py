@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any, Optional
 
+from .. import trace
 from ..auth.filters import SCOPE_FIELDS, scope_where
 from ..auth.models import Scope
 from ..config import settings
@@ -61,23 +62,34 @@ def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optio
     if clash:
         raise ValueError(f"access fields are set by the scope, not by the caller: {clash}")
     where = {**s.get("retrieval.default_filters", {}), **(where or {}), **scope_where(scope)}
-    store, kw = get_store(), get_keyword_index()
+    with trace.span("retrieve"):
+        store, kw = get_store(), get_keyword_index()
 
-    # Keyword search is independent of the embedding, so run it alongside embed + vector search. It
-    # applies the filters itself (category, superseded), so its top-k are all usable.
-    sparse_f = _POOL.submit(kw.search, question, s["retrieval.keyword_top_k"], where)
-    qvec = list(_embed_query(question))
-    dense = [c.id for c in store.query(qvec, s["retrieval.vector_top_k"], chroma_filter(where))]
-    sparse = [cid for cid, _ in sparse_f.result()]
+        # Keyword search is independent of the embedding, so run it alongside embed + vector search. It
+        # applies the filters itself (category, superseded), so its top-k are all usable.
+        sparse_f = trace.submit(_POOL, _timed, "retrieve.keyword", kw.search, question,
+                                s["retrieval.keyword_top_k"], where)
+        with trace.span("retrieve.embed"):
+            qvec = list(_embed_query(question))
+        with trace.span("retrieve.vector"):
+            dense = [c.id for c in store.query(qvec, s["retrieval.vector_top_k"], chroma_filter(where))]
+        sparse = [cid for cid, _ in sparse_f.result()]
 
-    merged = rrf([dense, sparse], s["retrieval.rrf_k"])[: s["retrieval.rerank_candidates"]]
-    chunks = [c for c in store.get(merged) if _passes(c, where)]
-    k = top_k or s["retrieval.final_top_k"]
+        merged = rrf([dense, sparse], s["retrieval.rrf_k"])[: s["retrieval.rerank_candidates"]]
+        with trace.span("retrieve.fetch"):
+            chunks = [c for c in store.get(merged) if _passes(c, where)]
+        k = top_k or s["retrieval.final_top_k"]
 
-    rr = get_reranker()
-    if rr and chunks:
-        scores = rr.score(question, [c.text for c in chunks])
-        for c, sc in zip(chunks, scores):
-            c.score = sc
-        chunks.sort(key=lambda c: -c.score)
-    return chunks[:k]
+        rr = get_reranker()
+        if rr and chunks:
+            with trace.span("retrieve.rerank"):
+                scores = rr.score(question, [c.text for c in chunks])
+            for c, sc in zip(chunks, scores):
+                c.score = sc
+            chunks.sort(key=lambda c: -c.score)
+        return chunks[:k]
+
+
+def _timed(key: str, fn, *args):
+    with trace.span(key):
+        return fn(*args)

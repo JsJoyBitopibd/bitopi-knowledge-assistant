@@ -16,6 +16,7 @@ from typing import Any, Optional
 import yaml
 from sqlglot import exp, parse_one
 
+from .. import trace
 from ..auth.models import Scope
 from ..config import prompt, settings
 from ..llm import get_chat
@@ -313,12 +314,13 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
     """Try fixed tools across all catalogs; else generate SQL, letting the model pick the database.
     refresh=True skips the SQL result cache (data/cache.py) and reads live. Every statement is limited
     to the user's scope (data/virtual.py)."""
-    cats = load_catalogs()
-    if not cats:
-        return []
-    hit = match_fixed_tool(question, load_fixed_tools())
-    if hit:
-        tool, params = hit
-        if tool["database"] in cats:
-            return [run_fixed_tool(tool, params, cats, user, refresh, scope=scope)]
-    return [generate_and_run(question, cats, user, refresh, scope=scope)]
+    with trace.span("data"):
+        cats = load_catalogs()
+        if not cats:
+            return []
+        hit = match_fixed_tool(question, load_fixed_tools())
+        if hit:
+            tool, params = hit
+            if tool["database"] in cats:
+                return [run_fixed_tool(tool, params, cats, user, refresh, scope=scope)]
+        return [generate_and_run(question, cats, user, refresh, scope=scope)]

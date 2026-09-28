@@ -8,6 +8,17 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- I1: every answer carries a request id and per-stage timings (`src/ragbot/trace.py`). The id is written
+  to `chat.csv`, `calls.csv` and `sql.csv`, so one question can be followed through all three.
+  `chat.csv` also records the seconds per stage, and administrators see them under each answer.
+  `scripts/latency.py` prints p50/p95 per stage, end to end and to the first token, over 51 fixed
+  questions, each run cold.
+
+### Changed
+- I1: `chat.csv`, `calls.csv` and `sql.csv` gained columns (`request_id`; `chat.csv` also `seconds` and
+  `timings`). The first write after the upgrade renames each old file to `<name>.<timestamp>.csv`, as for
+  earlier header changes.
 ## [1.8.0] — 2026-09-29 — Phase H: ingestion robustness
 
 Eval (62 cases, `eval/results/20260929T0919.json`, vs v1.7.0 on the same cases): hit rate 98% → 96%,
