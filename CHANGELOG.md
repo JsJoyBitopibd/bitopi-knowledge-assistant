@@ -8,7 +8,22 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
-Nothing yet. Next: Phase G (`docs/PROGRESS.md`).
+### Added
+- G3: follow-up question chips under fixed-tool answers (`follow_ups:` in `config/fixed_tools.yaml`,
+  filled with the answer's parameters; each reaches a fixed tool, so a click needs no model call). Every
+  fixed tool has an `example:` question: `check_catalog.py` checks it reaches that tool and `--live`
+  runs all of them (it ran none before).
+- G1: catalog `hints:` for code columns in raw tables — a `Buyer` code such as `C/09/7` points the SQL
+  model at `dbo.Contact_Master.ContactName` (listed per table: the same column name means different
+  things elsewhere).
+- G2: `discover_schema.py --samples --tables-from-logs` samples only the raw tables the SQL model has
+  needed (logged in `logs/schema_select.csv`; about 122 queries instead of ~6,700); earlier samples are
+  kept when discovery runs again.
+
+### Fixed
+- G4: Streamlit's file watcher logged ~50 torchvision tracebacks at every start; it is off in
+  `.streamlit/config.toml` (also in the Docker image). `st.dataframe` no longer uses the deprecated
+  `use_container_width`.
 
 ## [1.6.0] — 2026-09-28 — Phase F: sign-in and per-user scope
 
