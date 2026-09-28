@@ -8,6 +8,36 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+Nothing yet. Next: Phase F (`docs/PROGRESS.md`).
+
+## [1.5.1] — 2026-09-28 — Hotfix H0: cautious deletes
+
+### Fixed
+- **An empty or offline PDF folder emptied the index.** Every ingest pass deleted each indexed file
+  it did not see, and a missing folder simply yields no files, so one pass over an unmounted share
+  removed every document — and the worker ran that pass by itself as soon as the folder changed. Now
+  (PRD FR-2.14): a missing or empty folder changes nothing; a file leaves the index only when two
+  consecutive passes miss it; if more than 5 % of the indexed files (and more than 3) vanish in one
+  pass, nothing is removed. Each case logs an `ERROR`, puts an `alert` in `ingest_state.json`, shows
+  "⚠ Index not updated" in the app's sidebar, and makes `ingest.py` / `ingest_worker.py --once`
+  exit with code 2.
+- `scripts/reindex.py` deleted the index before looking at the PDF folder; it now refuses (exit 2)
+  when the folder has no PDFs.
+- One unreadable PDF (locked by another program, no permission) aborted the whole ingest run and
+  stopped the worker. It is now a failed file and the run continues; an already indexed file that
+  cannot be read keeps its indexed version.
+- The ingest summary's `failed` showed the registry-wide total; it is now this run's count
+  (`failed_total` holds the total).
+- `logs/ingest.log` was written in the Windows code page, so a Bangla file name could not be logged;
+  it is UTF-8 now.
+- The worker absorbed a folder change that arrived while the index was locked by a manual ingest; that
+  pass is now retried at the next interval.
+
+### Added
+- `python scripts/ingest.py --confirm-removals` for a deliberate bulk removal; settings
+  `ingest.removal_alert_fraction` (0.05) and `ingest.removal_alert_min_files` (3); registry column
+  `document.missed_scans` (added automatically to existing registries). README "Remove documents".
+
 ### Docs
 - Plan for Phases F–I (after v1.5.0) in `docs/PROGRESS.md` and `docs/ROADMAP.md`, merged from two
   sessions' proposals: hotfix H0 (an empty or offline PDF folder must not empty the index), F ready

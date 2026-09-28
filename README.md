@@ -61,6 +61,14 @@ starts reasoning/"thinking" and eats the whole token budget, tune `LLM_EXTRA_BOD
   `ingest.watch_interval_seconds` (5 min) and the running app sees them without a restart; or run
   `python scripts/ingest.py` once. Re-runs are idempotent (unchanged files are skipped by SHA-256;
   changed files are re-chunked; removed files are purged from the index). See "Revising a document".
+- **Remove documents**: delete the PDF. It leaves the index when **two consecutive passes** miss it
+  (with the worker: within two watch intervals, about 10 min), so a file that is only briefly
+  unavailable is never dropped. Safety stops (PRD FR-2.14): if the document folder is missing or
+  empty, or more than 5% of the indexed files (and more than 3) vanish in one pass, **nothing is
+  removed**, `logs/ingest.log` gets an `ERROR`, the app's sidebar shows "⚠ Index not updated", and
+  `ingest_worker.py --once` / `ingest.py` exit with code 2 — check the share or mount. For a deliberate
+  bulk removal run `python scripts/ingest.py --confirm-removals` once. Thresholds:
+  `ingest.removal_alert_fraction` / `removal_alert_min_files` in `config/settings.yaml`.
 - **Add a database view**: this build has no DDL access, so every catalog view carries a `definition:`
   field (a plain SQL `SELECT` over the real tables) instead of a real `CREATE VIEW` — see "Database
   views without DDL" below. Once the DBA creates the real view, delete `definition:` and the same SQL
@@ -94,7 +102,7 @@ Two ways to publish a new version, with different effects:
    `…_v3.pdf` next to `…_v2.pdf` (also `Rev3`, `ver_10`, `-v1.2`). The older file is marked
    **superseded**: it stays in the index but is hidden from answers (`retrieval.default_filters:
    superseded: false`), and reappears if the newer file is removed. Keep the old file for audit, or
-   delete it — the next pass removes it from the index.
+   delete it — it leaves the index once two passes have missed it (see "Remove documents").
 
 Either way the running app picks the change up without a restart: its keyword index, vector store
 client and repeat-question answer cache are all keyed on `data/index/ingest_state.json`, which every

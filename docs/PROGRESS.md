@@ -8,12 +8,12 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.5.0** (Phase D), tag `v1.5.0`, on `main` — the Phase A–E roadmap is complete |
+| Released | **v1.5.1** (hotfix H0: cautious deletes), tag `v1.5.1`, on `main` |
 | Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
 | In progress | nothing |
-| Next task | **H0** — cautious deletes (PRD FR-2.14): an empty or offline PDF folder must never empty the index |
+| Next task | **F4** — DBA request (then **F1**, login + per-user scoping) |
 | Last eval | 2026-09-27, `eval/results/20260927T1710.json`: correctness 90%, faithful 100%, hit 96% (one rate-limit miss), citations 100% |
-| Tests | 273 passing (`.venv\Scripts\python -m pytest -q`) |
+| Tests | 282 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-28 |
 
 ## How to update this file (every session)
@@ -104,11 +104,11 @@ ingestion worker can run unattended while F1 is built. Design per task: `docs/RO
 "Phases F–I". Order: H0 → F4 (request drafted, DBA works in parallel) → F1 → F2 (when the DBA is
 done) → G1–G4 → H1–H4 → I1 → I2–I5.
 
-### Hotfix H0 — cautious deletes (v1.5.1) ⬜
+### Hotfix H0 — cautious deletes (v1.5.1) ✅
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
-| H0 | PRD FR-2.14: a missing or empty PDF folder deletes nothing; a file leaves the index only after **two consecutive scans** miss it; more than 5 % of known files missing in one scan → no deletions, alert in `ingest.log` + `ingest_state.json`. Same area: one unreadable file no longer aborts the whole run (the worker exited); the summary's `failed` counts this run, not the registry total | ⬜ | unit tests (missing root, empty root, two-scan rule, counter reset, > threshold, unreadable file); live `ingest_worker.py --once` against a throwaway index with its folder renamed → alert, `inspect.py --stats` unchanged | |
+| H0 | PRD FR-2.14: a missing or empty PDF folder deletes nothing; a file leaves the index only after **two consecutive scans** miss it; more than 5 % of known files missing in one scan → no deletions, alert in `ingest.log` + `ingest_state.json`. Same area: one unreadable file no longer aborts the whole run (the worker exited); the summary's `failed` counts this run, not the registry total | ✅ | unit tests (missing root, empty root, two-scan rule, counter reset, > threshold, unreadable file); live `ingest_worker.py --once` against a throwaway index with its folder renamed → alert, `inspect.py --stats` unchanged | `tests/test_cautious_deletes.py` (9): missing folder, empty folder (3 passes: nothing removed, nothing counted), two-scan removal, counter reset when a file comes back, 4 of 5 files gone → nothing removed until `--confirm-removals`, `--confirm-removals` never empties from an empty folder, unreadable known/new file, per-run `failed`, pre-H0 registry migrated. **Live 2026-09-28** in a throwaway clone of the live index (real Chroma + registry, embedder stubbed to fail if called): folder renamed → alert, 250 vectors kept; Policy Book deleted → scan 1 pending (250 vectors), scan 2 removed (98); folder emptied → alert, 98 kept; a Bangla-named copy of the SOP manual added from the embedding cache (98 cached, 0 embedded) and logged in UTF-8. `reindex.py --yes` against a missing folder → exit 2, index untouched (it used to delete first). Real `ingest_worker.py --once` on the live index: "no change", exit 0, stats unchanged (2 documents, 250 chunks). `hit_rate.py` **29/30** (same miss as v1.5.0; the run took ~20 min on a busy machine vs 174 s on 27 Sep — retrieval code unchanged). Also fixed: `ingest.log` was written in the Windows code page (a Bangla file name could not be logged); `reindex.py` deleted the index before checking the folder; the worker absorbed a change that arrived while the index was locked. Full eval not run: no retrieval or answer code changed. 282 tests |
 
 ### Phase F — Ready for more users (v1.6.0) ⬜
 
@@ -136,7 +136,7 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 |---|---|---|---|---|
 | H1 | Two PDFs with the same file name in different folders overwrite each other (`source` is the bare name): the second is refused and listed as failed | ⬜ | unit test | |
 | H2 | `inspect.py --check` (registry vs Chroma vs `chunk_fts`, exit 1 on mismatch); a failed re-ingest keeps the old version (today the vectors are deleted first and the old registry rows stay) | ⬜ | tests with a planted orphan in each store; exit 0 on the live index | |
-| H3 | Worker: `ingest.py` and `reindex.py` take the same lock; resume after a crash; failed files retried up to 3 times; `ingest_state.json` written atomically and only when something changed (today every `--once` pass flushes the app's caches) + a heartbeat file; sidebar status line | ⬜ | tests; kill the worker mid-batch → restart → `--check` clean | |
+| H3 | Worker: `ingest.py` and `reindex.py` take the same lock; resume after a crash; failed files retried up to 3 times; `ingest_state.json` written atomically and only when something changed (today every `--once` pass flushes the app's caches) + a heartbeat file; sidebar status line. Found in H0: every `--once` pass loads the 2 GB embedding model (and contacts huggingface.co) even when nothing changed — load it only when a file needs embedding | ⬜ | tests; kill the worker mid-batch → restart → `--check` clean | |
 | H4 | Run the worker and the nightly aggregates refresh as scheduled tasks (runbook in README; the tasks are created by the user). The local copy was last refreshed 27 Sep 14:59 | ⏸ | `schtasks /query` lists both; aggregates `as_of` is from last night | User action |
 | H✓ | Phase gate | ⬜ | full eval, no drop > 5 points | |
 
@@ -185,3 +185,4 @@ G3, `--samples` for selected tables → G2, raw-table code → name → G1, Gemi
 | 2026-09-27 | Aggregates refreshed (4.2M rows, 32 s). v1.4.0: E3 embedding cache (one-page revision 243 s → 6.9 s) + E4 README; live index seeded; hit_rate 29/30. D1 next |
 | 2026-09-27 | v1.5.0: Phase D done (D1 FTS5, D2 filter pushdown, D3/D4 batch size + int8 ONNX reranker; correctness 90%, faithful 100%). Document answers ~10 s. Roadmap A–E complete |
 | 2026-09-28 | Two sessions' plans merged into Phases F–I (H0 hotfix first, then F → G → H → I), written here and in ROADMAP. GitHub Releases created for v1.2.0–v1.5.0 (Phases B–D had tags only). H0 next |
+| 2026-09-28 | v1.5.1: hotfix H0 — an empty or offline PDF folder can no longer empty the index (two-scan removal rule, mass-disappearance stop, `reindex.py` checks the folder first). F4 next |

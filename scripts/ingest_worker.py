@@ -8,6 +8,11 @@ without anyone running a command or restarting it.
 The scan is cheap: only when the set of (name, size, mtime) differs from the previous pass does it call
 ingest_folder(), which is itself idempotent (SHA-256 per file). A lock file makes a manual
 scripts/ingest.py and this worker mutually exclusive so they never write the index at the same time.
+
+A file that disappears is removed only when two consecutive passes miss it, so a pass that finds a
+missing file forces the next pass even if nothing else changed. A missing or empty folder, or many
+files vanishing at once, removes nothing and is logged as an ALERT; `--once` then exits with code 2 so
+a scheduler shows the failure.
 """
 import os
 import sys
@@ -58,24 +63,28 @@ def _release_lock() -> None:
     _lock_path().unlink(missing_ok=True)
 
 
-def run_once() -> bool:
-    """Ingest if the folder changed. Returns True if an ingest ran."""
+def _changed(summary: dict) -> bool:
+    return bool(summary["added"] or summary["updated"] or summary["removed"])
+
+
+def run_once() -> dict | None:
+    """One ingest pass. Returns its summary, or None when another process holds the index lock.
+    ingest_folder() itself logs an alert (missing/empty folder, mass disappearance) as an ERROR."""
     root = settings().path("pdf_root")
     if not _acquire_lock():
         log.info("index locked by another process; skipping this pass")
-        return False
+        return None
     try:
         summary = ingest_folder(root)
-        if summary["added"] or summary["updated"] or summary["removed"]:
+        if _changed(summary) or summary.get("pending_removal"):
             log.info("ingested: %s", summary)
-            return True
-        return False
+        return summary
     finally:
         _release_lock()
 
 
 def main() -> None:
-    logging.basicConfig(filename=log_dir() / "ingest.log", level=logging.INFO,
+    logging.basicConfig(filename=log_dir() / "ingest.log", level=logging.INFO, encoding="utf-8",
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     # also echo to console so `--once` from a scheduler leaves a trail
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
@@ -86,18 +95,28 @@ def main() -> None:
         interval = int(sys.argv[sys.argv.index("--interval") + 1])
 
     if once:
-        ran = run_once()
-        print("ingested" if ran else "no change")
+        summary = run_once()
+        if summary is None:
+            print("index locked by another process")
+        elif summary.get("alert"):
+            print("ALERT:", summary["alert"])
+            sys.exit(2)
+        else:
+            print("ingested" if _changed(summary) else "no change")
         return
 
     root = settings().path("pdf_root")
     log.info("watching %s every %ds", root, interval)
-    prev = None
+    prev, pending = None, 0
     while True:
         snap = _snapshot(root)
-        if snap != prev:
-            run_once()
-            prev = _snapshot(root)   # re-read: ingest may rename/normalise nothing, but time passed
+        # A missing file is removed only if the next pass misses it too, so a pending removal forces
+        # that pass even when the folder looks the same.
+        if snap != prev or pending:
+            summary = run_once()
+            if summary is not None:              # locked: keep prev, so this change is retried next time
+                pending = summary.get("pending_removal", 0)
+                prev = _snapshot(root)           # re-read: ingest may rename/normalise nothing, but time passed
         time.sleep(interval)
 
 

@@ -146,6 +146,10 @@ class Registry:
         if "text_hash" not in {r[1] for r in self.db.execute("PRAGMA table_info(chunk)")}:
             self.db.execute("ALTER TABLE chunk ADD COLUMN text_hash TEXT")
             self.db.commit()
+        # registries created before H0 lack document.missed_scans (the two-scan removal rule)
+        if "missed_scans" not in {r[1] for r in self.db.execute("PRAGMA table_info(document)")}:
+            self.db.execute("ALTER TABLE document ADD COLUMN missed_scans INTEGER DEFAULT 0")
+            self.db.commit()
 
     def known_hash(self, source: str) -> Optional[str]:
         r = self.db.execute("SELECT doc_hash FROM document WHERE source=?", (source,)).fetchone()
@@ -153,6 +157,22 @@ class Registry:
 
     def all_sources(self) -> set[str]:
         return {r[0] for r in self.db.execute("SELECT source FROM document")}
+
+    def record_scan(self, seen: set[str], count_missing: bool = True) -> dict[str, int]:
+        """Two-scan removal rule (PRD FR-2.14): reset the miss counter of every known source this scan
+        saw and, unless count_missing is False, add one to every known source it missed. Returns
+        {missing source: consecutive scans it has been missing} (empty when count_missing is False)."""
+        back = {r[0] for r in self.db.execute("SELECT source FROM document WHERE missed_scans > 0")} & seen
+        self.db.executemany("UPDATE document SET missed_scans=0 WHERE source=?", [(s,) for s in back])
+        missing = self.all_sources() - seen
+        if count_missing:
+            self.db.executemany("UPDATE document SET missed_scans=COALESCE(missed_scans,0)+1 WHERE source=?",
+                                [(s,) for s in missing])
+        self.db.commit()
+        if not count_missing or not missing:
+            return {}
+        return {src: n for src, n in self.db.execute("SELECT source, missed_scans FROM document WHERE missed_scans > 0")
+                if src in missing}
 
     def upsert_document(self, **f: Any) -> None:
         cols = ",".join(f); ph = ",".join("?" * len(f))

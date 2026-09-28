@@ -12,6 +12,11 @@ ingest:
   chunk_overlap_chars: 250
   embed_batch_size: 32
   watch_interval_seconds: 300  # scripts/ingest_worker.py rescans data/pdfs this often
+  # A missing file leaves the index after two consecutive scans miss it. If more files vanish in one
+  # scan than this share of the indexed ones (and more than removal_alert_min_files), nothing is
+  # removed and an alert is logged: an offline share must not empty the index (PRD FR-2.14).
+  removal_alert_fraction: 0.05
+  removal_alert_min_files: 3
   ocr_min_text_chars: 50       # below this a page is treated as scanned
   header_footer_min_share: 0.5 # a line in the top/bottom 3 lines of >= this share of pages is a header/footer
 

@@ -1,7 +1,8 @@
 """Ingestion: data/pdfs/**/*.pdf -> chunks -> embeddings -> vector store + registry + BM25.
 
 Idempotent: unchanged files (same SHA-256) are skipped; changed files are replaced whole;
-removed files are deleted. Streams one document at a time so memory stays flat.
+removed files are deleted once two consecutive scans miss them, and never when the folder is missing,
+empty or loses many files at once (PRD FR-2.14). Streams one document at a time so memory stays flat.
 """
 from __future__ import annotations
 
@@ -125,21 +126,46 @@ def embed_with_cache(texts: list[str], reg: Registry, emb, counts: dict) -> list
     return [have[h] for h in hashes]
 
 
+def _finish(summary: dict, reg: Registry, index_dir: Path, root: Path, started: datetime) -> dict:
+    """Add the registry totals to a run's summary and write ingest_state.json (the app reads it)."""
+    stats = reg.stats()
+    stats["failed_total"] = stats.pop("failed")       # registry-wide; summary["failed"] is this run's count
+    summary = {**summary, **stats}
+    state = {"started_at": started.isoformat(timespec="seconds"), "finished_at": datetime.now().isoformat(timespec="seconds"),
+             "embed_model": EMBED_MODEL, "pdf_root": str(root), **summary}
+    (index_dir / "ingest_state.json").write_text(json.dumps(state, indent=1), encoding="utf-8")
+    return summary
+
+
 def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = None,
-                  index_dir: Path | None = None) -> dict:
-    """store / reg / index_dir default to the app's index; tests pass a temporary one."""
+                  index_dir: Path | None = None, confirm_removals: bool = False) -> dict:
+    """store / reg / index_dir default to the app's index; tests pass a temporary one.
+
+    Removals are cautious (PRD FR-2.14): a known file leaves the index only when two consecutive scans
+    miss it. If the folder is missing or holds no PDFs, or more files vanish in one scan than
+    `ingest.removal_alert_fraction` of the known ones (and at least `ingest.removal_alert_min_files`),
+    nothing is deleted and the summary carries an "alert" — an offline share or a wrong mount must not
+    empty the index. confirm_removals=True (scripts/ingest.py --confirm-removals) deletes every file
+    missing now, for a deliberate bulk removal; a missing or empty folder is refused even then."""
     s = settings()
     root = root or s.path("pdf_root")
     index_dir = index_dir or s.path("index_dir")
-    store, reg, emb = store or get_store(), reg or Registry(), get_embedder()
-    batch = s["ingest.embed_batch_size"]
+    store, reg = store or get_store(), reg or Registry()
     started = datetime.now()
-    added = updated = removed = failed = 0
+    added = updated = removed = failed = pending_removal = 0
+    known_before = reg.all_sources()
     seen: set[str] = set()
     counts = {"embedded": 0, "cached": 0}
 
-    logging.basicConfig(filename=log_dir() / "ingest.log", level=logging.INFO,
+    logging.basicConfig(filename=log_dir() / "ingest.log", level=logging.INFO, encoding="utf-8",
                         format="%(asctime)s %(levelname)s %(message)s")
+    if not root.is_dir():
+        alert = f"PDF folder {root} is missing or not a folder: nothing changed (is the share mounted?)"
+        log.error(alert)
+        return _finish({"added": 0, "updated": 0, "removed": 0, "pending_removal": 0, "failed": 0, "alert": alert},
+                       reg, index_dir, root, started)
+    emb = get_embedder()
+    batch = s["ingest.embed_batch_size"]
     seeded = reg.seed_embedding_cache(store, EMBED_MODEL)   # index built before E3: reuse its vectors
     if seeded:
         log.info("embedding cache seeded from %d existing vectors (no re-embedding)", seeded)
@@ -150,8 +176,18 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
 
     for path in sorted(root.rglob("*.pdf")):
         seen.add(path.name)
-        h = sha256(path)
         known = reg.known_hash(path.name)
+        try:
+            h = sha256(path)
+        except OSError as e:                                   # locked, no permission, share hiccup
+            failed += 1
+            if known is None:
+                reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=None,
+                                    status="failed", error=f"cannot read the file: {e.__class__.__name__}: {e}"[:500],
+                                    ingested_at=datetime.now().isoformat(timespec="minutes"))
+            log.error("FAILED %s: cannot read the file (%s)%s", path.name, e,
+                      "; the indexed version is kept" if known else "")
+            continue
         if known == h:
             continue
         try:
@@ -188,9 +224,30 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
                                 ingested_at=datetime.now().isoformat(timespec="minutes"))
             log.error("FAILED %s: %s", path.name, e)
 
-    for gone in reg.all_sources() - seen:
-        store.delete_by_source(gone); reg.remove_document(gone); removed += 1
-        log.info("removed: %s", gone)
+    missing = reg.all_sources() - seen
+    limit = max(int(s.get("ingest.removal_alert_min_files", 3)),
+                float(s.get("ingest.removal_alert_fraction", 0.05)) * len(known_before))
+    alert = ""
+    if missing and not seen:
+        alert = (f"no PDFs found under {root}, but the index holds {len(missing)} documents: nothing removed "
+                 "(is the share mounted?)")
+    elif not confirm_removals and len(missing) > limit:
+        alert = (f"{len(missing)} of {len(known_before)} indexed files are missing from {root} in this scan: nothing "
+                 "removed. Check the share or mount; if the removal is deliberate, run "
+                 "`python scripts/ingest.py --confirm-removals`")
+    if alert:
+        log.error(alert)
+        reg.record_scan(seen, count_missing=False)             # an outage must not count toward the two-scan rule
+    else:
+        missed = reg.record_scan(seen)
+        for gone in sorted(missed):
+            if missed[gone] >= 2 or confirm_removals:
+                store.delete_by_source(gone); reg.remove_document(gone); removed += 1
+                log.info("removed: %s (%s)", gone,
+                         "removal confirmed" if missed[gone] < 2 else f"missing in {missed[gone]} consecutive scans")
+            else:
+                pending_removal += 1
+                log.warning("missing: %s (removed if the next scan misses it too)", gone)
 
     # Recomputed from scratch every run (not just for changed files), so a later add/removal of a
     # revision is picked up even if the older file itself did not change.
@@ -214,9 +271,9 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
                    (started.isoformat(timespec="seconds"), datetime.now().isoformat(timespec="seconds"),
                     added, updated, removed, failed))
     reg.db.commit()
-    summary = {"added": added, "updated": updated, "removed": removed, "failed": failed, "superseded": len(old),
-               "embedded": counts["embedded"], "cached": counts["cached"], "cache_pruned": pruned, **reg.stats()}
-    state = {"started_at": started.isoformat(timespec="seconds"), "finished_at": datetime.now().isoformat(timespec="seconds"),
-             "embed_model": EMBED_MODEL, "pdf_root": str(root), **summary}
-    (index_dir / "ingest_state.json").write_text(json.dumps(state, indent=1), encoding="utf-8")
-    return summary
+    summary = {"added": added, "updated": updated, "removed": removed, "pending_removal": pending_removal,
+               "failed": failed, "superseded": len(old), "embedded": counts["embedded"], "cached": counts["cached"],
+               "cache_pruned": pruned}
+    if alert:
+        summary["alert"] = alert
+    return _finish(summary, reg, index_dir, root, started)

@@ -67,6 +67,9 @@ def _index_caption(_version: int) -> str:
     import json
     try:
         d = json.loads((s.path("index_dir") / "ingest_state.json").read_text(encoding="utf-8"))
+        if d.get("alert"):      # an update refused because PDFs went missing (share offline?); IT sees it here
+            return (f"⚠ Index not updated at {d.get('finished_at', '?')}: PDF files are missing from the "
+                    f"document folder (see logs/ingest.log) · {d.get('documents', '?')} documents")
         return f"Index updated {d.get('finished_at', '?')} · {d.get('documents', '?')} documents"
     except Exception:
         return "No documents indexed yet. Add PDFs to data/pdfs/<Category>/."
