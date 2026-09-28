@@ -21,6 +21,11 @@ class Chunk(BaseModel):
     superseded: bool = False
     embed_model: str = ""
     ingested_at: str = ""
+    # access attributes (PRD section 7, ingest/meta.py): who may see this chunk (auth/filters.py)
+    factory: str = "ALL"         # TAL, RHL, ... or ALL for group-wide documents
+    department: str = "Common"
+    confidentiality: str = "internal"   # public | internal | restricted
+    buyer_code: str = ""         # "" = not a buyer's document
     score: float = 0.0           # filled by retrieval
 
     def metadata(self) -> dict[str, Any]:
@@ -28,6 +33,8 @@ class Chunk(BaseModel):
             "source": self.source, "title": self.title, "page": self.page, "section": self.section,
             "kind": self.kind, "category": self.category, "doc_hash": self.doc_hash,
             "superseded": self.superseded, "embed_model": self.embed_model, "ingested_at": self.ingested_at,
+            "factory": self.factory, "department": self.department, "confidentiality": self.confidentiality,
+            "buyer_code": self.buyer_code,
         }
 
     @property

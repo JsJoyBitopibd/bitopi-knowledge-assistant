@@ -17,7 +17,7 @@ r = ingest_folder(root, confirm_removals="--confirm-removals" in sys.argv)
 if r.get("alert"):
     print("ALERT:", r["alert"])
     sys.exit(2)
-print(f"added={r['added']} updated={r['updated']} removed={r['removed']} failed={r['failed']} | "
+print(f"added={r['added']} updated={r['updated']} removed={r['removed']} retagged={r['retagged']} failed={r['failed']} | "
       f"documents={r['documents']} pages={r['pages']} chunks={r['chunks']} tables={r['tables']} ocr_pages={r['ocr_pages']}")
 if r["pending_removal"]:
     print(f"{r['pending_removal']} file(s) missing from the folder: removed if the next run misses them too "

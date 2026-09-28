@@ -21,6 +21,7 @@ from ..embed import EMBED_MODEL, get_embedder
 from ..models import Chunk
 from ..store import Registry, get_store, text_hash
 from .chunker import chunk_page
+from .meta import attributes_for
 from .pdf_text import clean_pages
 from .tables import tables_on_page
 
@@ -82,9 +83,12 @@ def display_title(doc: pymupdf.Document, fallback: str) -> str:
     return t
 
 
-def chunks_for(path: Path, root: Path, doc_hash: str) -> Iterator[tuple[Chunk, dict]]:
-    """Yield (chunk, doc_stats) lazily for one PDF. The last yielded dict holds the totals."""
+def chunks_for(path: Path, root: Path, doc_hash: str,
+               attrs: dict[str, str] | None = None) -> Iterator[tuple[Chunk, dict]]:
+    """Yield (chunk, doc_stats) lazily for one PDF. The last yielded dict holds the totals. `attrs`: the
+    file's access attributes (ingest/meta.py), computed here when not given."""
     s = settings()
+    attrs = attrs if attrs is not None else attributes_for(path, root)
     doc = pymupdf.open(path)
     if doc.is_encrypted and not doc.authenticate(""):
         raise ValueError("encrypted PDF")
@@ -92,7 +96,7 @@ def chunks_for(path: Path, root: Path, doc_hash: str) -> Iterator[tuple[Chunk, d
     title, source = path.stem, path.name                 # ids and Chunk.title use the file stem (REFERENCE_FORMAT)
     shown = display_title(doc, title)                     # the "<doc title> › <section>" prefix uses the real title
     base = dict(source=source, title=title, category=category_for(path, root), doc_hash=doc_hash,
-                embed_model=EMBED_MODEL, ingested_at=datetime.now().isoformat(timespec="minutes"))
+                embed_model=EMBED_MODEL, ingested_at=datetime.now().isoformat(timespec="minutes"), **attrs)
     stats = {"pages": len(pages), "chunks": 0, "tables": 0, "ocr_pages": ocr_pages, "toc_pages": len(toc_pages)}
     heading = ""
     for pno, (page, text) in enumerate(zip(doc, pages), start=1):
@@ -152,8 +156,9 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     index_dir = index_dir or s.path("index_dir")
     store, reg = store or get_store(), reg or Registry()
     started = datetime.now()
-    added = updated = removed = failed = pending_removal = 0
+    added = updated = removed = failed = pending_removal = retagged = 0
     known_before = reg.all_sources()
+    meta_cache: dict[Path, dict] = {}                          # meta.yaml files read once per run
     seen: set[str] = set()
     counts = {"embedded": 0, "cached": 0}
 
@@ -162,8 +167,8 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     if not root.is_dir():
         alert = f"PDF folder {root} is missing or not a folder: nothing changed (is the share mounted?)"
         log.error(alert)
-        return _finish({"added": 0, "updated": 0, "removed": 0, "pending_removal": 0, "failed": 0, "alert": alert},
-                       reg, index_dir, root, started)
+        return _finish({"added": 0, "updated": 0, "removed": 0, "pending_removal": 0, "retagged": 0, "failed": 0,
+                        "alert": alert}, reg, index_dir, root, started)
     emb = get_embedder()
     batch = s["ingest.embed_batch_size"]
     seeded = reg.seed_embedding_cache(store, EMBED_MODEL)   # index built before E3: reuse its vectors
@@ -188,7 +193,23 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
             log.error("FAILED %s: cannot read the file (%s)%s", path.name, e,
                       "; the indexed version is kept" if known else "")
             continue
+        try:
+            attrs = attributes_for(path, root, meta_cache)
+        except ValueError as e:                                # invalid meta.yaml: never index with a guess
+            failed += 1
+            if known is None:
+                reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=None,
+                                    status="failed", error=str(e)[:500], ingested_at=datetime.now().isoformat(timespec="minutes"))
+            log.error("FAILED %s: %s%s", path.name, e, "; the indexed version is kept" if known else "")
+            continue
         if known == h:
+            # Same content; its access attributes may still have changed (a moved file, an edited meta.yaml,
+            # or a document indexed before F1): retag it in place, nothing is re-embedded.
+            if reg.document_attributes(path.name) != attrs:
+                reg.retag(path.name, attrs)
+                store.set_attributes(path.name, attrs)
+                retagged += 1
+                log.info("retagged: %s (%s)", path.name, ", ".join(f"{k}={v}" for k, v in attrs.items()))
             continue
         try:
             store.delete_by_source(path.name)
@@ -196,7 +217,7 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
             stats: dict = {}
             all_chunks: list[Chunk] = []
             doc_counts = {"embedded": 0, "cached": 0}
-            for chunk, stats in chunks_for(path, root, h):
+            for chunk, stats in chunks_for(path, root, h, attrs):
                 pending.append(chunk); all_chunks.append(chunk)
                 if len(pending) >= batch:
                     store.upsert(pending, embed_with_cache([c.text for c in pending], reg, emb, doc_counts))
@@ -211,7 +232,7 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
             reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=h,
                                 pages=stats["pages"], chunks=stats["chunks"], tables_=stats["tables"],
                                 ocr_pages=stats["ocr_pages"], status="ok", error=None,
-                                ingested_at=datetime.now().isoformat(timespec="minutes"))
+                                ingested_at=datetime.now().isoformat(timespec="minutes"), **attrs)
             if known is None: added += 1
             else: updated += 1
             log.info("%s: %s (%d chunks, %d tables, %d OCR pages, %d TOC pages skipped; embedded %d / cached %d)",
@@ -272,8 +293,8 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
                     added, updated, removed, failed))
     reg.db.commit()
     summary = {"added": added, "updated": updated, "removed": removed, "pending_removal": pending_removal,
-               "failed": failed, "superseded": len(old), "embedded": counts["embedded"], "cached": counts["cached"],
-               "cache_pruned": pruned}
+               "retagged": retagged, "failed": failed, "superseded": len(old), "embedded": counts["embedded"],
+               "cached": counts["cached"], "cache_pruned": pruned}
     if alert:
         summary["alert"] = alert
     return _finish(summary, reg, index_dir, root, started)

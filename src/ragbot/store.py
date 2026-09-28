@@ -33,12 +33,19 @@ class VectorStore(ABC):
     def count(self) -> int: ...
     @abstractmethod
     def set_superseded(self, source: str, superseded: bool) -> None: ...
+    @abstractmethod
+    def set_attributes(self, source: str, attrs: dict[str, Any]) -> None: ...
+
+
+# Access attributes of every chunk and document (PRD section 7; ingest/meta.py, auth/filters.py)
+ACCESS_FIELDS = ("factory", "department", "confidentiality", "buyer_code")
 
 
 def _chunk_from_record(cid: str, doc: str, meta: dict[str, Any], score: float = 0.0) -> Chunk:
     return Chunk(id=cid, text=doc, score=score, **{k: meta.get(k, Chunk.model_fields[k].default)
                                                    for k in ("source", "title", "page", "section", "kind", "category",
-                                                             "doc_hash", "superseded", "embed_model", "ingested_at")})
+                                                             "doc_hash", "superseded", "embed_model", "ingested_at",
+                                                             *ACCESS_FIELDS)})
 
 
 class ChromaStore(VectorStore):
@@ -97,10 +104,14 @@ class ChromaStore(VectorStore):
             yield from zip(res["ids"], res["documents"], res["embeddings"])
 
     def set_superseded(self, source, superseded):
-        res = self.col.get(where={"source": source}, include=[])
-        ids = res["ids"]
-        if ids:
-            self.col.update(ids=ids, metadatas=[{"superseded": superseded}] * len(ids))
+        self.set_attributes(source, {"superseded": superseded})
+
+    def set_attributes(self, source: str, attrs: dict[str, Any]) -> None:
+        """Merge `attrs` into the metadata of every chunk of `source` (no re-embedding)."""
+        ids = self.col.get(where={"source": source}, include=[])["ids"]
+        for i in range(0, len(ids), 5000):
+            part = ids[i:i + 5000]
+            self.col.update(ids=part, metadatas=[dict(attrs)] * len(part))
 
 
 # ---------------------------------------------------------------- registry
@@ -117,12 +128,18 @@ CREATE TABLE IF NOT EXISTS ingest_run(
   added INTEGER, updated INTEGER, removed INTEGER, failed INTEGER);
 CREATE TABLE IF NOT EXISTS embedding_cache(
   hash TEXT, model TEXT, vec BLOB, PRIMARY KEY(hash, model));
--- Phase D1: the keyword index, maintained per document (no full rebuild). `body` holds the tokens of
--- retrieve.keyword.tokenize() joined by spaces, so the FTS 'ascii' tokenizer (whitespace/ASCII
--- punctuation split, non-ASCII kept inside tokens) sees exactly those tokens — 'PCD-02' -> 'pcd 02',
--- Bangla words intact (unicode61 would split them at vowel signs).
+"""
+
+# Phase D1: the keyword index, maintained per document (no full rebuild). `body` holds the tokens of
+# retrieve.keyword.tokenize() joined by spaces, so the FTS 'ascii' tokenizer (whitespace/ASCII
+# punctuation split, non-ASCII kept inside tokens) sees exactly those tokens — 'PCD-02' -> 'pcd 02',
+# Bangla words intact (unicode61 would split them at vowel signs). The access columns (F1) let the
+# keyword search apply the user's scope inside the query.
+FTS_DDL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
-  id UNINDEXED, source UNINDEXED, category UNINDEXED, superseded UNINDEXED, body, tokenize='ascii');
+  id UNINDEXED, source UNINDEXED, category UNINDEXED, superseded UNINDEXED,
+  factory UNINDEXED, department UNINDEXED, confidentiality UNINDEXED, buyer_code UNINDEXED,
+  body, tokenize='ascii');
 """
 
 
@@ -142,6 +159,20 @@ class Registry:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path))
         self.db.executescript(SCHEMA)
+        # A keyword index from before F1 lacks the access columns, and FTS5 tables cannot add columns:
+        # recreate it empty; seed_fts() refills it from the vector store (ingest, or the app's first search).
+        fts_cols = {r[1] for r in self.db.execute("PRAGMA table_info(chunk_fts)")}
+        if fts_cols and "factory" not in fts_cols:
+            self.db.execute("DROP TABLE chunk_fts")
+            self.db.commit()
+        self.db.executescript(FTS_DDL)
+        # Documents from before F1 get NULL access attributes (not the defaults), so the first ingest pass
+        # sees them as different from their folder's and retags them; until then scoped searches skip them.
+        doc_cols = {r[1] for r in self.db.execute("PRAGMA table_info(document)")}
+        for col in ACCESS_FIELDS:
+            if col not in doc_cols:
+                self.db.execute(f"ALTER TABLE document ADD COLUMN {col} TEXT")
+        self.db.commit()
         # registries created before E3 lack chunk.text_hash (which ties cache rows to live chunks)
         if "text_hash" not in {r[1] for r in self.db.execute("PRAGMA table_info(chunk)")}:
             self.db.execute("ALTER TABLE chunk ADD COLUMN text_hash TEXT")
@@ -186,23 +217,44 @@ class Registry:
         self.db.executemany("INSERT INTO chunk(id, source, page, section, kind, chars, text_hash) VALUES(?,?,?,?,?,?,?)",
                             [(c.id, c.source, c.page, c.section, c.kind, len(c.text), text_hash(c.text))
                              for c in chunks])
-        self.db.executemany("INSERT INTO chunk_fts(id, source, category, superseded, body) VALUES(?,?,?,?,?)",
-                            [(c.id, c.source, c.category, int(bool(c.superseded)), fts_body(c.text)) for c in chunks])
+        self.db.executemany(
+            "INSERT INTO chunk_fts(id, source, category, superseded, factory, department, confidentiality, buyer_code, body) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            [(c.id, c.source, c.category, int(bool(c.superseded)), c.factory, c.department, c.confidentiality,
+              c.buyer_code, fts_body(c.text)) for c in chunks])
         self.db.commit()
 
     def seed_fts(self, store) -> int:
-        """One-off upgrade for a registry from before D1: fill chunk_fts from the vector store's texts
-        (category/superseded from the document table). No-op when it already has rows."""
+        """One-off upgrade for a registry from before D1 (or F1, which recreates the table): fill chunk_fts
+        from the vector store's texts, the other columns from the document table. No-op when it has rows."""
         if self.db.execute("SELECT 1 FROM chunk_fts LIMIT 1").fetchone() or \
                 not self.db.execute("SELECT 1 FROM chunk LIMIT 1").fetchone():
             return 0
-        meta = {r[0]: (r[1], r[2], r[3]) for r in self.db.execute(
-            "SELECT c.id, c.source, d.category, d.superseded FROM chunk c JOIN document d ON d.source = c.source")}
-        rows = [(cid, *meta[cid][:2], int(bool(meta[cid][2])), fts_body(text))
-                for cid, text in store.all_ids_and_texts() if cid in meta]
-        self.db.executemany("INSERT INTO chunk_fts(id, source, category, superseded, body) VALUES(?,?,?,?,?)", rows)
+        meta = {r[0]: r[1:] for r in self.db.execute(
+            "SELECT c.id, c.source, d.category, d.superseded, d.factory, d.department, d.confidentiality, d.buyer_code "
+            "FROM chunk c JOIN document d ON d.source = c.source")}
+        rows = [(cid, m[0], m[1], int(bool(m[2])), *m[3:], fts_body(text))
+                for cid, text in store.all_ids_and_texts() if (m := meta.get(cid))]
+        self.db.executemany(
+            "INSERT INTO chunk_fts(id, source, category, superseded, factory, department, confidentiality, buyer_code, body) "
+            "VALUES(?,?,?,?,?,?,?,?,?)", rows)
         self.db.commit()
         return len(rows)
+
+    def document_attributes(self, source: str) -> Optional[dict[str, Any]]:
+        """The access attributes recorded for `source` (values None for a document from before F1)."""
+        r = self.db.execute(f"SELECT {', '.join(ACCESS_FIELDS)} FROM document WHERE source=?", (source,)).fetchone()
+        return dict(zip(ACCESS_FIELDS, r)) if r else None
+
+    def retag(self, source: str, attrs: dict[str, str]) -> None:
+        """New access attributes for a document whose content did not change (moved folder, edited
+        meta.yaml, or a document from before F1): the registry and the keyword index. The caller updates
+        the vector store's metadata (ChromaStore.set_attributes); nothing is re-embedded."""
+        sets = ", ".join(f"{k}=?" for k in ACCESS_FIELDS)
+        vals = [attrs[k] for k in ACCESS_FIELDS]
+        self.db.execute(f"UPDATE document SET {sets} WHERE source=?", (*vals, source))
+        self.db.execute(f"UPDATE chunk_fts SET {sets} WHERE source=?", (*vals, source))
+        self.db.commit()
 
     # ---- embedding cache (Phase E3): a revised PDF re-embeds only the chunks whose text changed
     def cached_vectors(self, hashes: list[str], model: str) -> dict[str, list[float]]:

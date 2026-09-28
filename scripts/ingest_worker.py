@@ -30,8 +30,10 @@ log = logging.getLogger("ingest_worker")
 
 
 def _snapshot(root):
+    """(size, mtime) of every PDF and every meta.yaml: an edited meta.yaml changes who may see the files
+    below it, so it must trigger a pass too (they are retagged without re-embedding)."""
     snap = {}
-    for p in root.rglob("*.pdf"):
+    for p in (*root.rglob("*.pdf"), *root.rglob("meta.yaml")):
         try:
             st = p.stat()
             snap[str(p)] = (st.st_size, st.st_mtime_ns)
@@ -64,7 +66,7 @@ def _release_lock() -> None:
 
 
 def _changed(summary: dict) -> bool:
-    return bool(summary["added"] or summary["updated"] or summary["removed"])
+    return bool(summary["added"] or summary["updated"] or summary["removed"] or summary.get("retagged"))
 
 
 def run_once() -> dict | None:
