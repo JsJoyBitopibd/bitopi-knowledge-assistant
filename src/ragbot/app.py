@@ -234,6 +234,17 @@ def render_answer(a, turn: int) -> None:
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
 
 
+def follow_up_chips(i: int, suggestions: list[str] | None) -> None:
+    """G3: next questions under the latest fixed-tool answer; a click asks it like a suggestion chip."""
+    if not suggestions:
+        return
+    cols = st.columns(len(suggestions))
+    for j, sug in enumerate(suggestions):
+        if cols[j].button(sug, key=f"fu{i}_{j}"):
+            st.session_state.pending_q = sug
+            st.rerun()
+
+
 def refresh_button(i: int, question: str, refs) -> None:
     """Database answers may come from the short SQL result cache (their as-of time shows when the rows
     were read). This re-asks the question with the cache bypassed."""
@@ -244,12 +255,17 @@ def refresh_button(i: int, question: str, refs) -> None:
             st.rerun()
 
 
+fu_slot = st.empty()   # follow-up chips of the latest answer; cleared below when a new question arrives
 for i, t in enumerate(st.session_state.history):
     with st.chat_message(t["role"]):
         st.markdown(t["text"])
         if t["role"] == "assistant":
             show_refs(t.get("refs"), t.get("results"), i)
             refresh_button(i, t.get("q", ""), t.get("refs"))
+            if i == len(st.session_state.history) - 1:          # only under the latest answer
+                fu_slot = st.empty()
+                with fu_slot.container():
+                    follow_up_chips(i, t.get("follow_ups"))
             st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))
 
 # Suggested-question chips on an empty conversation.
@@ -297,6 +313,7 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool = 
 
 if q:
     chips.empty()
+    fu_slot.empty()        # the previous answer's follow-ups; the new answer brings its own
     st.session_state.history.append({"role": "user", "text": q})
     with st.chat_message("user"):
         st.markdown(q)
@@ -313,7 +330,8 @@ if q:
         i = len(st.session_state.history)   # index this assistant turn will have in history
         render_answer(a, i)
         st.session_state.history.append({"role": "assistant", "text": a.text, "refs": a.references, "q": q,
-                                         "results": a.results})
+                                         "results": a.results, "follow_ups": a.follow_ups})
         # Feedback now, not after a rerun; the history loop re-renders it with the same key next run.
         refresh_button(i, q, a.references)
+        follow_up_chips(i, a.follow_ups)
         st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))

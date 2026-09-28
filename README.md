@@ -100,8 +100,11 @@ scope; admins can look up a user's scope and download their log in the sidebar (
   runs directly. Either way: describe the view in `config/catalog/<db>.yaml`, run
   `python scripts/check_catalog.py --live`, add golden-set cases, run `python scripts/eval.py`.
 - **Add a fixed tool**: add an entry to `config/fixed_tools.yaml` (regex `match`, `params`, `sql`
-  referencing `rag.<view>`), run `python scripts/check_catalog.py` and add an
-  `example_params:` block for `--live` smoke testing.
+  referencing `rag.<view>`) with an `example:` question and, optionally, `follow_ups:` (next questions
+  shown under its answers, filled with its parameters, e.g. `Which {factory} orders have a PCD {window}?`).
+  `python scripts/check_catalog.py` checks that the example reaches this tool (tools are tried in file
+  order, the first match wins); `--live` runs it against the database with the example's parameters;
+  `pytest tests/test_follow_ups.py` checks that every follow-up reaches a fixed tool.
 - **Change LLM provider**: edit `LLM_PROVIDER`, `LLM_MODEL`, `LLM_SMALL_MODEL`, `LLM_BASE_URL`, key
   in `.env`; run `python scripts/eval.py` and compare against the previous run (it blocks on any
   metric dropping more than 5 points).

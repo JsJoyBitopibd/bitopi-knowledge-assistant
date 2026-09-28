@@ -118,3 +118,4 @@ class Answer(BaseModel):
     sources_text: str = ""       # the <sources> block sent to the model (for eval judging; never logged)
     error_kind: str = ""         # "" on success; else quota|timeout|auth|db|other — UI shows a soft message
     results: list[QueryResult] = Field(default_factory=list)   # database results in [D1], [D2] … order (UI table/CSV)
+    follow_ups: list[str] = Field(default_factory=list)        # suggested next questions (fixed-tool answers only)

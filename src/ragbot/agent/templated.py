@@ -44,6 +44,19 @@ def _fill(template: str, r: QueryResult, **extra: Any) -> Optional[str]:
         return None   # a template naming a parameter this match did not produce: use the generic text
 
 
+def follow_ups(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "", limit: int = 3) -> list[str]:
+    """The tool's `follow_ups:` questions (config/fixed_tools.yaml), filled with this answer's parameters —
+    a user who asked about TAL next week is offered TAL questions for next week, which stay inside their
+    scope. A template naming a parameter this match did not produce is skipped, and so is the question
+    just asked. Each one is written to reach a fixed tool, so a click answers without a model call."""
+    out: list[str] = []
+    for template in (tool or {}).get("follow_ups") or []:
+        q = _fill(template, r)
+        if q and q.strip().lower() != asked.strip().lower() and q not in out:
+            out.append(q)
+    return out[:limit]
+
+
 def try_template(r: QueryResult, tool: Optional[dict[str, Any]]) -> Optional[str]:
     """The answer text for one fixed-tool result, or None when it should be left to the model."""
     if r.error or r.tool == "generated" or not r.rows or not r.columns:

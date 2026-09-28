@@ -12,8 +12,16 @@
 # answer written with no model call (agent/templated.py). Placeholders: the tool's params,
 # {value} (the single value), {n} (row count). Use nothing else: the text must pass verify().
 
+# `example:` a question that must reach this tool: scripts/check_catalog.py checks the match offline and
+# runs the tool live with the parameters it extracts (--live). `follow_ups:` next questions shown under a
+# fixed-tool answer, filled with its parameters ({factory}, {window}, {eo}, ...); each should reach a
+# fixed tool so a click answers without a model call (tests/test_follow_ups.py checks both).
+
 - name: pcd_history_by_eo
   database: BitopiSplint
+  example: 'PCD history for TAL-22-523-81'
+  follow_ups:
+    - 'What is the status of export order {eo}?'
   description: History of PCD and ship-date changes for one export order.
   answer_list: 'PCD and ship-date history for {eo}: {n} version(s)'
   match: '(?i)\b(pcd|cut\s*date|ship\s*date)\b.*\b(history|change|changes|changed)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b|\bhistory\b.*\b(pcd|ship\s*date)\b.*\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'
@@ -39,6 +47,10 @@
 
 - name: orders_count_by_factory_ship_window
   database: BitopiSplint
+  example: 'How many TAL orders are shipping next week?'
+  follow_ups:
+    - 'Which {factory} orders have a ship date {window}?'
+    - 'Which {factory} orders have a PCD {window}?'
   description: Count of orders with ship date in a date window for one factory.
   answer: '{factory} has {value} order(s) with a ship date {window}'
   match: '(?i)\bhow many\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(ship|shipping|shipment)\b.*\b(this week|next week|next \d+ days)\b'
@@ -52,6 +64,9 @@
 
 - name: ppm_meetings_count_by_factory_window
   database: Production
+  example: 'How many PPM meetings does TAL have next week?'
+  follow_ups:
+    - 'List the PPM meetings for {factory} {window}'
   description: Count of PPM meetings for one factory in a date window.
   answer: '{factory} has {value} PPM meeting(s) {window}'
   match: '(?i)\bhow many\b.*\bppm\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(today|this week|next week|next \d+ days)\b'
@@ -65,6 +80,10 @@
 
 - name: orders_by_factory_pcd_window
   database: BitopiSplint
+  example: 'Which TAL orders have a PCD next week?'
+  follow_ups:
+    - 'How many {factory} orders are shipping {window}?'
+    - 'What are the next PCDs at {factory}?'
   description: Confirmed orders with PCD in a date window for one factory (TAL / RHL / BGL / KTL).
   answer_list: '{n} {factory} order(s) have a PCD {window}'
   match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\bPCD\b.*\b(this week|next week|next \d+ days)\b|\b(this week|next week|next \d+ days)\b.*\bPCD\b.*\b(TAL|RHL|BGL|KTL)\b'
@@ -81,6 +100,10 @@
 
 - name: orders_by_factory_ship_window
   database: BitopiSplint
+  example: 'Which RHL orders have a ship date next week?'
+  follow_ups:
+    - 'Which {factory} orders have a PCD {window}?'
+    - 'How many PPM meetings does {factory} have {window}?'
   description: Orders with ship date in a date window for one factory.
   answer_list: '{n} {factory} order(s) have a ship date {window}'
   match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\b(ship(?:ment|ping|-|\s+)?date|shipping)\b.*\b(this week|next week|next \d+ days)\b'
@@ -97,6 +120,10 @@
 
 - name: ppm_meetings_by_factory_window
   database: Production
+  example: 'PPM meetings for TAL next week'
+  follow_ups:
+    - 'How many PPM meetings does {factory} have {window}?'
+    - 'Which {factory} orders have a PCD {window}?'
   description: PPM meetings for one factory in a date window.
   answer_list: '{n} PPM meeting(s) for {factory} {window}'
   match: '(?i)\bppm(?:\s+meetings?)?\b.*\b(TAL|RHL|BGL|KTL)\b.*\b(today|this week|next week|next \d+ days)\b'
@@ -114,6 +141,10 @@
 # --- added 2026-09-27 from real questions in logs/chat.csv (C7): each used to cost a SQL-generation call
 - name: upcoming_pcds_by_factory
   database: BitopiSplint
+  example: 'What are the next PCDs at TAL?'
+  follow_ups:
+    - 'Which {factory} orders have a PCD next week?'
+    - 'How many {factory} orders are shipping next week?'
   description: The next PCDs from today for one factory ("TAL next PCD").
   answer_list: 'Next PCDs at {factory}: {n} order(s)'
   match: '(?i)\b(TAL|RHL|BGL|KTL|CKDL)\b.*\b(?:upcoming|next|latest|nearest)\s+pcds?\b|\b(?:upcoming|next|latest|nearest)\s+pcds?\b.*\b(TAL|RHL|BGL|KTL|CKDL)\b'
@@ -128,6 +159,9 @@
 
 - name: upcoming_pcds_by_buyer
   database: BitopiSplint
+  example: 'H&M upcoming PCDs'
+  follow_ups:
+    - 'What are the upcoming PCDs?'
   description: The next PCDs from today for one buyer ("H&M upcoming PCD", "next PCDs for Zara").
   answer_list: 'Next PCDs for {buyer}: {n} order(s)'
   # the buyer is a capitalised word next to "upcoming/next PCD"; factory codes are not buyers
@@ -143,6 +177,10 @@
 
 - name: upcoming_pcds
   database: BitopiSplint
+  example: 'What are the upcoming PCDs?'
+  follow_ups:
+    - 'How many export orders were cancelled this month?'
+    - 'give me buyer names'
   description: The next PCDs from today across all buyers ("next PCD", "upcoming PCDs", "latest PCD").
   answer_list: 'The next {n} PCD(s) from today'
   match: '(?i)\b(?:upcoming|next|latest|nearest)\s+pcds?\b|\bpcds?\s+(?:coming\s+up|upcoming)\b'
@@ -154,6 +192,9 @@
 
 - name: buyer_list
   database: BitopiSplint
+  example: 'give me buyer names'
+  follow_ups:
+    - 'What are the upcoming PCDs?'
   description: Names of the buyers that have export orders ("give me buyer names", "list buyers").
   answer_list: '{n} buyer(s) with export orders'
   # not when an order code is present: "buyer name for TAL-25-1493-215" is eo_by_id
@@ -166,6 +207,9 @@
 
 - name: cancelled_orders_count_window
   database: BitopiSplint
+  example: 'How many export orders were cancelled this month?'
+  follow_ups:
+    - 'List the export orders cancelled {window}'
   description: Count of export orders cancelled in a date window.
   answer: '{value} export order(s) were cancelled {window}'
   match: '(?i)\bhow many\b.*\bcancel(?:l?ed|lations?)?\b.*\b(today|this week|this month|next week|last \d+ days)\b'
@@ -178,6 +222,9 @@
 
 - name: cancelled_orders_window
   database: BitopiSplint
+  example: 'list the cancelled orders this month'
+  follow_ups:
+    - 'How many export orders were cancelled {window}?'
   description: Export orders cancelled in a date window, newest first.
   answer_list: '{n} export order(s) cancelled {window}'
   match: '(?i)\bcancel(?:l?ed|lations?)?\b.*\b(today|this week|this month|last \d+ days)\b|\b(today|this week|this month|last \d+ days)\b.*\bcancel(?:l?ed|lations?)?\b'
@@ -191,6 +238,7 @@
 
 - name: orders_by_fileref
   database: BitopiSplint
+  example: 'Which orders are under file ref "121394 SS17"?'
   description: >
     All export orders under a file reference. FileRefNo is free text in this data (e.g.
     "121394 SS17", "FKS27DDRAYE//KIABI") rather than a structured code, so this only fires when
@@ -209,6 +257,7 @@
 
 - name: eo_by_po
   database: BitopiSplint
+  example: 'What is the status of PO 594520-9192?'
   description: PCD, ship date, buyer and status for an export order by buyer PO number.
   answer_list: '{n} export order(s) for PO {po}'
   # \b after PO and a digit in the value: without them "IT policy" matched as PO 'licy' (2026-09-27)
@@ -226,6 +275,9 @@
 
 - name: eo_by_id
   database: BitopiSplint
+  example: 'What is the PCD of TAL-25-1493-215?'
+  follow_ups:
+    - 'Show the PCD history for {eo}'
   description: PCD, ship date, buyer and status for one export order (by ExportOrderID like TAL-17-382-1).
   answer_list: 'Export order {eo}'
   match: '(?i)\b([A-Z]{2,4}-\d{2,4}-\d{2,5}(?:-\d+)?)\b'

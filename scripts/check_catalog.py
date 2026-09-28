@@ -1,5 +1,6 @@
-"""Validate the catalog + fixed tools. Offline by default; --live also runs each view's definition
-and every fixed tool's example against the real database (read-only, rolls back).
+"""Validate the catalog + fixed tools. Offline by default (including: every fixed tool's `example:`
+question reaches that tool); --live also runs each view's definition and every fixed tool, with the
+parameters its example produces, against the real database (read-only, rolls back).
 Usage: python scripts/check_catalog.py [--live]
 """
 import argparse, re, _path  # noqa: F401
@@ -49,6 +50,17 @@ def offline(cats) -> int:
         if not views:
             print(f"[offline] fixed tool {tool['name']}: no catalog view referenced")
             problems += 1
+        # the example question must reach this tool: tools are tried in file order and the first match
+        # wins, so a broader tool placed earlier can shadow this one
+        if not tool.get("example"):
+            print(f"[offline] fixed tool {tool['name']}: no example question")
+            problems += 1
+        else:
+            hit = match_fixed_tool(tool["example"], tools)
+            if hit is None or hit[0]["name"] != tool["name"]:
+                print(f"[offline] fixed tool {tool['name']}: its example reaches "
+                      f"{hit[0]['name'] if hit else 'no fixed tool'}")
+                problems += 1
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "
           f"{len(tools)} fixed tools — {problems} problem(s)")
     return problems
@@ -75,8 +87,9 @@ def live(cats) -> int:
                 problems += 1
     tools = load_fixed_tools()
     for tool in tools:
-        params = tool.get("example_params")
-        if not params or tool["database"] not in cats:
+        hit = match_fixed_tool(tool.get("example", ""), tools) if tool.get("example") else None
+        params = hit[1] if hit and hit[0]["name"] == tool["name"] else tool.get("example_params")
+        if params is None or tool["database"] not in cats:      # {} is fine: a tool without parameters
             continue
         try:
             qr = run_fixed_tool(tool, params, cats, user="check_catalog", scope=Scope.unrestricted())

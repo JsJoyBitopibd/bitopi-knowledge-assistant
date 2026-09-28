@@ -221,8 +221,20 @@ def _templated_answer(out: Answer, result: QueryResult, nf: str) -> bool:
     out.text, out.sources_text, out.not_found = text, block, False
     out.results = [result]
     out.references = [x for x in refs if x.marker in set(_MARK.findall(text))]
+    out.follow_ups = _suggest([result], out.question)
     out.warnings.append("templated answer (no model call)")
     return True
+
+
+def _suggest(results: list[QueryResult], question: str) -> list[str]:
+    """Follow-up questions for the first fixed-tool result (config/fixed_tools.yaml `follow_ups:`)."""
+    from ..data.tools import load_fixed_tools
+    from .templated import follow_ups
+    by_name = {t.get("name"): t for t in load_fixed_tools()}
+    for r in results:
+        if r.tool in by_name:
+            return follow_ups(r, by_name[r.tool], question)
+    return []
 
 
 def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chunks: list[Chunk],
@@ -275,6 +287,7 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
                 out.text = text
                 out.references = [x for x in refs if x.marker in used]
                 out.results = list(results)   # index i is [D{i+1}], matching sources_block
+                out.follow_ups = _suggest(results, question)
             return
         out.warnings += [f"attempt {attempt + 1}: {p}" for p in problems]
         # Record every voided draft: if replaces exceed ~10% of answers, the plan (docs/ROADMAP.md B2)
