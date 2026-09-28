@@ -129,3 +129,14 @@ def test_a_provider_failure_is_still_logged_with_its_request(rows, monkeypatch):
     a = orch.answer("Which form approves a PCD change?", scope=Scope.unrestricted())
     assert a.error_kind == "quota" and a.request_id and "total" in a.timings
     assert rows["chat.csv"][0]["request_id"] == a.request_id
+
+
+def test_importing_the_llm_package_alone_loads_the_env_file():
+    """I1 moved the only config import out of llm/base.py, so `from ragbot.llm import get_chat` read an
+    unset LLM_MODEL (the request went out with no model: 400) unless something else loaded .env first."""
+    import subprocess, sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    out = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); import ragbot.llm; "
+                          "print('ragbot.config' in sys.modules)"], cwd=root, capture_output=True, text=True)
+    assert out.stdout.strip() == "True", out.stderr[-500:]

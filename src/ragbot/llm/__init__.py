@@ -10,6 +10,7 @@ import os
 from functools import lru_cache
 from typing import Any, Optional
 
+from .. import config  # noqa: F401  loads .env: every LLM_* value below is read from os.environ
 from .base import ChatModel, ChatReply
 
 __all__ = ["ChatModel", "ChatReply", "get_chat", "get_small_chat"]
