@@ -84,11 +84,13 @@ with st.status("Loading models…", expanded=False) as _status:
 
 
 @st.cache_data(ttl=300)
-def _categories(_version: int, allowed: tuple) -> list[str]:
+def _categories(version: int, allowed: tuple) -> list[str]:
     """Categories of the documents this user may see (for the filter only; the search itself applies the
-    scope). _version (ingest_state.json mtime) keys the cache so a newly ingested category appears here;
-    `allowed` is the user's document filter as a tuple of (field, values)."""
-    sql, args = "SELECT DISTINCT category FROM document WHERE status='ok'", []
+    scope). `version` (ingest_state.json mtime) keys the cache so a newly ingested category appears here
+    (no leading underscore: st.cache_data leaves such arguments out of the key); `allowed` is the user's
+    document filter as a tuple of (field, values)."""
+    # doc_hash set = an indexed version exists (also when its latest update failed and the old one is kept)
+    sql, args = "SELECT DISTINCT category FROM document WHERE doc_hash IS NOT NULL", []
     for field, values in allowed:
         sql += f" AND {field} IN ({','.join('?' * len(values))})"
         args += list(values)
@@ -100,28 +102,61 @@ def _categories(_version: int, allowed: tuple) -> list[str]:
         return ["General"]
 
 
-@st.cache_data(ttl=300)
-def _index_caption(_version: int) -> str:
-    import json
+def _scan_version() -> int:
     try:
-        d = json.loads((s.path("index_dir") / "ingest_state.json").read_text(encoding="utf-8"))
-        if d.get("alert"):      # an update refused because PDFs went missing (share offline?); IT sees it here
-            return (f"⚠ Index not updated at {d.get('finished_at', '?')}: PDF files are missing from the "
-                    f"document folder (see logs/ingest.log) · {d.get('documents', '?')} documents")
-        return f"Index updated {d.get('finished_at', '?')} · {d.get('documents', '?')} documents"
+        return (s.path("index_dir") / "last_scan.json").stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _when(iso: str | None) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%d %b %Y %H:%M")
+    except (TypeError, ValueError):
+        return "?"
+
+
+@st.cache_data(ttl=300)
+def _index_caption(version: int, scan_version: int, admin: bool) -> str:
+    """Index status for the sidebar; files that could not be indexed are counted for administrators."""
+    import json
+    idx = s.path("index_dir")
+    try:
+        d = json.loads((idx / "ingest_state.json").read_text(encoding="utf-8"))
     except Exception:
         return "No documents indexed yet. Add PDFs to data/pdfs/<Category>/."
+    try:
+        scan = json.loads((idx / "last_scan.json").read_text(encoding="utf-8"))
+    except Exception:
+        scan = {}                                   # an index built before H3
+    alert = scan.get("alert", d.get("alert"))
+    if alert:      # an update refused because PDFs went missing (share offline?); IT sees it here
+        return (f"⚠ Index not updated at {_when(scan.get('scanned_at', d.get('finished_at')))}: PDF files are missing "
+                f"from the document folder (see logs/ingest.log) · {d.get('documents', '?')} documents")
+    parts = [f"Index updated {_when(d.get('index_updated_at', d.get('finished_at')))}",
+             f"{scan.get('documents', d.get('documents', '?'))} documents"]
+    if scan.get("scanned_at"):
+        parts.append(f"folder checked {_when(scan['scanned_at'])}")
+    problems = scan.get("failed_total", 0) + len(scan.get("duplicates", []))
+    if admin and problems:
+        parts.append(f"{problems} file(s) failed or skipped (scripts/inspect.py --failed)")
+    if admin and scan.get("pending_removal"):
+        parts.append(f"{scan['pending_removal']} missing, removed at the next check")
+    return " · ".join(parts)
 
 
 @st.cache_data(ttl=600)
-def _pdf_bytes(source: str, _version: int) -> bytes | None:
-    """Read a source PDF's bytes for the download button, cached so repeated renders don't re-read."""
-    for p in s.path("pdf_root").rglob(source):
-        try:
-            return p.read_bytes()
-        except OSError:
-            return None
-    return None
+def _pdf_bytes(source: str, version: int) -> bytes | None:
+    """The indexed PDF's bytes for the download button, cached so repeated renders don't re-read. Read from
+    the exact path the index recorded, never found by name: another folder may hold a file of the same name
+    that was not indexed (H1) and that this user may not be allowed to see."""
+    rel = Registry().indexed_path(source)
+    if not rel:
+        return None                                 # not indexed since H3: offered again after the next pass
+    try:
+        return (s.path("pdf_root") / rel).read_bytes()
+    except OSError:
+        return None
 
 
 ver = index_version()
@@ -145,7 +180,7 @@ with st.sidebar:
     if st.button("Clear chat"):
         st.session_state.history = []
         st.rerun()
-    st.caption(_index_caption(ver))
+    st.caption(_index_caption(ver, _scan_version(), scope.is_admin))
     if scope.is_admin:
         # PRD FR-4.8: a user's effective scope and the audit trail of what they asked and were shown
         with st.expander("Access and audit (admin)"):

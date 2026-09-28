@@ -109,7 +109,13 @@ def test_invalid_meta_yaml_fails_new_files_and_keeps_indexed_ones(tmp_path, monk
     r = run()
     assert r["failed"] == 2 and r["added"] == 0
     status = dict(reg.db.execute("SELECT source, status FROM document"))
-    assert status == {"old.pdf": "ok", "new.pdf": "failed"} and "old.pdf" in store.sources()
+    # both marked failed; the indexed one keeps its version (and its old tags) in every store
+    assert status == {"old.pdf": "failed", "new.pdf": "failed"} and "old.pdf" in store.sources()
+    assert reg.known_hash("old.pdf") and not reg.known_hash("new.pdf")
+    (root / "QA" / "meta.yaml").write_text("confidentiality: restricted\n", encoding="utf-8")   # fixed
+    r = run()
+    assert r["failed"] == 0 and r["added"] == 1 and r["retagged"] == 1
+    assert dict(reg.db.execute("SELECT source, status FROM document")) == {"old.pdf": "ok", "new.pdf": "ok"}
 
 
 def test_registry_from_before_f1_is_upgraded_and_retagged(tmp_path, monkeypatch):

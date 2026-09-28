@@ -9,11 +9,16 @@ if not root.is_dir() or next(root.rglob("*.pdf"), None) is None:
     # Checked before deleting anything: with the share offline, a rebuild would leave an empty index.
     print(f"No PDFs found under {root}: the index was not deleted (is the share mounted?)"); sys.exit(2)
 idx = settings().path("index_dir")
-for p in ("chroma", "registry.db", "bm25.pkl"):
-    target = idx / p
-    if target.is_dir(): shutil.rmtree(target)
-    elif target.exists(): target.unlink()
-from ragbot.store import get_store
-get_store.cache_clear()   # the cached client still points at the directory just deleted
-from ragbot.ingest.pipeline import ingest_folder
-print(ingest_folder())
+from ragbot.ingest.lock import IndexLocked, index_lock
+try:
+    with index_lock():                  # not while the worker or ingest.py is writing the index
+        for p in ("chroma", "registry.db", "bm25.pkl"):
+            target = idx / p
+            if target.is_dir(): shutil.rmtree(target)
+            elif target.exists(): target.unlink()
+        from ragbot.store import get_store
+        get_store.cache_clear()   # the cached client still points at the directory just deleted
+        from ragbot.ingest.pipeline import ingest_folder
+        print(ingest_folder())
+except IndexLocked as e:
+    print(f"{e}: the index was not deleted; try again when it has finished"); sys.exit(3)

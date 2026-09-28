@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ import pymupdf
 from ..config import log_dir, settings
 from ..embed import EMBED_MODEL, get_embedder
 from ..models import Chunk
-from ..store import Registry, get_store, text_hash
+from ..store import TAG_FIELDS, Registry, get_store, text_hash
 from .chunker import chunk_page
 from .meta import attributes_for
 from .pdf_text import clean_pages
@@ -39,6 +40,11 @@ def sha256(path: Path) -> str:
 def category_for(path: Path, root: Path) -> str:
     rel = path.relative_to(root)
     return rel.parts[0] if len(rel.parts) > 1 else "General"
+
+
+def _rel(path: Path, root: Path) -> str:
+    """The file's path below pdf_root with forward slashes, as stored in document.rel_path."""
+    return path.relative_to(root).as_posix()
 
 
 # "Bitopi_IT_SOP_Manual_v2" -> base "Bitopi_IT_SOP_Manual", revision 2. Also matches "Policy Rev3",
@@ -89,7 +95,13 @@ def chunks_for(path: Path, root: Path, doc_hash: str,
     file's access attributes (ingest/meta.py), computed here when not given."""
     s = settings()
     attrs = attrs if attrs is not None else attributes_for(path, root)
-    doc = pymupdf.open(path)
+    # Closed explicitly: on Windows an open handle stops anyone replacing or deleting the file on the share.
+    with pymupdf.open(path) as doc:
+        yield from _chunks_of(doc, path, root, doc_hash, attrs, s)
+
+
+def _chunks_of(doc: pymupdf.Document, path: Path, root: Path, doc_hash: str, attrs: dict[str, str],
+               s) -> Iterator[tuple[Chunk, dict]]:
     if doc.is_encrypted and not doc.authenticate(""):
         raise ValueError("encrypted PDF")
     pages, ocr_pages, toc_pages = clean_pages(doc, s["ingest.ocr_min_text_chars"], s["ingest.header_footer_min_share"])
@@ -130,19 +142,62 @@ def embed_with_cache(texts: list[str], reg: Registry, emb, counts: dict) -> list
     return [have[h] for h in hashes]
 
 
+MAX_ATTEMPTS = 3          # a file that fails this often is left alone until it changes (PRD FR-2.14)
+
+
+class _LazyEmbedder:
+    """Loads the embedding model only when a chunk actually needs embedding: a pass that finds nothing new
+    (most worker passes) no longer loads 2 GB and contacts the model hub."""
+
+    def __init__(self):
+        self._emb = None
+
+    def embed(self, texts):
+        if self._emb is None:
+            self._emb = get_embedder()
+        return self._emb.embed(texts)
+
+
+def _write_json(path: Path, data: dict) -> None:
+    """Atomic: a reader (the app) sees the old file or the new one, never half of one."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def _finish(summary: dict, reg: Registry, index_dir: Path, root: Path, started: datetime) -> dict:
-    """Add the registry totals to a run's summary and write ingest_state.json (the app reads it)."""
+    """Add the registry totals to a run's summary. ingest_state.json is rewritten only when the index
+    changed or an alert started or ended: its mtime is the index version (index_version.py), and a new one
+    makes the app drop its caches. last_scan.json is rewritten on every pass, for the app's status line."""
     stats = reg.stats()
     stats["failed_total"] = stats.pop("failed")       # registry-wide; summary["failed"] is this run's count
     summary = {**summary, **stats}
-    state = {"started_at": started.isoformat(timespec="seconds"), "finished_at": datetime.now().isoformat(timespec="seconds"),
-             "embed_model": EMBED_MODEL, "pdf_root": str(root), **summary}
-    (index_dir / "ingest_state.json").write_text(json.dumps(state, indent=1), encoding="utf-8")
+    now = datetime.now().isoformat(timespec="seconds")
+    state_file = index_dir / "ingest_state.json"
+    prev = _read_json(state_file)
+    changed = any(summary.get(k) for k in ("added", "updated", "removed", "retagged", "superseded_changed"))
+    if changed or prev is None or prev.get("alert", "") != summary.get("alert", ""):
+        updated_at = now if changed or prev is None else prev.get("index_updated_at", prev.get("finished_at", now))
+        _write_json(state_file, {"started_at": started.isoformat(timespec="seconds"), "finished_at": now,
+                                 "index_updated_at": updated_at, "embed_model": EMBED_MODEL, "pdf_root": str(root),
+                                 **summary})
+    _write_json(index_dir / "last_scan.json", {
+        "scanned_at": now, "changed": changed, "alert": summary.get("alert", ""),
+        **{k: summary.get(k, 0) for k in ("documents", "failed", "failed_total", "retry", "pending_removal")},
+        "duplicates": summary.get("duplicates", [])})
     return summary
 
 
 def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = None,
-                  index_dir: Path | None = None, confirm_removals: bool = False) -> dict:
+                  index_dir: Path | None = None, confirm_removals: bool = False,
+                  redo: set[str] | frozenset[str] = frozenset()) -> dict:
     """store / reg / index_dir default to the app's index; tests pass a temporary one.
 
     Removals are cautious (PRD FR-2.14): a known file leaves the index only when two consecutive scans
@@ -150,13 +205,14 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     `ingest.removal_alert_fraction` of the known ones (and at least `ingest.removal_alert_min_files`),
     nothing is deleted and the summary carries an "alert" — an offline share or a wrong mount must not
     empty the index. confirm_removals=True (scripts/ingest.py --confirm-removals) deletes every file
-    missing now, for a deliberate bulk removal; a missing or empty folder is refused even then."""
+    missing now, for a deliberate bulk removal; a missing or empty folder is refused even then.
+    `redo`: file names to index again although they did not change (the repair for inspect.py --check)."""
     s = settings()
     root = root or s.path("pdf_root")
     index_dir = index_dir or s.path("index_dir")
     store, reg = store or get_store(), reg or Registry()
     started = datetime.now()
-    added = updated = removed = failed = pending_removal = retagged = 0
+    added = updated = removed = failed = pending_removal = retagged = retry = 0
     known_before = reg.all_sources()
     meta_cache: dict[Path, dict] = {}                          # meta.yaml files read once per run
     seen: set[str] = set()
@@ -169,8 +225,17 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
         log.error(alert)
         return _finish({"added": 0, "updated": 0, "removed": 0, "pending_removal": 0, "retagged": 0, "failed": 0,
                         "alert": alert}, reg, index_dir, root, started)
-    emb = get_embedder()
+    emb = _LazyEmbedder()
     batch = s["ingest.embed_batch_size"]
+    run_id, interrupted = reg.start_run(started.isoformat(timespec="seconds"))
+    for when in interrupted:
+        log.warning("the ingest run started %s did not finish (crash or kill); resuming", when)
+    # A document is embedded in full before its old chunks are touched, and marked dirty while the stores
+    # are rewritten; a document left dirty (the process died mid-write, or a store failed) is written again.
+    dirty = reg.dirty_sources()
+    for source in sorted(dirty):
+        log.warning("%s: its last write to the index did not finish; writing it again", source)
+    redo = set(redo) | dirty
     seeded = reg.seed_embedding_cache(store, EMBED_MODEL)   # index built before E3: reuse its vectors
     if seeded:
         log.info("embedding cache seeded from %d existing vectors (no re-embedding)", seeded)
@@ -179,67 +244,106 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
         log.info("keyword index (chunk_fts) seeded with %d chunks", fts_seeded)
     touched: set[str] = set()                                  # sources whose chunks were rewritten this run
 
-    for path in sorted(root.rglob("*.pdf")):
+    # H1: documents are keyed by file name (chunk ids too), so two PDFs with the same name in different
+    # folders would overwrite each other. The copy already indexed wins, else the first by path; the others
+    # are skipped and reported (inspect.py --failed) until one of them is renamed.
+    by_name: dict[str, list[Path]] = {}
+    for p in sorted(root.rglob("*.pdf")):
+        by_name.setdefault(p.name, []).append(p)
+    duplicates: list[str] = []
+    chosen: list[Path] = []
+    for name, paths in by_name.items():
+        if len(paths) > 1:
+            where = reg.indexed_path(name)
+            row = reg.db.execute("SELECT category FROM document WHERE source=?", (name,)).fetchone()
+            keep = next((p for p in paths if where and _rel(p, root) == where), None) or \
+                next((p for p in paths if row and category_for(p, root) == row[0]), paths[0])
+            for p in paths:
+                if p is not keep:
+                    duplicates.append(_rel(p, root))
+                    log.error("SKIPPED %s: a file with the same name is indexed from %s; rename one of them",
+                              _rel(p, root), _rel(keep, root))
+        else:
+            keep = paths[0]
+        chosen.append(keep)
+
+    for path in sorted(chosen):
         seen.add(path.name)
-        known = reg.known_hash(path.name)
+        row = reg.document_row(path.name) or {}               # one read per file; writes only on a change
+        known = row.get("doc_hash")
+        was = (row.get("rel_path"), row.get("file_size"), row.get("file_mtime"))
         try:
-            h = sha256(path)
-        except OSError as e:                                   # locked, no permission, share hiccup
+            st = path.stat()
+            stamp = (_rel(path, root), st.st_size, st.st_mtime_ns)
+            # same place, size and mtime as when the indexed version was hashed: unchanged, not read again
+            h = known if known and was == stamp and path.name not in redo else sha256(path)
+        except OSError as e:                                   # locked, no permission, share hiccup: next pass
             failed += 1
-            if known is None:
-                reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=None,
-                                    status="failed", error=f"cannot read the file: {e.__class__.__name__}: {e}"[:500],
-                                    ingested_at=datetime.now().isoformat(timespec="minutes"))
-            log.error("FAILED %s: cannot read the file (%s)%s", path.name, e,
+            reg.record_failure(path.name, path.stem, category_for(path, root),
+                               f"cannot read the file: {e.__class__.__name__}: {e}")
+            log.error("FAILED %s: cannot read the file (%s)%s", path.name, str(e),
                       "; the indexed version is kept" if known else "")
             continue
         try:
             attrs = attributes_for(path, root, meta_cache)
         except ValueError as e:                                # invalid meta.yaml: never index with a guess
             failed += 1
-            if known is None:
-                reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=None,
-                                    status="failed", error=str(e)[:500], ingested_at=datetime.now().isoformat(timespec="minutes"))
-            log.error("FAILED %s: %s%s", path.name, e, "; the indexed version is kept" if known else "")
+            reg.record_failure(path.name, path.stem, category_for(path, root), str(e))   # retried until fixed
+            log.error("FAILED %s: %s%s", path.name, str(e), "; the indexed version is kept" if known else "")
             continue
-        if known == h:
-            # Same content; its access attributes may still have changed (a moved file, an edited meta.yaml,
-            # or a document indexed before F1): retag it in place, nothing is re-embedded.
-            if reg.document_attributes(path.name) != attrs:
+        if known == h and path.name not in redo:
+            if row.get("status") == "failed" and reg.clear_failure(path.name):
+                log.info("recovered: %s (the indexed version is current again)", path.name)
+            if was != stamp:                                     # moved, touched, or indexed before H3
+                reg.set_stamp(path.name, stamp)
+            # Same content; its category and access attributes may still have changed (a moved file, an
+            # edited meta.yaml, or a document indexed before F1): retag it in place, nothing is re-embedded.
+            tags = {"category": category_for(path, root), **attrs}
+            if {k: row.get(k) for k in TAG_FIELDS} != tags:
                 try:
                     # The vector store first: if it fails, the registry still holds the old tags, so the
                     # next pass sees the difference and retries. (Registry first left Chroma with the old,
                     # broader tags for good — the dense search filters on those.)
-                    store.set_attributes(path.name, attrs)
-                    reg.retag(path.name, attrs)
+                    store.set_attributes(path.name, tags)
+                    reg.retag(path.name, tags)
                 except Exception as e:
-                    failed += 1
-                    log.error("FAILED to retag %s: %s (retried on the next pass)", path.name, e)
+                    failed += 1; retry += 1
+                    log.error("FAILED to retag %s: %s (retried on the next pass)", path.name, str(e))
                     continue
                 retagged += 1
-                log.info("retagged: %s (%s)", path.name, ", ".join(f"{k}={v}" for k, v in attrs.items()))
+                log.info("retagged: %s (%s)", path.name, ", ".join(f"{k}={v}" for k, v in tags.items()))
             continue
+        if reg.failed_attempts(path.name, h) >= MAX_ATTEMPTS and path.name not in redo:
+            continue                      # failed MAX_ATTEMPTS times: listed as failed until the file changes
         try:
-            store.delete_by_source(path.name)
-            pending: list[Chunk] = []
+            # Parse and embed everything first; only then replace the document in the stores, so a failure
+            # (corrupt page, OCR error, embedding error) leaves the indexed version whole (PRD FR-2.14).
             stats: dict = {}
             all_chunks: list[Chunk] = []
+            vectors: list[list[float]] = []
             doc_counts = {"embedded": 0, "cached": 0}
+            pending: list[Chunk] = []
             for chunk, stats in chunks_for(path, root, h, attrs):
                 pending.append(chunk); all_chunks.append(chunk)
                 if len(pending) >= batch:
-                    store.upsert(pending, embed_with_cache([c.text for c in pending], reg, emb, doc_counts))
+                    vectors += embed_with_cache([c.text for c in pending], reg, emb, doc_counts)
                     pending = []
             if pending:
-                store.upsert(pending, embed_with_cache([c.text for c in pending], reg, emb, doc_counts))
-            counts["embedded"] += doc_counts["embedded"]; counts["cached"] += doc_counts["cached"]
+                vectors += embed_with_cache([c.text for c in pending], reg, emb, doc_counts)
             if not all_chunks:
                 raise ValueError("zero chunks (no text layer and OCR unavailable?)")
+            reg.mark_dirty(path.name)
+            store.delete_by_source(path.name)
+            for i in range(0, len(all_chunks), batch):
+                store.upsert(all_chunks[i:i + batch], vectors[i:i + batch])
             reg.replace_chunks(path.name, all_chunks)
             touched.add(path.name)
+            counts["embedded"] += doc_counts["embedded"]; counts["cached"] += doc_counts["cached"]
+            # the hash last: a crash before this line makes the next pass redo the document
             reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=h,
                                 pages=stats["pages"], chunks=stats["chunks"], tables_=stats["tables"],
-                                ocr_pages=stats["ocr_pages"], status="ok", error=None,
+                                ocr_pages=stats["ocr_pages"], status="ok", error=None, failed_hash=None, attempts=0,
+                                rel_path=stamp[0], file_size=stamp[1], file_mtime=stamp[2], dirty=0,
                                 ingested_at=datetime.now().isoformat(timespec="minutes"), **attrs)
             if known is None: added += 1
             else: updated += 1
@@ -248,10 +352,11 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
                      stats["ocr_pages"], stats.get("toc_pages", 0), doc_counts["embedded"], doc_counts["cached"])
         except Exception as e:
             failed += 1
-            reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=h,
-                                status="failed", error=f"{e.__class__.__name__}: {e}"[:500],
-                                ingested_at=datetime.now().isoformat(timespec="minutes"))
-            log.error("FAILED %s: %s", path.name, e)
+            n = reg.record_failure(path.name, path.stem, category_for(path, root), f"{e.__class__.__name__}: {e}", h)
+            retry += n < MAX_ATTEMPTS
+            log.error("FAILED %s: %s (attempt %d of %d%s%s)", path.name, str(e), n, MAX_ATTEMPTS,
+                      "; the indexed version is kept" if known else "",
+                      "; not retried until the file changes" if n >= MAX_ATTEMPTS else "")
 
     missing = reg.all_sources() - seen
     limit = max(int(s.get("ingest.removal_alert_min_files", 3)),
@@ -296,13 +401,13 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
 
     pruned = reg.prune_embedding_cache() if (updated or removed) else 0
     # No keyword-index rebuild: chunk_fts is maintained per document by the registry (Phase D1).
-    reg.db.execute("INSERT INTO ingest_run(started_at,finished_at,added,updated,removed,failed) VALUES(?,?,?,?,?,?)",
-                   (started.isoformat(timespec="seconds"), datetime.now().isoformat(timespec="seconds"),
-                    added, updated, removed, failed))
-    reg.db.commit()
+    reg.finish_run(run_id, datetime.now().isoformat(timespec="seconds"), added, updated, removed, failed)
     summary = {"added": added, "updated": updated, "removed": removed, "pending_removal": pending_removal,
-               "retagged": retagged, "failed": failed, "superseded": len(old), "embedded": counts["embedded"],
-               "cached": counts["cached"], "cache_pruned": pruned}
+               "retagged": retagged, "failed": failed + len(duplicates), "retry": retry, "superseded": len(old),
+               "superseded_changed": superseded_now, "embedded": counts["embedded"], "cached": counts["cached"],
+               "cache_pruned": pruned}
+    if duplicates:
+        summary["duplicates"] = duplicates
     if alert:
         summary["alert"] = alert
     return _finish(summary, reg, index_dir, root, started)

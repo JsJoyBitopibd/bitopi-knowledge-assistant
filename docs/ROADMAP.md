@@ -381,6 +381,31 @@ Paid key in `.env` (PRD FR-8.9: free-tier keys are never used with company data)
 - **H4 services.** README runbook for two Task Scheduler entries (worker `--once` every 10 min,
   `refresh_aggregates.py` nightly) and the docker-compose services; the user creates them.
 
+**As built (2026-09-28) — where it differs from the design above:**
+
+- A skipped same-name file cannot be a `failed` row (the document table is keyed by the file name
+  it shares with the indexed copy): it is listed in the run summary and `last_scan.json`, which
+  `inspect.py --failed` and the admin sidebar line read. The copy already indexed is kept, recognised
+  by its recorded path (`document.rel_path`).
+- `document.rel_path` also fixes a leak path: the PDF download button found the file by name
+  (`rglob`) and could serve the skipped copy, from a folder the user may not be allowed to see. It now
+  reads the exact path that was indexed.
+- `doc_hash` now means "the version that is indexed"; a failed attempt goes to `failed_hash` +
+  `attempts`, so a failed update keeps the old version searchable and is retried (3 tries per version).
+  A `dirty` flag is set while a document's chunks are replaced and cleared by the final document write:
+  a pass killed mid-write, even a `--redo` of an unchanged file, is rewritten by the next pass
+  (verified with hard kills of a real rewrite). `ingest.py --redo` is the repair for `--check`.
+- Unchanged files are no longer read: same path, size and mtime as when the indexed version was hashed
+  → skipped (the CLAUDE.md M7 rule). With the lazily loaded embedding model, a pass that finds nothing
+  new takes seconds.
+- The lock's holder refreshes its mtime every minute, so a lock is abandoned after 15 minutes without
+  a refresh (any host) or at once when its process is gone (same host). A long bulk ingest is never
+  taken over, and a process removes only a lock it holds.
+- Found on the way: a PDF that failed to open stayed locked while the logged exception lived (Windows:
+  nobody could replace or delete it); a moved file's category was never updated; the sidebar's
+  `st.cache_data` functions ignored the index version (arguments starting with `_` are left out of the
+  key).
+
 ## Phase I — Speed (PLAN M8) → v1.9.0
 
 - **I1 measure.** `Answer.timings` and `Answer.request_id`; `perf_counter()` around rewrite, route,

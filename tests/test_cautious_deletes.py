@@ -1,6 +1,7 @@
 """H0 (PRD FR-2.14): an empty or offline PDF folder must never empty the index. A missing file is
 removed only after two consecutive scans miss it; a mass disappearance removes nothing and alerts."""
 import json
+import os
 import sqlite3
 
 import pytest
@@ -99,6 +100,8 @@ def test_unreadable_file_does_not_abort_the_run(index, monkeypatch):
     files("alpha", "beta")
     run()
     files("gamma", "delta")
+    alpha = root / "SOP" / "alpha.pdf"
+    os.utime(alpha, ns=(alpha.stat().st_atime_ns, alpha.stat().st_mtime_ns + 10**9))   # being rewritten: re-read
     real = pipeline.sha256
 
     def flaky(path):
@@ -111,7 +114,12 @@ def test_unreadable_file_does_not_abort_the_run(index, monkeypatch):
     assert r["failed"] == 2 and r["added"] == 1             # delta still indexed
     assert "alpha.pdf" in store.sources()                   # the known file keeps its indexed version
     status = dict(reg.db.execute("SELECT source, status FROM document"))
-    assert status["alpha.pdf"] == "ok" and status["gamma.pdf"] == "failed" and status["delta.pdf"] == "ok"
+    assert status["alpha.pdf"] == "failed" and status["gamma.pdf"] == "failed" and status["delta.pdf"] == "ok"
+    assert reg.known_hash("alpha.pdf") and not reg.known_hash("gamma.pdf")
+    monkeypatch.setattr(pipeline, "sha256", real)           # the lock is gone
+    r = run()
+    assert r["failed"] == 0 and r["added"] == 1 and r["updated"] == 0    # gamma added; alpha had not changed
+    assert set(dict(reg.db.execute("SELECT source, status FROM document")).values()) == {"ok"}
 
 
 def test_failed_counts_this_run_not_the_registry_total(index):
@@ -120,8 +128,8 @@ def test_failed_counts_this_run_not_the_registry_total(index):
     (root / "SOP" / "broken.pdf").write_bytes(b"not a pdf at all")
     r1 = run()
     assert r1["failed"] == 1 and r1["failed_total"] == 1
-    r2 = run()                                              # unchanged broken file is skipped (same hash)
-    assert r2["failed"] == 0 and r2["failed_total"] == 1
+    r2 = run()                                              # retried (H3): still one failed file in total
+    assert r2["failed"] == 1 and r2["failed_total"] == 1
 
 
 def test_registry_from_before_h0_gets_the_counter(tmp_path):

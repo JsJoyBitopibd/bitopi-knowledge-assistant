@@ -94,6 +94,19 @@ scope; admins can look up a user's scope and download their log in the sidebar (
   `ingest_worker.py --once` / `ingest.py` exit with code 2 — check the share or mount. For a deliberate
   bulk removal run `python scripts/ingest.py --confirm-removals` once. Thresholds:
   `ingest.removal_alert_fraction` / `removal_alert_min_files` in `config/settings.yaml`.
+- **Same file name in two folders**: documents are keyed by file name, so a PDF whose name is already
+  indexed from another folder is skipped, not indexed. `python scripts/inspect.py --failed` and the
+  administrator's sidebar line list it; rename one of the two. If the indexed copy is deleted, the other
+  takes its place at the next pass.
+- **Files that fail** (corrupt, encrypted, OCR error): retried on the next two passes, then left alone
+  until the file changes. `python scripts/inspect.py --failed` shows the error, the attempt count and
+  whether the previous version is still served. An update that fails never removes the version already
+  indexed: the new version is parsed and embedded in full before the old one is replaced.
+- **Check the index**: `python scripts/inspect.py --check` compares the registry, the keyword index and
+  the vector store and exits 1 on any mismatch, naming the chunks. Repair with
+  `python scripts/ingest.py --redo <file name>` (rewrites that document from the embedding cache; nothing
+  is re-embedded). A pass that was killed half-way repairs itself: the next pass rewrites the document it
+  was writing.
 - **Add a database view**: this build has no DDL access, so every catalog view carries a `definition:`
   field (a plain SQL `SELECT` over the real tables) instead of a real `CREATE VIEW` — see "Database
   views without DDL" below. Once the DBA creates the real view, delete `definition:` and the same SQL
@@ -116,6 +129,30 @@ scope; admins can look up a user's scope and download their log in the sidebar (
   comes from `.env`).
 - **Restore**: delete `data/index/` and re-run `python scripts/ingest.py` — the registry (SQLite) and
   vector store can always be rebuilt from the source PDFs plus the databases; nothing else holds state.
+
+### Running ingestion and the aggregates refresh unattended (Phase H4)
+
+**Docker**: `docker compose up -d` runs `ingest-worker` (rescans `data/pdfs` every
+`ingest.watch_interval_seconds`) and `aggregates` (daily refresh) next to the app; nothing else to do.
+
+**Windows without Docker**: two scheduled tasks, created once from an administrator prompt. Run them as
+an account that can read the PDF share (SYSTEM usually cannot reach network shares); `/rp` asks for its
+password. Replace `C:\ka` with the folder this repository is in:
+
+```bat
+schtasks /create /tn "Bitopi KA ingest" /sc minute /mo 10 /ru "DOMAIN\svc-account" /rp ^
+  /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\ingest_worker.py\" --once"
+schtasks /create /tn "Bitopi KA aggregates" /sc daily /st 02:00 /ru "DOMAIN\svc-account" /rp ^
+  /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\refresh_aggregates.py\""
+```
+
+A pass that finds nothing new takes a few seconds: unchanged files (same path, size and modification
+time) are not read, and the embedding model is loaded only when something needs embedding. The task's
+"Last Run Result" is the exit code: `0` done, `2` ALERT (folder missing or many files gone: nothing
+removed, see `logs/ingest.log`), `3` another ingest held the index lock (the next run catches up). The
+lock (`data/index/ingest.lock`) is refreshed every minute by its holder and taken over once its process
+is gone, so a killed run never blocks the next one. Optionally, a weekly
+`python scripts/inspect.py --check` task (exit `1` = the stores disagree).
 
 ### Revising a document
 

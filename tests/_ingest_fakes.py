@@ -28,6 +28,12 @@ class FakeStore:
     def all_ids_and_texts(self):
         return [(k, c.text) for k, c in self.rows.items()]
 
+    def all_ids_and_metadata(self):
+        return [(k, c.metadata()) for k, c in self.rows.items()]
+
+    def count(self):
+        return len(self.rows)
+
     def sources(self):
         return {c.source for c in self.rows.values()}
 

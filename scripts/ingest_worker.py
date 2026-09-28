@@ -6,25 +6,26 @@ without anyone running a command or restarting it.
     python scripts/ingest_worker.py --interval 120
 
 The scan is cheap: only when the set of (name, size, mtime) differs from the previous pass does it call
-ingest_folder(), which is itself idempotent (SHA-256 per file). A lock file makes a manual
-scripts/ingest.py and this worker mutually exclusive so they never write the index at the same time.
+ingest_folder(), which is itself idempotent (a file with the path, size and mtime it was indexed with is
+not read; any other is compared by SHA-256). The index lock (ragbot/ingest/lock.py)
+makes this worker, scripts/ingest.py and scripts/reindex.py mutually exclusive, so they never write the
+index at the same time; a lock left by a crashed run is taken over as soon as its process is gone.
 
 A file that disappears is removed only when two consecutive passes miss it, so a pass that finds a
-missing file forces the next pass even if nothing else changed. A missing or empty folder, or many
-files vanishing at once, removes nothing and is logged as an ALERT; `--once` then exits with code 2 so
-a scheduler shows the failure.
+missing file forces the next pass even if nothing else changed; so does a file that failed and will be
+retried. A missing or empty folder, or many files vanishing at once, removes nothing and is logged as
+an ALERT; `--once` then exits with code 2 so a scheduler shows the failure. A pass killed half-way is
+safe to restart: a document's hash is recorded only after all its chunks are written, so the next pass
+redoes the one that was being written (scripts/inspect.py --check shows any store left behind).
 """
-import os
 import sys
 import time
 import logging
 import _path  # noqa: F401
-from datetime import datetime
 
 from ragbot.config import log_dir, settings
+from ragbot.ingest.lock import IndexLocked, index_lock
 from ragbot.ingest.pipeline import ingest_folder
-
-LOCK_STALE_SECONDS = 6 * 3600
 
 log = logging.getLogger("ingest_worker")
 
@@ -42,47 +43,23 @@ def _snapshot(root):
     return snap
 
 
-def _lock_path():
-    return settings().path("index_dir") / "ingest.lock"
-
-
-def _acquire_lock() -> bool:
-    lock = _lock_path()
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    if lock.exists() and (time.time() - lock.stat().st_mtime) > LOCK_STALE_SECONDS:
-        log.warning("removing stale lock %s", lock)
-        lock.unlink(missing_ok=True)
-    try:
-        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, f"{os.getpid()} {datetime.now().isoformat()}".encode())
-        os.close(fd)
-        return True
-    except FileExistsError:
-        return False
-
-
-def _release_lock() -> None:
-    _lock_path().unlink(missing_ok=True)
-
-
 def _changed(summary: dict) -> bool:
-    return bool(summary["added"] or summary["updated"] or summary["removed"] or summary.get("retagged"))
+    return any(summary.get(k) for k in ("added", "updated", "removed", "retagged", "superseded_changed"))
 
 
 def run_once() -> dict | None:
     """One ingest pass. Returns its summary, or None when another process holds the index lock.
     ingest_folder() itself logs an alert (missing/empty folder, mass disappearance) as an ERROR."""
     root = settings().path("pdf_root")
-    if not _acquire_lock():
-        log.info("index locked by another process; skipping this pass")
-        return None
     try:
-        summary = ingest_folder(root)
-        if _changed(summary) or summary.get("pending_removal"):
-            log.info("ingested: %s", summary)
-        return summary
-    finally:
-        _release_lock()
+        with index_lock():
+            summary = ingest_folder(root)
+    except IndexLocked as e:
+        log.info("%s; skipping this pass", e)
+        return None
+    if _changed(summary) or summary.get("pending_removal") or summary.get("failed"):
+        log.info("ingested: %s", summary)
+    return summary
 
 
 def main() -> None:
@@ -112,12 +89,13 @@ def main() -> None:
     prev, pending = None, 0
     while True:
         snap = _snapshot(root)
-        # A missing file is removed only if the next pass misses it too, so a pending removal forces
-        # that pass even when the folder looks the same.
+        # A missing file is removed only if the next pass misses it too, and a file that failed is retried
+        # (up to pipeline.MAX_ATTEMPTS times), so either forces the next pass even when the folder looks
+        # the same.
         if snap != prev or pending:
             summary = run_once()
             if summary is not None:              # locked: keep prev, so this change is retried next time
-                pending = summary.get("pending_removal", 0)
+                pending = summary.get("pending_removal", 0) + summary.get("retry", 0)
                 prev = _snapshot(root)           # re-read: ingest may rename/normalise nothing, but time passed
         time.sleep(interval)
 

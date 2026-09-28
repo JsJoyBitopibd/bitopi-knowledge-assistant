@@ -8,6 +8,42 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- H2: `scripts/inspect.py --check` compares the registry, the keyword index and the vector store (orphans
+  each way, superseded flag and access tags that differ from the document's, half-written documents)
+  and exits 1 on any mismatch; `scripts/ingest.py --redo <file>` rewrites a document from the embedding
+  cache to repair it.
+- H3: failed files are retried on the next two passes, then left until they change
+  (`inspect.py --failed` shows the attempts and whether the previous version is still served). The
+  sidebar shows when the folder was last checked, and administrators see files that failed or were
+  skipped.
+- H4: README runbook for running the worker and the aggregates refresh as scheduled tasks.
+
+### Changed
+- H3: a pass that finds nothing new takes seconds. Unchanged files (same path, size and modification
+  time) are not read, and the embedding model loads only when something needs embedding.
+  `ingest_state.json`, whose change makes the app drop its caches, is rewritten only when the index
+  changed; every pass writes `data/index/last_scan.json` instead.
+- H3: `scripts/ingest.py` and `scripts/reindex.py` take the worker's index lock (exit 3 while another
+  ingest writes). The holder refreshes the lock every minute, so a long bulk ingest is never taken over,
+  and a lock whose process died is taken over at once.
+
+**Upgrading:** run `python scripts/ingest.py` (or let the worker pass) once. It records where each indexed
+file lives, which the download button now needs. Nothing is re-embedded.
+
+### Fixed
+- H1: two PDFs with the same file name in different folders overwrote each other in the index. The copy
+  already indexed is kept and the other is skipped and reported until one is renamed. The PDF download
+  button found files by name and could serve the skipped copy from a folder the user may not see. It now
+  reads the exact path that was indexed.
+- H2: a failed update of a document deleted its vectors first, leaving the old version half-searchable.
+  The new version is now parsed and embedded in full before the old one is replaced. A pass killed while
+  writing a document is redone by the next pass (verified with hard kills).
+- H3: a PDF that failed to open stayed locked by the ingest process (the logged error held pymupdf's
+  file handle), so on Windows nobody could replace or delete it. A failed file was never retried until
+  it changed. A moved file kept its old category. The sidebar's category list, status line and PDF
+  bytes ignored the index version and refreshed only every 5–10 minutes.
+
 ## [1.7.0] — 2026-09-29 — Phase G: polish
 
 Eval (62 cases, `eval/results/20260929T0040.json`, vs v1.6.0 on the same cases): hit rate 98% → 98%,

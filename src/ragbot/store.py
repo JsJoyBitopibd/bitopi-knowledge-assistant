@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from abc import ABC, abstractmethod
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -39,6 +40,8 @@ class VectorStore(ABC):
 
 # Access attributes of every chunk and document (PRD section 7; ingest/meta.py, auth/filters.py)
 ACCESS_FIELDS = ("factory", "department", "confidentiality", "buyer_code")
+# what a pass may change without re-embedding when a file moves or its meta.yaml changes
+TAG_FIELDS = ("category", *ACCESS_FIELDS)
 
 
 def _chunk_from_record(cid: str, doc: str, meta: dict[str, Any], score: float = 0.0) -> Chunk:
@@ -95,6 +98,13 @@ class ChromaStore(VectorStore):
         for off in range(0, n, 5000):
             res = self.col.get(limit=5000, offset=off, include=["documents"])
             yield from zip(res["ids"], res["documents"])
+
+    def all_ids_and_metadata(self):
+        """(id, metadata) for every chunk — for scripts/inspect.py --check."""
+        n = self.count()
+        for off in range(0, n, 5000):
+            res = self.col.get(limit=5000, offset=off, include=["metadatas"])
+            yield from zip(res["ids"], res["metadatas"])
 
     def count(self):
         return self.col.count()
@@ -184,10 +194,104 @@ class Registry:
         if "missed_scans" not in {r[1] for r in self.db.execute("PRAGMA table_info(document)")}:
             self.db.execute("ALTER TABLE document ADD COLUMN missed_scans INTEGER DEFAULT 0")
             self.db.commit()
+        # H3: doc_hash is the version that is indexed (None if none is); a failed attempt is recorded in
+        # failed_hash + attempts instead, so the indexed version stays known and failures are retried.
+        doc_cols = {r[1] for r in self.db.execute("PRAGMA table_info(document)")}
+        if "failed_hash" not in doc_cols:
+            self.db.execute("ALTER TABLE document ADD COLUMN failed_hash TEXT")
+            self.db.execute("ALTER TABLE document ADD COLUMN attempts INTEGER DEFAULT 0")
+            # Before H3 a failed file kept the hash of the version that failed in doc_hash and was never
+            # retried. Its indexed version is unknown (a failed update had already deleted the old vectors),
+            # so its hash moves to failed_hash and the next pass indexes the file afresh.
+            self.db.execute("UPDATE document SET failed_hash = doc_hash, doc_hash = NULL, attempts = 1 "
+                            "WHERE status = 'failed'")
+            self.db.commit()
+        if "status" not in {r[1] for r in self.db.execute("PRAGMA table_info(ingest_run)")}:
+            self.db.execute("ALTER TABLE ingest_run ADD COLUMN status TEXT")
+            self.db.commit()
+        # H3: where the indexed file is (relative to pdf_root) and its size + mtime when it was hashed, so a
+        # pass reads only the files that look changed, and the app serves exactly the indexed file.
+        # dirty = 1 while a document's chunks are being replaced in the stores: a pass killed then leaves it
+        # set, and the next pass writes that document again (even if the file did not change).
+        if "rel_path" not in doc_cols:
+            self.db.execute("ALTER TABLE document ADD COLUMN rel_path TEXT")
+            self.db.execute("ALTER TABLE document ADD COLUMN file_size INTEGER")
+            self.db.execute("ALTER TABLE document ADD COLUMN file_mtime INTEGER")
+            self.db.execute("ALTER TABLE document ADD COLUMN dirty INTEGER DEFAULT 0")
+            self.db.commit()
 
     def known_hash(self, source: str) -> Optional[str]:
+        """The hash of the version of `source` that is indexed, or None when none is."""
         r = self.db.execute("SELECT doc_hash FROM document WHERE source=?", (source,)).fetchone()
         return r[0] if r else None
+
+    def document_row(self, source: str) -> Optional[dict[str, Any]]:
+        """Everything an ingest pass needs to decide about one file, in one read: the indexed hash, the
+        status, where and how big the indexed file was, its tags."""
+        cols = ("doc_hash", "status", "rel_path", "file_size", "file_mtime", *TAG_FIELDS)
+        r = self.db.execute(f"SELECT {', '.join(cols)} FROM document WHERE source=?", (source,)).fetchone()
+        return dict(zip(cols, r)) if r else None
+
+    def set_stamp(self, source: str, stamp: tuple[str, int, int]) -> None:
+        """Record (relative path, size, mtime_ns) of the indexed file, as it was when hashed."""
+        self.db.execute("UPDATE document SET rel_path=?, file_size=?, file_mtime=? WHERE source=?", (*stamp, source))
+        self.db.commit()
+
+    def mark_dirty(self, source: str) -> None:
+        """Before a document's chunks are replaced; the document row written after them clears it."""
+        self.db.execute("UPDATE document SET dirty=1 WHERE source=?", (source,))
+        self.db.commit()
+
+    def dirty_sources(self) -> set[str]:
+        """Documents whose last write to the stores did not finish (a crash or a store error)."""
+        return {r[0] for r in self.db.execute("SELECT source FROM document WHERE dirty=1")}
+
+    def indexed_path(self, source: str) -> Optional[str]:
+        """Where the indexed version of `source` was read from, relative to pdf_root (None if unknown)."""
+        r = self.db.execute("SELECT rel_path FROM document WHERE source=? AND doc_hash IS NOT NULL", (source,)).fetchone()
+        return r[0] if r else None
+
+    def failed_attempts(self, source: str, h: str) -> int:
+        """How many times the content with hash `h` has failed to index (0 if it has not)."""
+        r = self.db.execute("SELECT attempts FROM document WHERE source=? AND failed_hash=?", (source, h)).fetchone()
+        return int(r[0] or 0) if r else 0
+
+    def record_failure(self, source: str, title: str, category: str, error: str, h: Optional[str] = None) -> int:
+        """Mark the latest attempt at `source` as failed without touching the indexed version (doc_hash).
+        With `h` (the content that failed) the attempt counts toward the retry limit; returns the count."""
+        attempts = self.failed_attempts(source, h) + 1 if h else 0
+        self.db.execute(
+            "INSERT INTO document(source, title, category, status, error, failed_hash, attempts, ingested_at) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET status=excluded.status, error=excluded.error, "
+            "failed_hash=excluded.failed_hash, attempts=excluded.attempts, ingested_at=excluded.ingested_at",
+            (source, title, category, "failed", error[:500], h, attempts, datetime.now().isoformat(timespec="minutes")))
+        self.db.commit()
+        return attempts
+
+    def clear_failure(self, source: str) -> bool:
+        """The indexed version is current again (a transient read error passed, a meta.yaml was fixed, a
+        failed update was reverted): drop the failure mark. Returns whether there was one."""
+        n = self.db.execute("UPDATE document SET status='ok', error=NULL, failed_hash=NULL, attempts=0 "
+                            "WHERE source=? AND status='failed' AND doc_hash IS NOT NULL", (source,)).rowcount
+        self.db.commit()
+        return n > 0
+
+    def start_run(self, started: str) -> tuple[int, list[str]]:
+        """Open an ingest_run row; returns its id and the start times of earlier runs that never finished
+        (a crash), which are marked interrupted."""
+        stale = [r[0] for r in self.db.execute("SELECT started_at FROM ingest_run WHERE status='running'")]
+        self.db.execute("UPDATE ingest_run SET status='interrupted' WHERE status='running'")
+        cur = self.db.execute("INSERT INTO ingest_run(started_at, status) VALUES(?, 'running')", (started,))
+        self.db.commit()
+        return int(cur.lastrowid), stale
+
+    def finish_run(self, run_id: int, finished: str, added: int, updated: int, removed: int, failed: int) -> None:
+        self.db.execute("UPDATE ingest_run SET finished_at=?, added=?, updated=?, removed=?, failed=?, status='done' "
+                        "WHERE id=?", (finished, added, updated, removed, failed, run_id))
+        # a worker pass every few minutes adds ~100k rows a year: keep 90 days of passes that changed nothing
+        self.db.execute("DELETE FROM ingest_run WHERE status='done' AND added=0 AND updated=0 AND removed=0 "
+                        "AND failed=0 AND finished_at < date(?, '-90 days')", (finished,))
+        self.db.commit()
 
     def all_sources(self) -> set[str]:
         return {r[0] for r in self.db.execute("SELECT source FROM document")}
@@ -250,11 +354,12 @@ class Registry:
         return dict(zip(ACCESS_FIELDS, r)) if r else None
 
     def retag(self, source: str, attrs: dict[str, str]) -> None:
-        """New access attributes for a document whose content did not change (moved folder, edited
+        """New tags (TAG_FIELDS) for a document whose content did not change (moved folder, edited
         meta.yaml, or a document from before F1): the registry and the keyword index. The caller updates
         the vector store's metadata (ChromaStore.set_attributes); nothing is re-embedded."""
-        sets = ", ".join(f"{k}=?" for k in ACCESS_FIELDS)
-        vals = [attrs[k] for k in ACCESS_FIELDS]
+        keys = [k for k in TAG_FIELDS if k in attrs]          # column names come from the fixed list only
+        sets = ", ".join(f"{k}=?" for k in keys)
+        vals = [attrs[k] for k in keys]
         self.db.execute(f"UPDATE document SET {sets} WHERE source=?", (*vals, source))
         self.db.execute(f"UPDATE chunk_fts SET {sets} WHERE source=?", (*vals, source))
         self.db.commit()
@@ -310,8 +415,9 @@ class Registry:
         self.db.commit()
 
     def all_titles(self) -> dict[str, str]:
-        """{source: title} for every ok document — used to group revisions by filename."""
-        return {r[0]: r[1] for r in self.db.execute("SELECT source, title FROM document WHERE status='ok'")}
+        """{source: title} for every document with an indexed version — used to group revisions by
+        filename. (A file whose latest update failed is still indexed in its previous version.)"""
+        return {r[0]: r[1] for r in self.db.execute("SELECT source, title FROM document WHERE doc_hash IS NOT NULL")}
 
     def stats(self) -> dict[str, Any]:
         q = self.db.execute
