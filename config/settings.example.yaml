@@ -33,6 +33,12 @@ ingest:
   removal_alert_min_files: 3
   ocr_min_text_chars: 50       # below this a page is treated as scanned
   header_footer_min_share: 0.5 # a line in the top/bottom 3 lines of >= this share of pages is a header/footer
+  # The ingest scripts share the CPU with the chat app (Phase I4, docs/tuning_log.md): a lower priority,
+  # fewer embedding threads, and a pause while the app is searching (data/index/app_busy).
+  priority: below_normal       # normal | below_normal | idle
+  embed_threads: 4             # the ingest scripts' embedding threads (EMBED_THREADS overrides); 0 = all cores
+  yield_to_app: true
+  yield_slice: 4               # chunks embedded between two checks of the app
 
 retrieval:
   vector_top_k: 20

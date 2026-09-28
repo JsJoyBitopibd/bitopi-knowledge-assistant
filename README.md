@@ -146,7 +146,10 @@ schtasks /create /tn "Bitopi KA aggregates" /sc daily /st 02:00 /ru "DOMAIN\svc-
   /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\refresh_aggregates.py\""
 ```
 
-A pass that finds nothing new takes a few seconds: unchanged files (same path, size and modification
+The ingest scripts give way to the app (Phase I4): they run at below-normal priority with 4 embedding
+threads and pause while the app is searching, so a bulk load slows answers by about 12% instead of
+doubling them (`ingest.priority`, `ingest.embed_threads`, `ingest.yield_to_app` in
+`config/settings.yaml`). A pass that finds nothing new takes a few seconds: unchanged files (same path, size and modification
 time) are not read, and the embedding model is loaded only when something needs embedding. The task's
 "Last Run Result" is the exit code: `0` done, `2` ALERT (folder missing or many files gone: nothing
 removed, see `logs/ingest.log`), `3` another ingest held the index lock (the next run catches up). The

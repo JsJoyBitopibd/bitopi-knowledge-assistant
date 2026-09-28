@@ -122,3 +122,27 @@ per pair on this CPU, so the lever is the candidate count. `hit_rate.py` (30 que
 | 8 | 512 | 30/30 | 143 s |
 | 10 | 384 | 29/30 (same miss) | 144 s |
 | 8 | 384 | 29/30 (same miss) | 126 s |
+
+**Threads (2026-09-28).** Two app-side fixes, measured on the pilot box (i7-13620H, 6P+4E cores, 16
+threads). (1) onnxruntime's threads busy-wait after each rerank by default, and the next question's
+embedding fought them: 260–340 ms per embed instead of 94–143 ms with spinning off (the rerank itself
+3.8–4.0 s either way). (2) `embed.py` raised torch to all 16 logical CPUs; 8–10 threads are faster
+(query embed 64–78 ms vs 76–87 ms alone; ingestion of 160 chunks **216 s at 4 or 8 threads vs 335 s at
+16**). Now: spinning off, torch at least half the logical CPUs (stays at its default 10 here).
+`retrieve.embed` p50 0.46 s → **0.09 s** (`20260928T2207.json`: retrieval 4.10 / 5.36 s p50/p95).
+
+**I4: search while the worker ingests (2026-09-28).** A throwaway index ingesting 20 synthetic PDFs
+(160 chunks, nothing cached) while `latency.py --retrieval-only` ran the 33 documents questions
+against the live index; the ingest outlasted every latency run.
+
+| Worker setting | Search p50 | Search p95 | p95 rise | Ingest (160 chunks) |
+|---|---|---|---|---|
+| none (same code, `20260928T2207.json`) | 4.10 s | 5.36 s | — | 216 s alone at 4 threads |
+| 16 threads, normal priority (before) | 9.57 s | 13.67 s | +131% (vs 5.91 then) | 469 s |
+| 4 threads, normal priority | 6.51 s | 8.90 s | +51% | 356 s |
+| 4 threads, idle priority | 6.07 s | 8.46 s | +43% | 376 s |
+| **4 threads, below normal, pause while the app searches** (`20260928T2211.json`) | **4.36 s** | **5.98 s** | **+12%** | 391 s (130 s paused) |
+
+Priority alone does little (the processes also share memory bandwidth, caches and the turbo budget); the
+pause is what keeps the app fast. The model stages of a chat answer run at the provider, so they are
+not slowed by the worker; a full `latency.py` during an ingest is still to run when Gemini is back.

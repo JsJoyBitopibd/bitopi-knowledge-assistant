@@ -85,7 +85,12 @@ class OnnxReranker:
         if not (d / "model.onnx").exists():
             raise RuntimeError(f"{d / 'model.onnx'} not found — run python scripts/export_reranker_onnx.py")
         self._tok = AutoTokenizer.from_pretrained(str(d))
-        self._sess = ort.InferenceSession(str(d / "model.onnx"), providers=["CPUExecutionProvider"])
+        so = ort.SessionOptions()
+        # onnxruntime's threads busy-wait after each run by default; the question embedding that follows
+        # (the next question) then fought them for the cores: 260-340 ms instead of 94-143 ms, with the
+        # rerank itself no faster for it (measured 2026-09-28, docs/tuning_log.md)
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        self._sess = ort.InferenceSession(str(d / "model.onnx"), sess_options=so, providers=["CPUExecutionProvider"])
 
     def score(self, question: str, texts: list[str]) -> list[float]:
         if not texts:
@@ -117,11 +122,17 @@ def _batch_size(env_name: str) -> int:
 
 
 def _use_all_cpu_threads() -> None:
-    """torch defaults to a conservative thread count inside containers; the box has no GPU, so
-    the reranker and the embedder should use every core."""
+    """torch can default to a conservative thread count inside containers; raise it to at least half
+    the logical CPUs (about one per physical core). Not to all of them: measured 2026-09-28 on the
+    pilot box (6P+4E cores, 16 threads), 16 torch threads embedded 54% slower than 8 or 10 (hyperthreads
+    and efficiency cores stall the others; docs/tuning_log.md, I2/I4). EMBED_THREADS sets the count
+    instead (the ingest scripts use it to leave cores to the app)."""
     try:
         import torch
-        n = os.cpu_count() or 1
+        if os.getenv("EMBED_THREADS"):
+            torch.set_num_threads(int(os.environ["EMBED_THREADS"]))
+            return
+        n = max(1, (os.cpu_count() or 2) // 2)
         if torch.get_num_threads() < n:
             torch.set_num_threads(n)
     except Exception:  # torch missing (ollama backend) or thread count already fixed by a run

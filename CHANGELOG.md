@@ -16,6 +16,13 @@ each phase is in `docs/ROADMAP.md`.
   questions, each run cold.
 
 ### Changed
+- I4: the ingest scripts give the CPU to the chat app: below-normal priority, 4 embedding threads and a
+  pause while the app is searching (`ingest.priority`, `ingest.embed_threads`, `ingest.yield_to_app` in
+  `config/settings.yaml`). While the worker ingested, the app's document search slowed by 131% (p95);
+  now by 12%.
+- I2: the question embedding went from 0.46 s to 0.09 s (p50). onnxruntime no longer keeps its threads
+  spinning after a rerank, and torch no longer uses every logical CPU. Ingestion is 54% faster for the
+  same reason: 16 threads were slower than 8.
 - I1: `chat.csv`, `calls.csv` and `sql.csv` gained columns (`request_id`; `chat.csv` also `seconds` and
   `timings`). The first write after the upgrade renames each old file to `<name>.<timestamp>.csv`, as for
   earlier header changes.

@@ -10,6 +10,7 @@ from ..auth.filters import SCOPE_FIELDS, scope_where
 from ..auth.models import Scope
 from ..config import settings
 from ..embed import get_embedder, get_reranker
+from ..ingest.priority import mark_app_busy
 from ..models import Chunk
 from ..store import get_store
 from .hybrid import rrf
@@ -62,6 +63,7 @@ def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optio
     if clash:
         raise ValueError(f"access fields are set by the scope, not by the caller: {clash}")
     where = {**s.get("retrieval.default_filters", {}), **(where or {}), **scope_where(scope)}
+    mark_app_busy()                        # an ingest worker on this machine pauses while we use the CPU
     with trace.span("retrieve"):
         store, kw = get_store(), get_keyword_index()
 

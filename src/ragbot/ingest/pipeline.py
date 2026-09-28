@@ -24,6 +24,7 @@ from ..store import TAG_FIELDS, Registry, get_store, text_hash
 from .chunker import chunk_page
 from .meta import attributes_for
 from .pdf_text import clean_pages
+from .priority import yield_to_app
 from .tables import tables_on_page
 
 log = logging.getLogger("ingest")
@@ -134,7 +135,14 @@ def embed_with_cache(texts: list[str], reg: Registry, emb, counts: dict) -> list
     todo = list(dict.fromkeys(h for h in hashes if h not in have))
     if todo:
         text_of = dict(zip(hashes, texts))                 # one text per distinct hash
-        new = dict(zip(todo, emb.embed([text_of[h] for h in todo])))
+        new: dict[str, list[float]] = {}
+        step = max(1, int(settings().get("ingest.yield_slice", 4)))
+        for i in range(0, len(todo), step):                # small slices: the app never waits long (I4)
+            waited = yield_to_app()
+            if waited:
+                counts["yielded"] = counts.get("yielded", 0.0) + waited
+            part = todo[i:i + step]
+            new.update(zip(part, emb.embed([text_of[h] for h in part])))
         reg.store_vectors(list(new.items()), EMBED_MODEL)
         have.update(new)
     counts["embedded"] += len(todo)
@@ -339,6 +347,7 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
             reg.replace_chunks(path.name, all_chunks)
             touched.add(path.name)
             counts["embedded"] += doc_counts["embedded"]; counts["cached"] += doc_counts["cached"]
+            counts["yielded"] = counts.get("yielded", 0.0) + doc_counts.get("yielded", 0.0)
             # the hash last: a crash before this line makes the next pass redo the document
             reg.upsert_document(source=path.name, title=path.stem, category=category_for(path, root), doc_hash=h,
                                 pages=stats["pages"], chunks=stats["chunks"], tables_=stats["tables"],
@@ -405,7 +414,7 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     summary = {"added": added, "updated": updated, "removed": removed, "pending_removal": pending_removal,
                "retagged": retagged, "failed": failed + len(duplicates), "retry": retry, "superseded": len(old),
                "superseded_changed": superseded_now, "embedded": counts["embedded"], "cached": counts["cached"],
-               "cache_pruned": pruned}
+               "cache_pruned": pruned, "paused_for_app": round(counts.get("yielded", 0.0), 1)}
     if duplicates:
         summary["duplicates"] = duplicates
     if alert:

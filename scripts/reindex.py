@@ -10,6 +10,8 @@ if not root.is_dir() or next(root.rglob("*.pdf"), None) is None:
     print(f"No PDFs found under {root}: the index was not deleted (is the share mounted?)"); sys.exit(2)
 idx = settings().path("index_dir")
 from ragbot.ingest.lock import IndexLocked, index_lock
+from ragbot.ingest.priority import run_in_background
+print("running in the background:", run_in_background())   # the app stays responsive during the rebuild
 try:
     with index_lock():                  # not while the worker or ingest.py is writing the index
         for p in ("chroma", "registry.db", "bm25.pkl"):

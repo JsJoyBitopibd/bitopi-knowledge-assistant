@@ -68,6 +68,8 @@ def main() -> None:
     # also echo to console so `--once` from a scheduler leaves a trail
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
+    from ragbot.ingest.priority import run_in_background
+    log.info("running in the background: %s", run_in_background())   # yields the CPU to the app (I4)
     once = "--once" in sys.argv
     interval = int(settings().get("ingest.watch_interval_seconds", 300))
     if "--interval" in sys.argv:

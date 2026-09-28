@@ -424,3 +424,17 @@ Paid key in `.env` (PRD FR-8.9: free-tier keys are never used with company data)
 - **I5 bulk ingestion**: `embed_backend` stored next to `embed_model` and checked at start;
   `scripts/export_embedder_onnx.py` (same recipe as the reranker, no `optimum`) and `scripts/parity.py`
   (1,000 chunks, cosine ≥ 0.99, hit-rate drop ≤ 1) before any switch — with the user's approval.
+
+**As built so far (2026-09-28, while Gemini was unavailable):**
+
+- I1: the request lives in a ContextVar; `answer_stream()` runs each pipeline step inside the request's
+  own Context (`trace.run_steps`), so the caller's context never changes, and `trace.submit` carries it
+  into pool threads. `tests/latency_cases.jsonl` holds only the 5 model-written-SQL questions (the golden
+  set has none); the other 46 are a fixed selection from `tests/golden.jsonl`. `--retrieval-only`
+  measures the search without a model call.
+- I2 findings: the reranker is 93% of the search (3.9 of 4.2 s). onnxruntime thread counts gain nothing.
+  Two thread problems cost 0.37 s per question: its idle threads busy-waited into the next embedding,
+  and torch ran on every logical CPU. Both are fixed. The candidate change (8 candidates, max length
+  384: −0.94 s, hit rate 29/30) waits for the G/H gate evals.
+- I4: priority alone does not protect the app; the worker pausing while the app searches does
+  (`data/index/app_busy`, `src/ragbot/ingest/priority.py`): the search p95 rise went from +131% to +12%.

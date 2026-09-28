@@ -19,6 +19,8 @@ p.add_argument("folder", nargs="?")
 p.add_argument("--confirm-removals", action="store_true")
 p.add_argument("--redo", nargs="+", metavar="FILE", default=[])
 a = p.parse_args()
+from ragbot.ingest.priority import run_in_background
+run_in_background()                          # lower priority, fewer threads, pause while the app searches
 try:
     with index_lock():                       # never at the same time as the worker or reindex.py
         r = ingest_folder(Path(a.folder) if a.folder else None, confirm_removals=a.confirm_removals,
