@@ -3,6 +3,7 @@ and every fixed tool's example against the real database (read-only, rolls back)
 Usage: python scripts/check_catalog.py [--live]
 """
 import argparse, re, _path  # noqa: F401
+from ragbot.auth.models import Scope
 from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.data.guard import GuardError
@@ -78,7 +79,7 @@ def live(cats) -> int:
         if not params or tool["database"] not in cats:
             continue
         try:
-            qr = run_fixed_tool(tool, params, cats, user="check_catalog")
+            qr = run_fixed_tool(tool, params, cats, user="check_catalog", scope=Scope.unrestricted())
             if qr.error:
                 print(f"[live] fixed tool {tool['name']}: FAILED — {qr.error}")
                 problems += 1

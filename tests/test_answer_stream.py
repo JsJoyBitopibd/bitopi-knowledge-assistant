@@ -8,6 +8,7 @@ import ragbot.llm.base as base
 from ragbot.agent.events import Final, Replace, Stage, Token
 from ragbot.llm.base import ChatModel, ChatReply, LLMError
 from ragbot.models import Chunk
+from ragbot.auth.models import Scope
 
 
 def _chunk():
@@ -44,7 +45,7 @@ def wire(monkeypatch):
     monkeypatch.setattr(orch, "_log", lambda a, user: logged.append(a) or a)
     monkeypatch.setattr(orch, "_log_verify_failure", lambda *a: None)
     monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
-    monkeypatch.setattr(orch, "retrieve", lambda q, where=None: [_chunk()])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [_chunk()])
 
     def install(route, replies):
         monkeypatch.setattr(orch, "_route", lambda q, user: route)
@@ -60,7 +61,7 @@ BAD = "Use form PCD-07 within 5 days [P3]."   # unknown marker + a number not in
 
 def test_documents_answer_streams_then_final(wire):
     logged = wire("documents", [GOOD])
-    evs = list(orch.answer_stream("Which form approves a PCD change?"))
+    evs = list(orch.answer_stream("Which form approves a PCD change?", scope=Scope.unrestricted()))
     stages = [e.name for e in evs if isinstance(e, Stage)]
     assert stages == ["understanding", "searching", "writing"]
     assert "".join(e.text for e in evs if isinstance(e, Token)) == GOOD
@@ -73,7 +74,7 @@ def test_documents_answer_streams_then_final(wire):
 
 def test_failed_verification_replaces_draft(wire):
     wire("documents", [BAD, GOOD])
-    evs = list(orch.answer_stream("Which form approves a PCD change?"))
+    evs = list(orch.answer_stream("Which form approves a PCD change?", scope=Scope.unrestricted()))
     kinds = [type(e).__name__ for e in evs]
     first_replace = kinds.index("Replace")
     assert "Token" in kinds[:first_replace] and "Token" in kinds[first_replace:]
@@ -84,13 +85,13 @@ def test_failed_verification_replaces_draft(wire):
 
 def test_both_attempts_fail_gives_not_found(wire):
     wire("documents", [BAD, BAD])
-    a = orch.answer("Which form approves a PCD change?")
+    a = orch.answer("Which form approves a PCD change?", scope=Scope.unrestricted())
     assert a.not_found and a.text.startswith("System doesn't have the data.") and not a.references
 
 
 def test_provider_error_mid_answer_becomes_friendly_final(wire):
     wire("documents", [LLMError("quota", "429 Too Many Requests")])
-    evs = list(orch.answer_stream("Which form approves a PCD change?"))
+    evs = list(orch.answer_stream("Which form approves a PCD change?", scope=Scope.unrestricted()))
     a = evs[-1].answer
     assert isinstance(evs[-1], Final) and a.error_kind == "quota" and a.not_found
     assert "429" not in a.text     # friendly text only; raw cause is kept in warnings
@@ -99,13 +100,13 @@ def test_provider_error_mid_answer_becomes_friendly_final(wire):
 
 def test_chitchat_yields_final_without_tokens(wire):
     wire("chitchat", [])
-    evs = list(orch.answer_stream("hello"))
+    evs = list(orch.answer_stream("hello", scope=Scope.unrestricted()))
     assert not any(isinstance(e, Token) for e in evs) and isinstance(evs[-1], Final)
 
 
 def test_answer_equals_stream_final(wire):
     wire("documents", [GOOD])
-    assert orch.answer("Which form approves a PCD change?").text == GOOD
+    assert orch.answer("Which form approves a PCD change?", scope=Scope.unrestricted()).text == GOOD
 
 
 def test_data_miss_clears_draft_before_documents_retry(wire, monkeypatch):
@@ -114,9 +115,9 @@ def test_data_miss_clears_draft_before_documents_retry(wire, monkeypatch):
     import ragbot.data.tools as tools
     from ragbot.models import QueryResult
     wire("data", ["System doesn't have the data.", GOOD])
-    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False: [QueryResult(
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
         database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["n"], rows=[[0]])])
-    evs = list(orch.answer_stream("how many licences does the Group have?"))
+    evs = list(orch.answer_stream("how many licences does the Group have?", scope=Scope.unrestricted()))
     names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
     retry_search = names.index("Stage:searching")
     assert names[retry_search - 1] == "Replace"

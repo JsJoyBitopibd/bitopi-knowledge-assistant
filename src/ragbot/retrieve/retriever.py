@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any, Optional
 
+from ..auth.filters import SCOPE_FIELDS, scope_where
+from ..auth.models import Scope
 from ..config import settings
 from ..embed import get_embedder, get_reranker
 from ..models import Chunk
@@ -48,11 +50,17 @@ def _passes(chunk: Chunk, where: dict[str, Any]) -> bool:
     return True
 
 
-def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optional[int] = None) -> list[Chunk]:
+def retrieve(question: str, where: Optional[dict[str, Any]] = None, top_k: Optional[int] = None, *,
+             scope: Scope) -> list[Chunk]:
     """where: {"category": ["SOP", "TAL"], "superseded": False} — applied to BOTH search paths.
-    Returns up to top_k chunks, best first, each with .score set."""
+    scope: the user's (PRD FR-4.3), merged last so `where` can only narrow it; there is no default, so
+    a call that forgets it fails instead of searching everything. Returns up to top_k chunks, best
+    first, each with .score set."""
     s = settings()
-    where = {**s.get("retrieval.default_filters", {}), **(where or {})}
+    clash = sorted(set(where or {}) & set(SCOPE_FIELDS))
+    if clash:
+        raise ValueError(f"access fields are set by the scope, not by the caller: {clash}")
+    where = {**s.get("retrieval.default_filters", {}), **(where or {}), **scope_where(scope)}
     store, kw = get_store(), get_keyword_index()
 
     # Keyword search is independent of the embedding, so run it alongside embed + vector search. It

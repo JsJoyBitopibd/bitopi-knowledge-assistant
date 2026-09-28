@@ -10,6 +10,7 @@ import ragbot.llm.base as base
 from ragbot.config import settings as real_settings
 from ragbot.data.catalog import Catalog, Table, View
 from ragbot.llm.base import ChatModel, ChatReply
+from ragbot.auth.models import Scope
 
 
 class Settings:
@@ -69,7 +70,7 @@ def wired(monkeypatch):
 
 def test_selected_raw_table_reaches_prompt_and_runs(wired):
     chat, ran = wired(["DATABASE: Demo\nSELECT COUNT(*) AS N FROM dbo.SupplierData"])
-    r = tools.generate_and_run("How many suppliers are in the supplier data?", _cat())
+    r = tools.generate_and_run("How many suppliers are in the supplier data?", _cat(), scope=Scope.unrestricted())
     assert r.error is None and r.rows == [[1022]] and ran
     assert "dbo.SupplierData" in r.views and r.key_columns == ["SupplierID"]
     system = chat.systems[0]
@@ -81,11 +82,11 @@ def test_selected_raw_table_reaches_prompt_and_runs(wired):
 def test_sensitive_column_is_refused_even_on_an_offered_table(wired):
     chat, ran = wired(["DATABASE: Demo\nSELECT SupplierName, Email FROM dbo.SupplierData",
                        "DATABASE: Demo\nSELECT SupplierName, Email FROM dbo.SupplierData"])
-    r = tools.generate_and_run("List suppliers with their email", _cat())
+    r = tools.generate_and_run("List suppliers with their email", _cat(), scope=Scope.unrestricted())
     assert r.error and "restricted column" in r.error and not ran
 
 
 def test_schema_rag_off_shows_no_raw_tables(wired):
     chat, _ = wired(["DATABASE: Demo\nSELECT TOP (5) ExportOrderID FROM rag.vw_ExportOrder"], **{"data.schema_rag": False})
-    tools.generate_and_run("How many suppliers are in the supplier data?", _cat())
+    tools.generate_and_run("How many suppliers are in the supplier data?", _cat(), scope=Scope.unrestricted())
     assert "=== Other tables in" not in chat.systems[0] and "(none selected for this question)" in chat.systems[0]

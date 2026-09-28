@@ -6,8 +6,10 @@ the rows together with the time they were originally read, so the [D#] reference
 honest. `refresh=True` bypasses the cache (the UI's Refresh data button). Hits are logged to
 logs/sql.csv with tool "cache:<tool>" and 0 ms.
 
-Setting: data.result_cache_ttl_seconds (default 180; 0 disables). Not scoped per user yet: when
-per-user data scoping (PRD FR-4) lands, the user's scope must become part of the key.
+Setting: data.result_cache_ttl_seconds (default 180; 0 disables). The key includes the user's scope
+(PRD FR-4): today the statement already differs per scope (the factory filter is in its text), but
+with the DBA's session-context views the text is the same for everyone, and a cached result must
+never cross scopes.
 """
 from __future__ import annotations
 
@@ -25,10 +27,10 @@ _CACHE = TTLCache(maxsize=256)
 
 def cached_run(engine: str, sql_exec: str, params: dict[str, Any], *, conn_env: str, display_sql: str,
                tool: str = "generated", user: str = "", refresh: bool = False,
-               timeout: Optional[int] = None) -> tuple[list[str], list[list[Any]], datetime]:
+               timeout: Optional[int] = None, scope_key: str = "") -> tuple[list[str], list[list[Any]], datetime]:
     """connectors.run() behind the cache. Returns (columns, rows, as_of)."""
     ttl = int(settings().get("data.result_cache_ttl_seconds", 180))
-    key = (engine, conn_env, sql_exec, json.dumps(params, default=str, sort_keys=True))
+    key = (engine, conn_env, sql_exec, json.dumps(params, default=str, sort_keys=True), scope_key)
     if ttl > 0 and not refresh:
         hit = _CACHE.get(key)
         if hit is not None:

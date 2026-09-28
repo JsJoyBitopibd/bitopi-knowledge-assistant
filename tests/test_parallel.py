@@ -9,6 +9,7 @@ import ragbot.index_version as iv
 import ragbot.llm.base as base
 import ragbot.retrieve.retriever as rt
 from ragbot.models import Chunk, QueryResult
+from ragbot.auth.models import Scope
 
 from test_answer_stream import FakeChat, _chunk
 
@@ -23,11 +24,11 @@ def test_both_route_searches_documents_while_querying_database(monkeypatch):
     monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
     monkeypatch.setattr(orch, "_route", lambda q, user: "both")
 
-    def slow_retrieve(q, where=None):
+    def slow_retrieve(q, where=None, scope=None):
         time.sleep(DELAY)
         return [_chunk()]
 
-    def slow_data(q, user="", refresh=False):
+    def slow_data(q, user="", refresh=False, scope=None):
         time.sleep(DELAY)
         return [QueryResult(database="BitopiSplint", engine="sqlserver", views=["rag.vw_ExportOrder"],
                             sql="SELECT Status FROM rag.vw_ExportOrder", columns=["Status"], rows=[["Shipped"]])]
@@ -38,7 +39,7 @@ def test_both_route_searches_documents_while_querying_database(monkeypatch):
     monkeypatch.setattr(orch, "get_chat", lambda: chat)
 
     t0 = time.perf_counter()
-    a = orch.answer("What is the status of the order and which form approves a PCD change?")
+    a = orch.answer("What is the status of the order and which form approves a PCD change?", scope=Scope.unrestricted())
     elapsed = time.perf_counter() - t0
     assert elapsed < 1.5 * DELAY, f"steps ran serially ({elapsed:.2f}s)"
     assert sorted(r.marker for r in a.references) == ["D1", "P1"]
@@ -63,7 +64,7 @@ def test_retriever_runs_keyword_search_alongside_embedding(monkeypatch):
     monkeypatch.setattr(rt, "get_reranker", lambda: None)
 
     t0 = time.perf_counter()
-    got = rt.retrieve("which form approves a PCD change?")
+    got = rt.retrieve("which form approves a PCD change?", scope=Scope.unrestricted())
     elapsed = time.perf_counter() - t0
     assert [x.id for x in got] == [c.id]
     assert elapsed < 1.5 * DELAY, f"keyword search ran after embedding ({elapsed:.2f}s)"

@@ -12,6 +12,7 @@ back) after guard.assert_read_only; only the local file is ever written.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 import uuid
@@ -119,6 +120,30 @@ def available(name: str, path: Optional[Path] = None) -> Optional[datetime]:
     finally:
         con.close()
     return datetime.fromisoformat(row[0]) if row else None
+
+
+def has_column(name: str, column: str, path: Optional[Path] = None) -> bool:
+    """Whether the local copy `name` has `column` (a copy refreshed before a column was added lacks it)."""
+    path = path or db_path()
+    if not path.exists():
+        return False
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return column.lower() in {r[1].lower() for r in con.execute(f"PRAGMA table_info({_q(name)})")}
+    finally:
+        con.close()
+
+
+def scoped_local_sql(sql: str, name: str, column: str, codes: list[str]) -> Optional[str]:
+    """`sql` (a fixed tool's local_sql) reading only the rows of `name` whose `column` is one of `codes`
+    (validated factory codes, auth.models.Scope). None when the statement does not read `name` in
+    exactly one FROM (and no JOIN), or when there are no codes: the caller then goes live, where the
+    view applies the scope."""
+    from_ = re.compile(rf'\bFROM\s+"?{re.escape(name)}"?(?![\w"])', re.I)
+    if not codes or len(from_.findall(sql)) != 1 or re.search(rf'\bJOIN\s+"?{re.escape(name)}\b', sql, re.I):
+        return None
+    lits = ", ".join(f"'{c}'" for c in codes)
+    return from_.sub(f"FROM (SELECT * FROM {_q(name)} WHERE {_q(column)} IN ({lits})) AS {_q(name)}", sql, count=1)
 
 
 def run_local(sql: str, params: dict[str, Any], max_rows: int = 200,

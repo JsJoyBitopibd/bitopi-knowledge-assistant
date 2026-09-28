@@ -5,6 +5,7 @@ import argparse, json, re, time, _path  # noqa: F401
 from datetime import datetime
 from pathlib import Path
 from ragbot.agent.orchestrator import answer
+from ragbot.auth.models import Scope
 from ragbot.config import settings
 from ragbot.llm import get_chat
 
@@ -44,7 +45,7 @@ def main():
     rows = []
     for c in cases:
         res = answer(c["q"], history=c.get("history"), where={"category": c["category"]} if c.get("category") else None,
-                     user="eval")
+                     user="eval", scope=Scope.unrestricted())   # the golden set; scope leaks: scripts/scope_check.py
         row = {"id": c["id"], "kind": c.get("kind", ""), "route": res.route, "answer": res.text, "warnings": res.warnings}
         markers = set(re.findall(r"\[([PD]\d+)\]", res.text))
         row["citation_valid"] = 1.0 if markers <= {r.marker for r in res.references} else 0.0

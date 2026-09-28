@@ -6,6 +6,7 @@ import ragbot.data.cache as dcache
 import ragbot.index_version as iv
 import ragbot.llm.base as base
 from ragbot.ttl_cache import TTLCache
+from ragbot.auth.models import Scope
 
 from test_answer_stream import GOOD, FakeChat, _chunk
 
@@ -89,7 +90,7 @@ def docs(monkeypatch):
     monkeypatch.setattr(orch, "_log", lambda a, user: a)
     monkeypatch.setattr(orch, "_log_verify_failure", lambda *a: None)
     monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
-    monkeypatch.setattr(orch, "retrieve", lambda q, where=None: [_chunk()])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [_chunk()])
     version = [1]
     monkeypatch.setattr(iv, "index_version", lambda: version[0])
 
@@ -104,8 +105,8 @@ def docs(monkeypatch):
 def test_repeat_documents_question_is_served_from_cache(docs):
     install, _ = docs
     chat = install("documents", [GOOD])          # only ONE scripted reply: a second model call would fail
-    a1 = orch.answer("Which form approves a PCD change?")
-    a2 = orch.answer("  which form approves a PCD change ")   # same question, different spacing/case
+    a1 = orch.answer("Which form approves a PCD change?", scope=Scope.unrestricted())
+    a2 = orch.answer("  which form approves a PCD change ", scope=Scope.unrestricted())   # same question, different spacing/case
     assert a1.text == a2.text == GOOD and a2.warnings == ["answer cache hit"] and a2.usage.calls == 0
     assert [r.marker for r in a2.references] == ["P1"] and not chat.replies
 
@@ -113,12 +114,12 @@ def test_repeat_documents_question_is_served_from_cache(docs):
 def test_answer_cache_skips_follow_ups_other_filters_and_new_index(docs):
     install, version = docs
     install("documents", [GOOD, GOOD, GOOD, GOOD])
-    orch.answer("Which form approves a PCD change?")
+    orch.answer("Which form approves a PCD change?", scope=Scope.unrestricted())
     hist = [{"role": "user", "text": "hi"}, {"role": "assistant", "text": "hello"}]
-    assert "answer cache hit" not in orch.answer("Which form approves a PCD change?", history=hist).warnings
-    assert "answer cache hit" not in orch.answer("Which form approves a PCD change?", where={"category": ["SOP"]}).warnings
+    assert "answer cache hit" not in orch.answer("Which form approves a PCD change?", history=hist, scope=Scope.unrestricted()).warnings
+    assert "answer cache hit" not in orch.answer("Which form approves a PCD change?", where={"category": ["SOP"]}, scope=Scope.unrestricted()).warnings
     version[0] = 2                               # an ingest finished
-    assert "answer cache hit" not in orch.answer("Which form approves a PCD change?").warnings
+    assert "answer cache hit" not in orch.answer("Which form approves a PCD change?", scope=Scope.unrestricted()).warnings
 
 
 def test_data_answers_are_not_cached(docs, monkeypatch):
@@ -126,8 +127,8 @@ def test_data_answers_are_not_cached(docs, monkeypatch):
     from ragbot.models import QueryResult
     install, _ = docs
     install("data", ["The order status is Shipped [D1].", "The order status is Shipped [D1]."])
-    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False: [QueryResult(
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
         database="BitopiSplint", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["Status"],
         rows=[["Shipped"]])])
-    orch.answer("status of EO 25-1234")
-    assert "answer cache hit" not in orch.answer("status of EO 25-1234").warnings
+    orch.answer("status of EO 25-1234", scope=Scope.unrestricted())
+    assert "answer cache hit" not in orch.answer("status of EO 25-1234", scope=Scope.unrestricted()).warnings

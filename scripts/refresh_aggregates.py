@@ -18,6 +18,7 @@ from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import stream_sqlserver
 from ragbot.data.guard import assert_read_only
 from ragbot.data.virtual import rewrite_virtual
+from ragbot.auth.models import Scope
 
 
 def refresh(names: list[str], timeout: int) -> int:
@@ -30,7 +31,7 @@ def refresh(names: list[str], timeout: int) -> int:
         t0 = time.perf_counter()
         try:
             assert_read_only(spec["sql"], cat.dialect)
-            sql_exec, _ = rewrite_virtual(spec["sql"].strip(), cat)
+            sql_exec, _ = rewrite_virtual(spec["sql"].strip(), cat, scope=Scope.unrestricted())   # the copy holds every factory; reads are scoped
             rows = aggregates.write(spec["name"],
                                     stream_sqlserver(sql_exec, conn_env=cat.connection_env, timeout=timeout,
                                                      tool=f"aggregate:{spec['name']}"),

@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Iterator, Optional
 
+from ..auth.models import Scope
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
 from ..llm import get_chat
@@ -45,20 +46,20 @@ def _route(q: str, user: str) -> str:
 _ANSWERS = TTLCache(maxsize=512)
 
 
-def _answer_key(question: str, where: Optional[dict[str, Any]]) -> tuple:
-    """Documents-answer cache key: the normalized question, the retrieval filter (today's only scope),
-    and the index version, so any ingest makes every earlier entry unreachable. When per-user scoping
-    (PRD FR-4) lands, the user's scope must join this key."""
+def _answer_key(question: str, where: Optional[dict[str, Any]], scope: Scope) -> tuple:
+    """Documents-answer cache key: the normalized question, the retrieval filter, the user's scope (a
+    user never receives an answer built from sources outside their scope, PRD FR-4.5) and the index
+    version, so any ingest makes every earlier entry unreachable."""
     from ..index_version import index_version
     norm = re.sub(r"\s+", " ", question.strip().lower()).rstrip("?!. ")
-    return norm, json.dumps(where or {}, sort_keys=True, default=str), index_version()
+    return norm, json.dumps(where or {}, sort_keys=True, default=str), scope.key(), index_version()
 
 
 def answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-           user: str = "", refresh: bool = False) -> Answer:
+           user: str = "", refresh: bool = False, *, scope: Scope) -> Answer:
     """Blocking entry point: the verified Answer from answer_stream()."""
     final: Optional[Answer] = None
-    for ev in answer_stream(question, history, where, user, refresh):
+    for ev in answer_stream(question, history, where, user, refresh, scope=scope):
         if isinstance(ev, Final):
             final = ev.answer
     assert final is not None, "answer_stream() must end with a Final event"
@@ -66,13 +67,14 @@ def answer(question: str, history: Optional[list[dict]] = None, where: Optional[
 
 
 def answer_stream(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-                  user: str = "", refresh: bool = False) -> Iterator[Event]:
+                  user: str = "", refresh: bool = False, *, scope: Scope) -> Iterator[Event]:
     """Streaming entry point. Always ends with exactly one Final. A provider failure (quota, timeout,
     auth) becomes a soft answer the UI can show instead of a traceback; the raw cause stays in
-    warnings and the call log. refresh=True reads the database live (skips the SQL result cache)."""
+    warnings and the call log. refresh=True reads the database live (skips the SQL result cache).
+    scope: what this user may see (PRD FR-4); required, so no call can forget it."""
     drafting = False
     try:
-        for ev in _answer_stream(question, history, where, user, refresh):
+        for ev in _answer_stream(question, history, where, user, refresh, scope):
             if isinstance(ev, Token):
                 drafting = True
             elif isinstance(ev, Replace):
@@ -87,7 +89,7 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
 
 
 def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
-                   user: str, refresh: bool = False) -> Iterator[Event]:
+                   user: str, refresh: bool, scope: Scope) -> Iterator[Event]:
     from ..index_version import refresh_if_changed
     refresh_if_changed()   # pick up a background ingest without a restart (cheap: one stat)
     s = settings()
@@ -99,7 +101,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # Repeat documents question: serve the earlier verified answer, no model call. Only a
     # self-contained question (no history) can hit, because a follow-up's meaning depends on context.
     ttl = int(s.get("answer.cache_ttl_seconds", 3600))
-    key = _answer_key(question, where) if not history and ttl > 0 else None
+    key = _answer_key(question, where, scope) if not history and ttl > 0 else None
     if key is not None:
         hit = _ANSWERS.get(key)
         if hit is not None:
@@ -122,6 +124,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
 
     chunks: list[Chunk] = []
     results: list[QueryResult] = []
+    denied = False                 # a fixed tool refused a factory outside the user's scope
     if r == "data":
         from ..data.tools import needs_clarification
         ask = needs_clarification(q)
@@ -134,27 +137,29 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         # Independent sources: search the documents while the database query (and its SQL-generation
         # call) runs, instead of one after the other. A worker's exception re-raises in .result().
         yield Stage("searching+querying", "Searching documents and querying the database…")
-        docs_f = _POOL.submit(retrieve, q, where=where)
-        data_f = _POOL.submit(answer_from_data, q, user, refresh)
+        docs_f = _POOL.submit(retrieve, q, where=where, scope=scope)
+        data_f = _POOL.submit(answer_from_data, q, user, refresh, scope=scope)
         chunks = docs_f.result()[:top]
         results = list(data_f.result())
     elif r == "documents":
         yield Stage("searching", "Searching documents…")
-        chunks = retrieve(q, where=where)[:top]
+        chunks = retrieve(q, where=where, scope=scope)[:top]
     elif r == "data":
         yield Stage("querying", "Querying the database…")
-        results = list(answer_from_data(q, user, refresh))
+        results = list(answer_from_data(q, user, refresh, scope=scope))
     if r in ("data", "both"):
         # a failed query is not a source: never let the model cite an error message
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
+        denied = any(x.denied for x in results)
         results = [x for x in results if not x.error]
         if r == "data" and not any(x.rows for x in results) and not chunks:
             # data route found nothing usable: fall back to documents once (a PDF may hold it)
             yield Stage("searching", "Searching documents…")
-            chunks = retrieve(q, where=where)[:top]
+            chunks = retrieve(q, where=where, scope=scope)[:top]
 
     if not chunks and not any(x.rows for x in results):
-        out.text = nf + " No document or database view in the system covers this question."
+        out.text = nf + " " + (prompt("scope_denied").strip() if denied
+                               else "No document or database view in the system covers this question.")
         out.not_found = True
         yield Final(_log(out, user)); return
 
@@ -173,7 +178,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if out.not_found and r == "data" and not chunks:
         yield Replace("retrying against documents")   # clear the not-found draft before the search starts
         yield Stage("searching", "Searching documents…")
-        doc_chunks = retrieve(q, where=where)[:top]
+        doc_chunks = retrieve(q, where=where, scope=scope)[:top]
         if doc_chunks:
             out.warnings.append("data route returned no answer; retried against documents")
             retry = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)

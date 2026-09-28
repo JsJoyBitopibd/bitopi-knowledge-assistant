@@ -11,6 +11,7 @@ import ragbot.llm.base as base
 from ragbot.agent.citations import verify
 from ragbot.agent.templated import fmt, try_template
 from ragbot.models import QueryResult
+from ragbot.auth.models import Scope
 
 from test_answer_stream import FakeChat
 
@@ -84,7 +85,7 @@ def wired(monkeypatch):
     monkeypatch.setattr(orch, "_route", lambda q, user: "data")
 
     def install(result, replies):
-        monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False: [result])
+        monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [result])
         chat = FakeChat(replies)
         monkeypatch.setattr(orch, "get_chat", lambda: chat)
         return chat
@@ -93,7 +94,7 @@ def wired(monkeypatch):
 
 def test_orchestrator_answers_fixed_tool_without_a_model_call(wired):
     wired(_qr(["Meetings"], [[0]]), [])           # no scripted replies: any model call would fail
-    a = orch.answer("How many PPM meetings does TAL have next week?")
+    a = orch.answer("How many PPM meetings does TAL have next week?", scope=Scope.unrestricted())
     assert a.text == "TAL has 0 PPM meeting(s) next week [D1]." and not a.not_found
     assert a.usage.calls == 0 and "templated answer (no model call)" in a.warnings
     assert [r.marker for r in a.references] == ["D1"]
@@ -101,12 +102,12 @@ def test_orchestrator_answers_fixed_tool_without_a_model_call(wired):
 
 def test_generated_sql_still_uses_the_model(wired):
     chat = wired(_qr(["Orders"], [[7]], tool="generated"), ["There are 7 orders [D1]."])
-    a = orch.answer("some free-form data question")
+    a = orch.answer("some free-form data question", scope=Scope.unrestricted())
     assert a.text == "There are 7 orders [D1]." and a.usage.calls == 1 and not chat.replies
 
 
 def test_missing_order_id_asks_instead_of_querying(wired, monkeypatch):
     wired(_qr(["n"], [[1]]), [])
     monkeypatch.setattr(tools, "answer_from_data", lambda *a, **k: pytest.fail("must not query the database"))
-    a = orch.answer("What is the status of the order?")
+    a = orch.answer("What is the status of the order?", scope=Scope.unrestricted())
     assert a.route == "clarify" and a.text.startswith("Which export order") and a.usage.calls == 0

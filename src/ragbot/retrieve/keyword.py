@@ -52,6 +52,10 @@ class KeywordIndex:
         return [(self.ids[i], float(scores[i])) for i in order if scores[i] > 0]
 
 
+# chunk_fts columns a retrieval filter may restrict to a list of values (store.FTS_DDL)
+_LIST_COLUMNS = ("category", "source", "factory", "department", "confidentiality", "buyer_code")
+
+
 class FtsKeywordIndex:
     """BM25 over the registry's chunk_fts table. A fresh read-only connection per search: searches run
     in a worker thread (retriever.py), and sqlite3 connections must not cross threads."""
@@ -68,13 +72,18 @@ class FtsKeywordIndex:
         sql = "SELECT id, bm25(chunk_fts) FROM chunk_fts WHERE chunk_fts MATCH ?"
         args: list[Any] = [" OR ".join(f'"{t}"' for t in terms)]
         # The retrieval filters are applied inside the search, so k results survive them (filtering
-        # after the merge used to shrink the candidate list silently).
+        # after the merge used to shrink the candidate list silently). An unknown key is an error, not
+        # skipped: a filter this index cannot apply would otherwise let out-of-scope chunks through.
         for col, val in (where or {}).items():
             if col == "superseded":
                 sql += " AND superseded = ?"; args.append(int(bool(val)))
-            elif col in ("category", "source"):
+            elif col in _LIST_COLUMNS:
                 vals = list(val) if isinstance(val, (list, set, tuple)) else [val]
+                if not vals:
+                    return []                                   # nothing allowed: no candidates
                 sql += f" AND {col} IN ({','.join('?' * len(vals))})"; args += vals
+            else:
+                raise ValueError(f"the keyword index cannot filter on {col!r}")
         sql += " ORDER BY bm25(chunk_fts) LIMIT ?"
         args.append(int(k))
         con = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)

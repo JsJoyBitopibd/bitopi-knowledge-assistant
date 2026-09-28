@@ -6,6 +6,9 @@
 #   database: catalog whose rag.* views the SQL uses (virtual views are expanded as usual)
 #   sql:      one SELECT; checked by guard.assert_read_only, run on a read-only connection
 #   indexes:  columns the fixed tools filter on
+#   scope_column: the copy's factory column. The copy holds every factory; a user limited to some
+#             factories reads it only through a filter on this column (data/tools.py), and goes live
+#             (where the view filters) while a copy made before the column existed is in place.
 
 - name: pcd_history
   database: BitopiSplint
@@ -15,6 +18,7 @@
     timeouts (measured 2026-09-27).
   views: [rag.vw_PCDChangeHistory]
   sql: |
-    SELECT ExportOrderID, VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated
+    SELECT ExportOrderID, VersionNo, PCD, ShipDate, UpdatedBy, DateUpdated, Factory
     FROM rag.vw_PCDChangeHistory
   indexes: [ExportOrderID]
+  scope_column: Factory

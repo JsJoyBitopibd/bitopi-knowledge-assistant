@@ -58,6 +58,7 @@ class QueryResult(BaseModel):
     key_columns: list[str] = Field(default_factory=list)
     as_of: datetime = Field(default_factory=datetime.now)
     error: Optional[str] = None
+    denied: bool = False         # refused before running: the question names data outside the user's scope
 
     @property
     def row_keys(self) -> list[str]:

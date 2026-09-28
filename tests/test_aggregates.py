@@ -8,6 +8,7 @@ import pytest
 import ragbot.data.aggregates as agg
 import ragbot.data.tools as tools
 from ragbot.data.guard import GuardError, assert_read_only
+from ragbot.auth.models import Scope
 
 COLS = ["ExportOrderID", "VersionNo", "PCD", "ShipDate", "UpdatedBy", "DateUpdated"]
 
@@ -89,23 +90,23 @@ def test_fixed_tool_answers_from_the_copy_and_refresh_goes_live(tmp_path, monkey
     import ragbot.data.connectors as con
     monkeypatch.setattr(con, "_log", lambda *a, **k: None)
     live = []
-    monkeypatch.setattr(tools, "rewrite_virtual", lambda sql, cat: (sql, ["rag.vw_PCDChangeHistory"]))
+    monkeypatch.setattr(tools, "rewrite_virtual", lambda sql, cat, scope=None: (sql, ["rag.vw_PCDChangeHistory"]))
     monkeypatch.setattr(tools, "cached_run", lambda *a, **k: live.append(k) or (["VersionNo"], [[9]], datetime.now()))
     cats = {"BitopiSplint": _cat()}
 
-    r = tools.run_fixed_tool(TOOL, {"eo": "TAL-25-1493-0"}, cats)
+    r = tools.run_fixed_tool(TOOL, {"eo": "TAL-25-1493-0"}, cats, scope=Scope.unrestricted())
     assert r.engine == "local" and len(r.rows) == 4 and r.as_of == agg.available("pcd_history", db) and not live
     assert r.views == ["rag.vw_PCDChangeHistory"]
 
-    r = tools.run_fixed_tool(TOOL, {"eo": "TAL-25-1493-0"}, cats, refresh=True)     # Refresh data: live
+    r = tools.run_fixed_tool(TOOL, {"eo": "TAL-25-1493-0"}, cats, refresh=True, scope=Scope.unrestricted())     # Refresh data: live
     assert r.engine == "sqlserver" and live and live[0]["timeout"] == 30
 
 
 def test_no_copy_yet_falls_back_to_live(tmp_path, monkeypatch):
     monkeypatch.setattr(agg, "db_path", lambda: tmp_path / "missing.db")
-    monkeypatch.setattr(tools, "rewrite_virtual", lambda sql, cat: (sql, []))
+    monkeypatch.setattr(tools, "rewrite_virtual", lambda sql, cat, scope=None: (sql, []))
     monkeypatch.setattr(tools, "cached_run", lambda *a, **k: (["VersionNo"], [[1]], datetime.now()))
-    r = tools.run_fixed_tool(TOOL, {"eo": "X"}, {"BitopiSplint": _cat()})
+    r = tools.run_fixed_tool(TOOL, {"eo": "X"}, {"BitopiSplint": _cat()}, scope=Scope.unrestricted())
     assert r.engine == "sqlserver" and r.rows == [[1]]
 
 

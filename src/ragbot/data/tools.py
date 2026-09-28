@@ -16,6 +16,7 @@ from typing import Any, Optional
 import yaml
 from sqlglot import exp, parse_one
 
+from ..auth.models import Scope
 from ..config import prompt, settings
 from ..llm import get_chat
 from ..models import QueryResult
@@ -106,9 +107,11 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
     return None
 
 
-def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, user: str) -> Optional[QueryResult]:
+def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, user: str,
+                    scope: Scope) -> Optional[QueryResult]:
     """Answer a fixed tool from its local pre-computed copy (data/aggregates.py), or None to go live
-    (no copy yet, or the local query failed). The result's as_of is the copy's refresh time."""
+    (no copy yet, no way to apply the user's scope to it, or the local query failed). The result's
+    as_of is the copy's refresh time."""
     from . import aggregates
     from .connectors import _log
     name = tool["aggregate"]
@@ -116,6 +119,16 @@ def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, 
     if as_of is None or not tool.get("local_sql"):
         return None
     sql = tool["local_sql"].strip()
+    if not scope.all_factories:
+        # The copy holds every factory's rows. Read it only through the scope filter; when the copy has
+        # no factory column yet (refreshed before F1), go live, where the view filters the rows.
+        spec = next((a for a in aggregates.load_specs() if a.get("name") == name), {})
+        col = spec.get("scope_column")
+        if not col or not aggregates.has_column(name, col):
+            return None
+        sql = aggregates.scoped_local_sql(sql, name, col, scope.db_factories())
+        if sql is None:
+            return None
     t0 = time.perf_counter()
     try:
         cols, rows = aggregates.run_local(sql, params, int(settings()["data.max_rows"]))
@@ -130,19 +143,27 @@ def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, 
 
 
 def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog], user: str = "",
-                   refresh: bool = False) -> QueryResult:
+                   refresh: bool = False, *, scope: Scope) -> QueryResult:
     cat = cats[tool["database"]]
     sql = tool["sql"].strip()
-    local = _from_aggregate(tool, params, cat, user) if tool.get("aggregate") and not refresh else None
+    factory = params.get("factory")
+    if factory and not scope.allows_factory(str(factory)):
+        # Say so instead of running it: the view filter would return nothing, and the templated answer
+        # would then state a false "RHL has 0 order(s)".
+        return QueryResult(database=cat.database, engine=cat.engine, views=_views_in(sql, cat), sql=sql,
+                           params=params, tool=tool["name"], columns=[], rows=[], denied=True,
+                           error=f"outside the user's scope: factory {factory}")
+    local = _from_aggregate(tool, params, cat, user, scope) if tool.get("aggregate") and not refresh else None
     if local is not None:
         return local
     try:
-        sql_exec, views = rewrite_virtual(sql, cat)
+        sql_exec, views = rewrite_virtual(sql, cat, scope=scope)
         # `heavy: true` in fixed_tools.yaml: a known-slow query (e.g. over the 4M-row, unindexed
         # dbo.ExportOrderBack) gets the longer timeout tier instead of failing at the default.
         timeout = int(settings().get("data.timeout_seconds_heavy", 30)) if tool.get("heavy") else None
         cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env, display_sql=sql,
-                                       tool=tool["name"], user=user, refresh=refresh, timeout=timeout)
+                                       tool=tool["name"], user=user, refresh=refresh, timeout=timeout,
+                                       scope_key=scope.key())
         return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=sql, sql_executed=sql_exec,
                            params=params, tool=tool["name"], columns=cols, rows=rows, key_columns=_keys_for(views, cat),
                            as_of=as_of)
@@ -189,10 +210,11 @@ def _schema_selection(question: str, cats: dict[str, Catalog]) -> dict[str, list
     return {name: select_tables(question, c, k, qvec) for name, c in cats.items() if c.offered_tables}
 
 
-def _guard_for(sql: str, cat: Catalog, max_rows: int) -> str:
+def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope) -> str:
     """Guard with the catalog's FULL offered set as the allow-list (security), independent of which
-    tables the prompt happened to show (relevance)."""
-    offered = cat.offered_tables
+    tables the prompt happened to show (relevance). Raw tables have no common factory column to filter
+    on, so a user limited to some factories may read the rag views only."""
+    offered = cat.offered_tables if scope.all_factories else []
     big_rows = int(settings().get("data.big_table_rows", 1_000_000))
     return guard(sql, cat.view_names, cat.dialect, max_rows,
                  allowed_tables=frozenset(t.name.lower() for t in offered),
@@ -236,7 +258,8 @@ def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -
     return fallback_db, raw
 
 
-def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False) -> QueryResult:
+def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
+                     scope: Scope) -> QueryResult:
     """One SQL-generation call sees every loaded catalog and must name the database it chose
     (`DATABASE: <name>`) before the SQL, so the guard's view allow-list matches the right catalog."""
     s = settings()
@@ -245,7 +268,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
         f"=== Database: {name} ({c.dialect}) — {c.description or 'no description'} ===\n{c.render()}"
         for name, c in cats.items())
     from .schema_index import join_hints
-    selected = _schema_selection(question, cats)
+    # raw tables are not offered to a user limited to some factories (see _guard_for)
+    selected = _schema_selection(question, cats) if scope.all_factories else {}
     tables_text = "\n\n".join(t for t in (cats[n].render_selected(sel, join_hints(sel, cats[n]))
                                           for n, sel in selected.items()) if t)
     # Static text first (rules, curated views, examples), the per-question tables last: a stable
@@ -263,12 +287,12 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
         db_name, sql = _split_database_line(raw, cats, fallback.database)
         cat = cats[db_name]
         try:
-            safe = _guard_for(sql, cat, int(s["data.max_rows"]))
-            sql_exec, views = rewrite_virtual(safe, cat)
+            safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
+            sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
             views += [n for n in _views_in(safe, cat) if not cat.view(n)]   # raw tables, for the [D#] reference
             params = _extract_params(safe, cat)
             cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
-                                           display_sql=safe, user=user, refresh=refresh)
+                                           display_sql=safe, user=user, refresh=refresh, scope_key=scope.key())
             return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
                                params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of)
         except Exception as e:
@@ -280,9 +304,10 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                        error=last_err)
 
 
-def answer_from_data(question: str, user: str = "", refresh: bool = False) -> list[QueryResult]:
+def answer_from_data(question: str, user: str = "", refresh: bool = False, *, scope: Scope) -> list[QueryResult]:
     """Try fixed tools across all catalogs; else generate SQL, letting the model pick the database.
-    refresh=True skips the SQL result cache (data/cache.py) and reads live."""
+    refresh=True skips the SQL result cache (data/cache.py) and reads live. Every statement is limited
+    to the user's scope (data/virtual.py)."""
     cats = load_catalogs()
     if not cats:
         return []
@@ -290,5 +315,5 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False) -> li
     if hit:
         tool, params = hit
         if tool["database"] in cats:
-            return [run_fixed_tool(tool, params, cats, user, refresh)]
-    return [generate_and_run(question, cats, user, refresh)]
+            return [run_fixed_tool(tool, params, cats, user, refresh, scope=scope)]
+    return [generate_and_run(question, cats, user, refresh, scope=scope)]

@@ -4,6 +4,7 @@ lists alternative pages that also count as a hit). Usage: python scripts/hit_rat
 import argparse, json, _path  # noqa: F401
 from pathlib import Path
 from ragbot.retrieve.retriever import retrieve
+from ragbot.auth.models import Scope
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,7 +23,7 @@ def main() -> None:
     cases = [json.loads(l) for l in (ROOT / a.cases).read_text(encoding="utf-8").splitlines() if l.strip()]
     hits, misses = 0, []
     for c in cases:
-        got = [(x.source, x.page) for x in retrieve(c["q"], top_k=a.k)]
+        got = [(x.source, x.page) for x in retrieve(c["q"], top_k=a.k, scope=Scope.unrestricted())]
         if wanted(c) & set(got):
             hits += 1
         else:
