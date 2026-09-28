@@ -8,6 +8,7 @@ from ragbot.agent.orchestrator import answer
 from ragbot.auth.models import Scope
 from ragbot.config import settings
 from ragbot.llm import get_chat
+from ragbot.llm.base import LLMError
 
 ROOT = Path(__file__).resolve().parents[1]
 NF = settings()["answer.not_found_text"]
@@ -15,11 +16,20 @@ JUDGE_SYS = "You grade answers from a document-and-data assistant. Be strict. Ou
 
 
 def judge(sources: str, ans: str, expected: str) -> dict:
+    """The judge's claims and verdict. A provider failure (timeout, quota) is retried once; if it fails
+    again the case is returned unscored (verdict None) instead of crashing the run and losing it."""
     msg = (f"<sources>\n{sources}\n</sources>\n<answer>{ans}</answer>\n<expected>{expected}</expected>\n\n"
            "1. List each factual claim in the answer and whether the sources support it.\n"
            "2. Say whether the answer agrees with the expected answer (same facts; wording may differ).\n"
            'Return JSON: {"claims":[{"claim":str,"supported":bool}],"verdict":"agree"|"partial"|"disagree"}')
-    r = get_chat().chat([{"role": "user", "content": msg}], system=JUDGE_SYS, max_tokens=1500, purpose="judge")
+    for attempt in (1, 2):
+        try:
+            r = get_chat().chat([{"role": "user", "content": msg}], system=JUDGE_SYS, max_tokens=1500, purpose="judge")
+            break
+        except LLMError as e:
+            if attempt == 2:
+                return {"claims": [], "verdict": None, "judge_error": f"judge call failed: {e}"[:200]}
+            time.sleep(10)
     raw = re.sub(r"^```(json)?|```$", "", r.text.strip(), flags=re.M).strip()
     try:
         return json.loads(raw)
@@ -75,9 +85,13 @@ def main():
                 row["faithful"], row["correct"] = None, 0.0
             else:
                 j = judge(src_text, res.text, c.get("expected", ""))
-                cl = j.get("claims", [])
-                row["faithful"] = sum(1 for k in cl if k.get("supported")) / len(cl) if cl else 0.0
-                row["correct"] = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}.get(j.get("verdict"), 0.0)
+                if j.get("verdict") is None:        # the judge could not be reached: unscored, not wrong
+                    row["faithful"] = row["correct"] = None
+                    row["unscored"] = True
+                else:
+                    cl = j.get("claims", [])
+                    row["faithful"] = sum(1 for k in cl if k.get("supported")) / len(cl) if cl else 0.0
+                    row["correct"] = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}.get(j.get("verdict"), 0.0)
                 if "judge_error" in j:
                     row["judge_error"] = j["judge_error"]
         rows.append(row)
@@ -93,14 +107,16 @@ def main():
     summary = {"date": datetime.now().isoformat(timespec="minutes"), "tag": a.tag, "model": get_chat().model,
                "n": len(rows), "hit_rate": mean("hit"), "faithfulness": mean("faithful"), "correctness": mean("correct"),
                "citation_validity": mean("citation_valid"),
-               "not_found_ok": mean_sub(rows, "not_found"), "refuse_ok": mean_sub(rows, "refuse")}
+               "not_found_ok": mean_sub(rows, "not_found"), "refuse_ok": mean_sub(rows, "refuse"),
+               "unscored": sum(1 for r in rows if r.get("unscored"))}
     out = ROOT / "eval" / "results"; out.mkdir(parents=True, exist_ok=True)
     stamp = summary["date"].replace(":", "").replace("-", "")
     (out / f"{stamp}.json").write_text(json.dumps({"summary": summary, "rows": rows}, indent=1, ensure_ascii=False),
                                        encoding="utf-8")
     print(f"n={summary['n']} hit={summary['hit_rate']:.0%} faithful={summary['faithfulness']:.0%} "
           f"correct={summary['correctness']:.0%} citations_valid={summary['citation_validity']:.0%} "
-          f"not_found={summary['not_found_ok']:.0%} refuse={summary['refuse_ok']:.0%}  model={summary['model']}")
+          f"not_found={summary['not_found_ok']:.0%} refuse={summary['refuse_ok']:.0%}  model={summary['model']}"
+          + (f"  UNSCORED={summary['unscored']} (judge unreachable; re-run them)" if summary["unscored"] else ""))
     compare(out / f"{stamp}.json")
 
 
