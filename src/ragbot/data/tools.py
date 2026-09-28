@@ -272,6 +272,9 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
     from .schema_index import join_hints
     # raw tables are not offered to a user limited to some factories (see _guard_for)
     selected = _schema_selection(question, cats) if scope.all_factories else {}
+    from .schema_usage import log_selection
+    for name, sel in selected.items():
+        log_selection(name, sel, question, user)       # which tables to sample (G2)
     tables_text = "\n\n".join(t for t in (cats[n].render_selected(sel, join_hints(sel, cats[n]))
                                           for n, sel in selected.items()) if t)
     # Static text first (rules, curated views, examples), the per-question tables last: a stable

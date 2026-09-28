@@ -49,6 +49,8 @@ def _cat():
 def wired(monkeypatch):
     si._CACHE.clear()
     monkeypatch.setattr(base, "_log_call", lambda *a: None)
+    # generate_and_run logs which tables it was shown; tests must not write the real logs/schema_select.csv
+    monkeypatch.setattr("ragbot.data.schema_usage.log_selection", lambda *a, **k: None)
     monkeypatch.setattr(si, "json_sha", lambda cat: "x")
 
     def no_embedder(q):

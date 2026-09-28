@@ -83,13 +83,27 @@ def _type(typ: str, max_len: Optional[int]) -> str:
     return typ
 
 
+def carried_samples(previous: Optional[dict[str, Any]]) -> dict[tuple[str, str, str], list[str]]:
+    """The samples of an earlier discovery document, keyed like assemble()'s `samples`, so a new run keeps
+    them (a run without --samples, or with --tables, used to write every other column without its values)."""
+    out: dict[tuple[str, str, str], list[str]] = {}
+    for t in (previous or {}).get("tables", []):
+        s, _, name = t["name"].partition(".")
+        for c in t.get("columns", []):
+            if c.get("samples"):
+                out[(s, name, c["name"])] = list(c["samples"])
+    return out
+
+
 def sample_candidates(tables: Iterable[tuple], columns: Iterable[tuple], max_rows: int,
-                      max_len: int = 100) -> list[tuple[str, str, str]]:
+                      max_len: int = 100, only: Optional[set[str]] = None) -> list[tuple[str, str, str]]:
     """Columns worth sampling for their distinct values: short text columns of base tables with at most
-    `max_rows` rows, never a sensitive column or a column of a sensitive table. Keeps the production
-    server's cost bounded: each sample is one DISTINCT TOP 31 scan of a small table."""
+    `max_rows` rows, never a sensitive column or a column of a sensitive table, and — with `only` (lower-
+    case schema.name) — only in those tables. Keeps the production server's cost bounded: each sample is
+    one DISTINCT TOP 31 scan of a small table."""
     small = {(s, t) for s, t, kind, rows in tables
-             if str(kind).strip() == "U" and rows is not None and int(rows) <= max_rows and not is_sensitive(t)}
+             if str(kind).strip() == "U" and rows is not None and int(rows) <= max_rows and not is_sensitive(t)
+             and (only is None or f"{s}.{t}".lower() in only)}
     out = []
     for s, t, c, typ, mlen, _nullable, _cid in columns:
         if (s, t) in small and typ in SAMPLE_TYPES and mlen is not None and 0 < mlen <= max_len \

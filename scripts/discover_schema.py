@@ -11,11 +11,14 @@ Reads sys.* catalog views only, except with --samples: then, for short text colu
 tables (<= --sample-max-rows rows), it reads up to 30 distinct values so the SQL model knows the
 codes a column holds (e.g. ShipmentStatus: TO SHIP / SHIPPED). Sensitive columns and tables
 (src/ragbot/data/sensitive.py) are never sampled. The connection is read-only, autocommit off, and
-rolled back before closing.
+rolled back before closing. A full --samples pass is thousands of queries; --tables-from-logs limits it
+to the tables the SQL model has actually needed (data/schema_usage.py). Values sampled in an earlier run
+are kept in the new file unless the column is sampled again.
 
 Usage:
   python scripts/discover_schema.py <ConnEnvVarName> <FriendlyName> [--schemas dbo,PPM]
   python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json [--samples]
+  python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json --samples --tables-from-logs
 """
 import argparse, json, sys, _path  # noqa: F401
 from pathlib import Path
@@ -100,10 +103,24 @@ def write_json(cn, cur, a, schemas) -> None:
         LEFT JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
         WHERE ep.class = 1 AND ep.name = 'MS_Description' AND o.type IN ('U', 'V') {sf}""").fetchall()]
 
+    dest = ROOT / "config" / "catalog" / "discovered"
+    f = dest / f"{a.friendly}.json"
+    from ragbot.data.discovery import carried_samples
+    previous = carried_samples(json.loads(f.read_text(encoding="utf-8")) if f.exists() else None)
     samples = {}
     if a.samples:
-        cands = sample_candidates(tables, columns, a.sample_max_rows)
-        print(f"sampling {len(cands)} short text columns of tables with <= {a.sample_max_rows:,} rows")
+        only = None
+        if a.tables:
+            only = {t.strip().lower() for t in a.tables.split(",") if t.strip()}
+        elif a.tables_from_logs:
+            from ragbot.data.catalog import load_catalogs
+            from ragbot.data.schema_usage import used_tables
+            cat = load_catalogs().get(a.friendly)
+            only = {n.lower() for n in used_tables(cat)} if cat else set()
+            print(f"tables from the logs ({len(only)}): {', '.join(sorted(only)) or 'none'}")
+        cands = sample_candidates(tables, columns, a.sample_max_rows, only=only)
+        print(f"sampling {len(cands)} short text columns of tables with <= {a.sample_max_rows:,} rows"
+              + (f" in {len(only)} selected table(s)" if only is not None else ""))
         cn.timeout = 10
         for s, t, c in cands:
             try:
@@ -115,11 +132,13 @@ def write_json(cn, cur, a, schemas) -> None:
                 continue
             if 0 < len(vals) <= 30:
                 samples[(s, t, c)] = sorted(str(v).strip() for v in vals)
+    kept = {k: v for k, v in previous.items() if k not in samples}
+    samples = {**kept, **samples}                 # a column sampled now replaces its old values
+    if kept:
+        print(f"kept the values of {len(kept)} column(s) sampled in an earlier run")
 
     doc = assemble(a.friendly, a.conn_env, tables, columns, pks, fks, descs, samples)
-    dest = ROOT / "config" / "catalog" / "discovered"
     dest.mkdir(parents=True, exist_ok=True)
-    f = dest / f"{a.friendly}.json"
     f.write_text(json.dumps(doc, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     n_t = sum(1 for t in doc["tables"] if t["kind"] == "table")
     n_fk = sum(len(t["foreign_keys"]) for t in doc["tables"])
@@ -139,6 +158,10 @@ def main() -> None:
     ap.add_argument("--json", action="store_true", help="write config/catalog/discovered/<db>.json instead")
     ap.add_argument("--samples", action="store_true", help="with --json: read distinct values of short text columns")
     ap.add_argument("--sample-max-rows", type=int, default=200_000, help="only sample tables up to this many rows")
+    ap.add_argument("--tables", default=None, help="with --samples: only these tables (comma-separated schema.name)")
+    ap.add_argument("--tables-from-logs", action="store_true",
+                    help="with --samples: only the raw tables schema selection showed or generated SQL read "
+                         "(logs/schema_select.csv, logs/sql.csv)")
     a = ap.parse_args()
 
     from ragbot.config import env   # loads .env; os.environ alone does not see it
