@@ -10,7 +10,7 @@ as four users: TAL staff, RHL staff, an HR user with no factory, and an unrestri
 read the live databases (read-only). A leak is an out-of-scope source, factory or text in the search
 results, the rows, the references, the answer, or the text sent to the model. Cases marked "control"
 must find in-scope material; if one fails, the run is invalid (no leaks would then prove nothing).
-Results: eval/results/scope_<timestamp>.json.
+Results: eval/scope/scope_<timestamp>.json (not eval/results/, which holds eval.py's runs).
 """
 import argparse, json, sys, tempfile, _path  # noqa: F401
 from datetime import datetime
@@ -185,7 +185,7 @@ def main() -> None:
     skipped = len(out) - len(ran)
     print(f"\n{len(ran)} cases run{f', {skipped} skipped (--no-llm)' if skipped else ''}: {leaks} leak(s); "
           f"controls/expectations not met: {bad_controls or 'none'}")
-    res_dir = ROOT / "eval" / "results"
+    res_dir = ROOT / "eval" / "scope"
     res_dir.mkdir(parents=True, exist_ok=True)
     f = res_dir / f"scope_{datetime.now():%Y%m%dT%H%M}.json"
     f.write_text(json.dumps({"leaks": leaks, "misses": bad_controls, "cases": out}, indent=1, default=str), encoding="utf-8")

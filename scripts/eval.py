@@ -36,7 +36,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int); ap.add_argument("--sleep", type=float, default=0.0)
     ap.add_argument("--kind", help="comma-separated kinds to run"); ap.add_argument("--tag", default="")
+    ap.add_argument("--compare", metavar="FILE", help="only compare a saved run (eval/results/<stamp>.json)")
     a = ap.parse_args()
+    if a.compare:
+        compare(Path(a.compare) if Path(a.compare).is_absolute() else ROOT / a.compare)
+        return
     cases = [json.loads(l) for l in Path(settings().path("golden_set")).read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.kind:
         cases = [c for c in cases if c.get("kind") in a.kind.split(",")]
@@ -97,12 +101,21 @@ def main():
     print(f"n={summary['n']} hit={summary['hit_rate']:.0%} faithful={summary['faithfulness']:.0%} "
           f"correct={summary['correctness']:.0%} citations_valid={summary['citation_validity']:.0%} "
           f"not_found={summary['not_found_ok']:.0%} refuse={summary['refuse_ok']:.0%}  model={summary['model']}")
-    # Compare like with like: the most recent earlier run that covered every case of this one, scored on
-    # exactly these cases. (Comparing a --kind subset with a different run's totals printed false BLOCKs.)
+    compare(out / f"{stamp}.json")
+
+
+def compare(current: Path) -> None:
+    """Compare like with like: the most recent earlier run that covered every case of this one, scored on
+    exactly these cases. (Comparing a --kind subset with a different run's totals printed false BLOCKs.)
+    Only files named like a run (<date>T<time>.json) are candidates; other reports in the folder (and
+    the run itself) are skipped."""
+    run = json.loads(current.read_text(encoding="utf-8"))
+    rows, summary = run["rows"], run["summary"]
     ids = {r["id"] for r in rows}
     base = None
-    for f in sorted(out.glob("*.json"))[:-1][::-1]:
-        old = {r["id"]: r for r in json.loads(f.read_text(encoding="utf-8"))["rows"]}
+    runs = sorted(f for f in current.parent.glob("*.json") if re.fullmatch(r"\d{8}T\d{4}", f.stem))
+    for f in reversed([f for f in runs if f.name < current.name]):
+        old = {r["id"]: r for r in json.loads(f.read_text(encoding="utf-8")).get("rows", [])}
         if ids <= set(old):
             base = (f.name, [old[i] for i in sorted(ids)])
             break
@@ -115,6 +128,10 @@ def main():
             before = sum(xs) / len(xs) if xs else 0.0
             flag = "  <-- BLOCK: dropped more than 5 points" if before - summary[k] > 0.05 else ""
             print(f"  {k:<18} {before:.0%} -> {summary[k]:.0%}{flag}")
+        changed = [(r["id"], o.get("correct"), r.get("correct")) for r, o in zip(sorted(rows, key=lambda r: r["id"]), old_rows)
+                   if r.get("correct") != o.get("correct")]
+        if changed:
+            print("  correctness changed: " + ", ".join(f"case {i} {a} -> {b}" for i, a, b in changed))
 
 
 if __name__ == "__main__":
