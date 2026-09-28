@@ -185,7 +185,7 @@ def show_result(res, key: str) -> None:
         return
     st.caption(present.caption(res))
     df = present.frame(res)
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.dataframe(df, hide_index=True, width="stretch")
     chart = present.chart_columns(res)
     if chart:
         st.bar_chart(df.set_index(chart[0])[chart[1]])

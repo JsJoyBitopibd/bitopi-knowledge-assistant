@@ -1,0 +1,11 @@
+# Streamlit settings, read from the directory `streamlit run` starts in (the repo root; /app in Docker).
+
+[server]
+# The file watcher inspects every imported module to decide what to reload. transformers' image modules
+# import torchvision, which this app does not install, so each start logged ~50 harmless tracebacks.
+# The pilot is not edited while it runs; for development, start with --server.fileWatcherType auto.
+fileWatcherType = "none"
+headless = true
+
+[browser]
+gatherUsageStats = false

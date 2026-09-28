@@ -30,6 +30,7 @@ COPY scripts/ ./scripts/
 COPY prompts/ ./prompts/
 COPY config/ ./config/
 COPY pytest.ini ./
+COPY .streamlit/ ./.streamlit/
 
 ENV HF_HOME=/models \
     PYTHONPATH=/app/src \
