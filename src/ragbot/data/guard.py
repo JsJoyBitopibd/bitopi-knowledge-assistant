@@ -36,6 +36,30 @@ class GuardError(ValueError):
     pass
 
 
+def statement_ctes(tree: exp.Expression) -> list[exp.CTE]:
+    """The statement's CTEs in declaration order. One WITH, at the top: T-SQL allows no other, and a
+    WITH inside a subquery would scope names differently from what cte_reference_ok() assumes."""
+    withs = list(tree.find_all(exp.With))
+    if not withs:
+        return []
+    if len(withs) > 1 or withs[0].parent is not tree:
+        raise GuardError("only one WITH, at the start of the statement")
+    return list(withs[0].expressions)
+
+
+def cte_reference_ok(t: exp.Table, ctes: list[exp.CTE]) -> bool:
+    """Whether the bare name `t` is a reference to one of the statement's CTEs where SQL resolves it to
+    one: in the main query any of them; inside a CTE only those declared before it. SQL Server and MySQL
+    bind a name to an earlier CTE only; a later CTE's name, or the CTE's own, falls through to a real
+    table in the login's default schema — which would read a base table past every check here."""
+    name = t.name.lower()
+    holder = t.find_ancestor(exp.CTE)
+    if holder is None:
+        return name in {c.alias_or_name.lower() for c in ctes}
+    idx = next((i for i, c in enumerate(ctes) if c is holder), None)
+    return idx is not None and name in {c.alias_or_name.lower() for c in ctes[:idx]}
+
+
 def assert_read_only(sql: str, dialect: str = "tsql") -> None:
     """For curated SQL from config (config/aggregates.yaml): exactly one SELECT, no deny-list token.
     No row cap and no view allow-list — an aggregate may copy a whole view — but the same write
@@ -75,11 +99,13 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
     if not isinstance(tree, (exp.Select, exp.Union)) and not (isinstance(tree, exp.Query)):
         raise GuardError("statement is not a query")
 
-    # every table reference must be a plain identifier: either a CTE the statement itself defines,
-    # or `rag.<name>` / `<name>` (case-insensitive) from the catalog's allow-list. Never a bare name
-    # outside the catalog, never a three-part name, never a function call or other disguised table.
+    # every table reference must be a plain identifier: either a CTE the statement itself defines (used
+    # where SQL binds the name to it: cte_reference_ok), or `rag.<name>` from the catalog's allow-list, or
+    # an allowed raw table. Never a bare name for anything else, never a three-part name, never a
+    # function call or other disguised table.
     bare = {v.split(".")[-1].lower() for v in allowed_views}
-    ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    with_ctes = statement_ctes(tree)
+    cte_names = {c.alias_or_name.lower() for c in with_ctes}
     raw: list[str] = []                       # discovered (non-rag) tables this statement reads
     for t in tree.find_all(exp.Table):
         if not isinstance(t.this, exp.Identifier):
@@ -90,8 +116,10 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
         if is_sensitive(t.name):
             raise GuardError(f"restricted table: {t.name}")
         if not db:
-            if name in ctes:
+            if cte_reference_ok(t, with_ctes):
                 continue
+            if name in cte_names:
+                raise GuardError(f"{t.name} is used before the CTE of that name is defined (or inside itself)")
             raise GuardError(f"reference views as rag.<name>: {t.name}")
         if db != "rag":
             if f"{db}.{name}" in allowed_tables:

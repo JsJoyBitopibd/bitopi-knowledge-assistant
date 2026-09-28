@@ -9,6 +9,19 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **F1: sign-in and per-user scope** (PRD FR-4.1, 4.3–4.8, 6.2). Users sign in with their Active
+  Directory account (LDAPS/StartTLS; `auth.provider: local` with bcrypt users for development); AD groups
+  map to a scope in `config/scopes.yaml` (factories, departments, highest confidentiality; union over
+  groups; not in a group = cannot sign in). Documents carry factory / department / confidentiality /
+  buyer tags (first folder name, or a folder's `meta.yaml`), stored in the registry, the vector store and
+  the keyword index; changing a tag retags in place without re-embedding. The scope is a required
+  argument of every search and query: it filters the vector query and the keyword search, every SQL view
+  is emitted filtered to the user's factories inside itself and the final statement is re-checked before
+  it runs, raw tables and unscoped views are unavailable to factory-limited users, a fixed tool naming
+  another factory is refused at once, the nightly copy is read through the same filter, and both caches
+  are keyed on the scope. Signing in or out clears the conversation; admin details are admin-only; admins
+  get an access and audit panel. `chat.csv` and `sql.csv` record every request's scope.
+  `scripts/scope_check.py` + `tests/scope_cases.jsonl`: 34 adversarial cases, 0 leaks.
 - F4: every catalog view declares `scope_column:` (its factory column); the five views without one
   (`vw_ExportOrderColorSize`, `vw_PCDChangeHistory`, `vw_CancelledExportOrder`,
   `vw_PPMMeetingReschedule`, `vw_PPMDepartmentChecklist`) gained a `Factory` / `FactoryID` column
@@ -16,6 +29,19 @@ each phase is in `docs/ROADMAP.md`.
   `SESSION_CONTEXT(N'rag_factories')` (`src/ragbot/data/scope_sql.py`); `check_catalog.py` flags a view
   without a scope column. The DBA request and the `rag_reader` permission scripts are kept in the
   git-ignored `private/` folder, because the repository is public.
+
+### Fixed
+- **The SQL guard accepted a name used before its CTE was defined.** In `WITH a AS (SELECT … FROM
+  ExportOrder), ExportOrder AS (…) SELECT … FROM a`, SQL Server binds `ExportOrder` inside `a` to the real
+  `dbo.ExportOrder` (a CTE can only use CTEs declared before it), so generated SQL could read any base
+  table past the view allow-list, the raw-table rules and the user's scope. A bare name now counts as a
+  CTE only where SQL binds it to one, a WITH inside a subquery is refused, and the scope check re-verifies
+  every table of the final statement. Found by the F1 review; present since the guard was written.
+- A retag or superseded flag that failed half-way (registry updated, vector store not) was never retried,
+  leaving the vector store with the old, broader tags; the store is now updated first.
+- `logs/chat.csv` had 10 header columns and 11 per row; every log now goes through one writer that renames
+  a file with an older header aside.
+- `scripts/inspect.py --search` would have failed now that a scope is required.
 
 ## [1.5.1] — 2026-09-28 — Hotfix H0: cautious deletes
 

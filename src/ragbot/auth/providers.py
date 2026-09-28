@@ -105,7 +105,10 @@ class LdapProvider:
         conn = ldap3.Connection(server, user=f"{name}@{self.domain}", password=password, authentication=ldap3.SIMPLE,
                                 receive_timeout=self.timeout, raise_exceptions=False)
         try:
-            if not conn.open():
+            # ldap3's open() returns None on success and raises LDAPSocketOpenError when the server cannot
+            # be reached (handled below); its return value must not be read as success or failure.
+            conn.open()
+            if conn.closed:
                 return AuthResult(None, "unavailable")
             if not self.use_ssl and not conn.start_tls():  # never send the password in clear text
                 return AuthResult(None, "unavailable")

@@ -92,6 +92,14 @@ def test_scope_reaches_both_search_paths_and_the_final_check(spies):
     assert {"factory": {"$in": ["ALL", "TAL"]}} in clauses
 
 
+def test_an_untagged_record_fails_the_final_check_instead_of_looking_group_wide():
+    from ragbot.auth.filters import scope_where
+    from ragbot.store import _chunk_from_record
+    old = _chunk_from_record("x#p1#c1", "text", {"source": "x.pdf", "title": "x", "page": 1})   # indexed before F1
+    assert old.factory == "" and old.confidentiality == ""
+    assert not rt._passes(old, scope_where(TAL)) and rt._passes(old, scope_where(ALL))
+
+
 def test_a_caller_cannot_widen_the_scope(spies):
     with pytest.raises(ValueError, match="set by the scope"):
         rt.retrieve("x", where={"factory": ["RHL"]}, scope=TAL)

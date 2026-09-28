@@ -206,8 +206,16 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
             # Same content; its access attributes may still have changed (a moved file, an edited meta.yaml,
             # or a document indexed before F1): retag it in place, nothing is re-embedded.
             if reg.document_attributes(path.name) != attrs:
-                reg.retag(path.name, attrs)
-                store.set_attributes(path.name, attrs)
+                try:
+                    # The vector store first: if it fails, the registry still holds the old tags, so the
+                    # next pass sees the difference and retries. (Registry first left Chroma with the old,
+                    # broader tags for good — the dense search filters on those.)
+                    store.set_attributes(path.name, attrs)
+                    reg.retag(path.name, attrs)
+                except Exception as e:
+                    failed += 1
+                    log.error("FAILED to retag %s: %s (retried on the next pass)", path.name, e)
+                    continue
                 retagged += 1
                 log.info("retagged: %s (%s)", path.name, ", ".join(f"{k}={v}" for k, v in attrs.items()))
             continue
@@ -281,8 +289,8 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
         # already says superseded, re-apply it — otherwise an old revision touched on disk silently
         # reappeared in answers (found 2026-09-27).
         if row is not None and (bool(row[0]) != want or (want and source in touched)):
+            store.set_superseded(source, want)       # store first, as for retagging: a failure is retried
             reg.set_superseded(source, want)
-            store.set_superseded(source, want)
             superseded_now += 1
             log.info("%s: %s", "superseded" if want else "un-superseded", source)
 

@@ -74,6 +74,21 @@ def test_changed_meta_yaml_retags_without_re_embedding(tmp_path, monkeypatch):
     assert run()["retagged"] == 0                                # idempotent
 
 
+def test_a_failed_retag_is_retried_and_never_leaves_the_store_broader(tmp_path, monkeypatch):
+    root, reg, store, run, files = make_index(tmp_path, monkeypatch)
+    files("payroll", folder="HR")
+    run()
+    (root / "HR" / "meta.yaml").write_text("confidentiality: restricted\n", encoding="utf-8")
+    real = store.set_attributes
+    monkeypatch.setattr(store, "set_attributes", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("chroma busy")))
+    r = run()
+    assert r["failed"] == 1 and r["retagged"] == 0
+    assert reg.document_attributes("payroll.pdf")["confidentiality"] == "internal"   # registry not ahead of the store
+    monkeypatch.setattr(store, "set_attributes", real)
+    assert run()["retagged"] == 1                                                     # the next pass retries
+    assert {c.confidentiality for c in store.rows.values()} == {"restricted"}
+
+
 def test_a_moved_file_is_retagged_in_place(tmp_path, monkeypatch):
     root, reg, store, run, files = make_index(tmp_path, monkeypatch)
     files("cutting", folder="SOP")

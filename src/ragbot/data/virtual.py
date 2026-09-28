@@ -27,7 +27,7 @@ import sqlglot
 from sqlglot import exp
 
 from ..auth.models import Scope
-from .guard import DENY, GuardError
+from .guard import DENY, GuardError, cte_reference_ok, statement_ctes
 
 if TYPE_CHECKING:
     from .catalog import Catalog, View
@@ -160,7 +160,9 @@ def rewrite_virtual(guarded_sql: str, cat: "Catalog", *, scope: Scope) -> tuple[
 def assert_scoped(sql_exec: str, cat: "Catalog", scope: Scope, views: list["View"]) -> None:
     """Second line of defence for a restricted scope: parse the statement that is about to run and
     check that every rag view it reads is one of our CTEs, filtered on the view's scope column to
-    exactly the scope's factories, and that nothing reads rag.* outside those CTEs."""
+    exactly the scope's factories, and that every table it reads is accounted for: a schema-qualified
+    table (rag.* or a base table) only inside those CTEs, a bare name only as a CTE declared before it
+    is used — anything else would be a real table read without the filter."""
     read = "tsql" if cat.dialect == "tsql" else "mysql"
     tree = sqlglot.parse_one(sql_exec, read=read)
     ctes = {c.alias_or_name.lower(): c for c in tree.find_all(exp.CTE)}
@@ -178,8 +180,11 @@ def assert_scoped(sql_exec: str, cat: "Catalog", scope: Scope, views: list["View
         if not ok:
             raise GuardError(f"scope check failed: {v.name} is not limited to {sorted(want)}")
     ours = {cte_name(v.name).lower() for v in views}
+    with_ctes = statement_ctes(tree)
     for t in tree.find_all(exp.Table):
-        if (t.db or "").lower() == "rag":
+        if t.db:
             holder = t.find_ancestor(exp.CTE)
             if holder is None or holder.alias_or_name.lower() not in ours:
                 raise GuardError(f"scope check failed: {t.sql()} is read outside its filtered view")
+        elif not cte_reference_ok(t, with_ctes):
+            raise GuardError(f"scope check failed: {t.name} is not a CTE defined before it is used")

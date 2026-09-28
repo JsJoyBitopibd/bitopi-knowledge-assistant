@@ -20,6 +20,7 @@ if a.sample:
     for c in get_store().get(random.sample(ids, min(a.sample, len(ids)))):
         print("=" * 80); print(c.id, "|", c.section, "| p", c.page); print(c.text[:600])
 if a.search:
+    from ragbot.auth.models import Scope
     from ragbot.retrieve.retriever import retrieve
-    for c in retrieve(a.search):
-        print(f"{c.score:6.3f}  {c.source}  p{c.page}  {c.section}")
+    for c in retrieve(a.search, scope=Scope.unrestricted()):   # an operator's tool: every document
+        print(f"{c.score:6.3f}  {c.source}  p{c.page}  {c.section}  [{c.factory}/{c.confidentiality}]")

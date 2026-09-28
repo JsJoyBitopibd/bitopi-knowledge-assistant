@@ -135,15 +135,21 @@ class FakeEntry:
 
 
 class FakeConnection:
+    """Behaves like ldap3 2.9's Connection where it matters: open() returns None on success and raises
+    LDAPSocketOpenError when the server cannot be reached; start_tls() and bind() return booleans. (An
+    earlier fake returned True from open(), which hid a bug that refused every real sign-in.)"""
     instances = []
 
     def __init__(self, server, user=None, password=None, authentication=None, **kw):
         self.server, self.user, self.password, self.auth = server, user, password, authentication
-        self.search_filter, self.tls_started, self.entries = None, False, []
+        self.search_filter, self.tls_started, self.entries, self.closed = None, False, [], True
         FakeConnection.instances.append(self)
 
     def open(self):
-        return FakeConnection.reachable
+        from ldap3.core.exceptions import LDAPSocketOpenError
+        if not FakeConnection.reachable:
+            raise LDAPSocketOpenError("socket connection error")
+        self.closed = False
 
     def start_tls(self):
         self.tls_started = True

@@ -42,10 +42,13 @@ ACCESS_FIELDS = ("factory", "department", "confidentiality", "buyer_code")
 
 
 def _chunk_from_record(cid: str, doc: str, meta: dict[str, Any], score: float = 0.0) -> Chunk:
-    return Chunk(id=cid, text=doc, score=score, **{k: meta.get(k, Chunk.model_fields[k].default)
-                                                   for k in ("source", "title", "page", "section", "kind", "category",
-                                                             "doc_hash", "superseded", "embed_model", "ingested_at",
-                                                             *ACCESS_FIELDS)})
+    fields = {k: meta.get(k, Chunk.model_fields[k].default)
+              for k in ("source", "title", "page", "section", "kind", "category", "doc_hash", "superseded",
+                        "embed_model", "ingested_at")}
+    # A record without access tags (indexed before F1) must not inherit the model's permissive defaults
+    # (factory ALL, internal): "" matches no scope filter, so retriever._passes rejects it for scoped users.
+    fields.update({k: meta.get(k) or "" for k in ACCESS_FIELDS})
+    return Chunk(id=cid, text=doc, score=score, **fields)
 
 
 class ChromaStore(VectorStore):
