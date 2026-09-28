@@ -1,0 +1,9 @@
+# Local sign-in (auth.provider: local) — for development and tests only; the pilot signs in with Active
+# Directory (auth.provider: ldap). Copy to config/users.yaml (git-ignored) and add users with
+#   python scripts/add_local_user.py <name> --groups KA-Staff-TAL
+# which asks for the password and stores only its bcrypt hash. `groups` map to config/scopes.yaml.
+users: {}
+#  jdoe:
+#    name: J. Doe (TAL merchandiser)
+#    password_hash: "$2b$12$..."
+#    groups: [KA-Staff-TAL]

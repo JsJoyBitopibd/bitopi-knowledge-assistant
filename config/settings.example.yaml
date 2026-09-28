@@ -5,6 +5,15 @@ paths:
   catalog_dir: config/catalog
   fixed_tools: config/fixed_tools.yaml
   golden_set: tests/golden.jsonl
+  scopes_file: config/scopes.yaml   # AD group -> what its members may see (copy scopes.example.yaml)
+  users_file: config/users.yaml     # local sign-in users, auth.provider: local only (copy users.example.yaml)
+
+# Sign-in and per-user scope (PRD FR-4). ldap = Active Directory (.env LDAP_HOST, LDAP_DOMAIN, LDAP_BASE_DN);
+# local = config/users.yaml, for development and tests.
+auth:
+  provider: ldap
+  max_failures: 5          # failed sign-ins per account ...
+  lockout_seconds: 600     # ... within this window, then the account waits
 
 ingest:
   chunk_target_chars: 2400     # ~600 tokens

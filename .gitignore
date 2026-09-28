@@ -19,3 +19,6 @@ data/models/
 # the GitHub repo is public: documents that map internal systems (DBA requests with logins and the
 # list of sensitive tables) live here and are handed over directly, never committed
 private/
+# real AD group -> scope mapping and local users (password hashes): copies of the *.example.yaml files
+config/scopes.yaml
+config/users.yaml

@@ -1,0 +1,30 @@
+# Who may see what (PRD FR-4.1, section 7). Copy to config/scopes.yaml (git-ignored) and use the real
+# Active Directory group names (the group's CN). A user's scope is the union over the groups below that
+# they belong to, so a group can only add access. A user in none of these groups cannot sign in.
+#
+#   factories:       factory short names whose documents and database rows the group may see
+#                    (TAL, RHL, BGL, KTL, CKDL, or a raw unit code); "*" = every factory.
+#                    Group-wide documents (factory ALL: SOPs, IT policy) are visible to everyone.
+#   departments:     omit for every department; otherwise the departments whose documents the group
+#                    may see (documents tagged Common are visible to everyone).
+#   confidentiality: public | internal (default) | restricted — the highest level the group may read.
+#   buyer_codes:     omit for staff (every buyer). Buyer accounts are PRD Phase 3.
+#
+# Documents get their factory from the first folder under data/pdfs when it is a factory code
+# (data/pdfs/TAL/...), otherwise ALL; a meta.yaml in any folder can set factory, department,
+# confidentiality and buyer_code for the files below it (see data/pdfs/README.md).
+groups:
+  KA-Staff-TAL:
+    factories: [TAL]
+  KA-Staff-RHL:
+    factories: [RHL]
+  KA-Staff-BGL:
+    factories: [BGL]
+  KA-Managers:
+    factories: ["*"]
+  KA-HR-Restricted:
+    departments: [HR]
+    confidentiality: restricted
+
+# Members of these groups see the admin details under each answer and the scope lookup.
+admins: [KA-Admins]

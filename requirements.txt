@@ -24,3 +24,6 @@ sqlglot>=26.0
 # UI + eval + tests
 streamlit>=1.40
 pytest>=8.0
+# sign-in (Phase F1): Active Directory over LDAPS; bcrypt for the local dev/test user list
+ldap3>=2.9
+bcrypt>=4.0

@@ -30,8 +30,13 @@ class Settings:
         except (KeyError, TypeError):
             return default
 
-    def path(self, key: str) -> Path:
-        p = Path(self["paths." + key])
+    def path(self, key: str, default: str | None = None) -> Path:
+        """paths.<key>, relative to the repo root. `default` covers keys added after a local
+        config/settings.yaml was copied from the example."""
+        raw = self.get("paths." + key, default)
+        if raw is None:
+            raise KeyError(f"paths.{key}")
+        p = Path(raw)
         return p if p.is_absolute() else ROOT / p
 
 
