@@ -8,10 +8,10 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 
 | | |
 |---|---|
-| Released | **v1.8.0** (Phase H: ingestion robustness), tag `v1.8.0`, on `main` |
+| Released | **v1.9.0** (Phase I: speed), tag `v1.9.0`, on `main` |
 | Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
-| In progress | **Phase I** on `feature/phase-i-speed`: I1–I4 ✅ (documents 5.71 s p50, sources shown at 2.05 s); gate eval passed; release v1.9.0 next |
-| Next task | Release v1.9.0 (Phase I without I5). Then: I5 with the user's approval. Waiting on others: F2 (DBA), F3 (billing — both keys are free tier, 500 requests/day per model), G2 go-ahead, H4 scheduled tasks |
+| In progress | — (Phases F–I released; I5 and the operator steps below remain) |
+| Next task | I5 with the user's approval. Waiting on others: F2 (DBA), F3 (billing — both keys are free tier, 500 requests/day per model), F1 AD details, G2 go-ahead, H4 scheduled tasks |
 | Last eval | 2026-09-29, `eval/results/20260929T1012.json` (I gate): correctness 90%, faithful 98%, hit 96% (two 429 quota errors), citations 100% |
 | Tests | 405 passing (`.venv\Scripts\python -m pytest -q`) |
 | Last updated | 2026-09-29 |
@@ -140,7 +140,7 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 | H4 | Run the worker and the nightly aggregates refresh as scheduled tasks (runbook in README; the tasks are created by the user). The local copy was last refreshed 27 Sep 14:59 | ⏸ | `schtasks /query` lists both; aggregates `as_of` is from last night | Runbook ✅ (README "Running ingestion and the aggregates refresh unattended": two `schtasks` commands under a service account that can read the share, exit codes 0/2/3, docker-compose already runs both). **User action**: create the tasks |
 | H✓ | Phase gate | ✅ | full eval, no drop > 5 points | **Full eval** `eval/results/20260929T0919.json` (62 cases) vs v1.7.0 (`20260929T0040.json`): hit 98% → 96%, faithfulness 100% → 100%, correctness 92% → 91%, citations, not-found, refuse 100%. Changed cases: 28 (hit 1 → 0, correct 0.5 → 0: its answer call got a **429 per-minute quota error** from the provider — asked again on this code it gives v1.7.0's answer, page 12 cited), 2 (1.0 → 0.5, run-to-run variance: the second sentence left out, as in v1.3.0), 37 (0.5 → 1.0). **Leak suite: all 34 cases, 0 leaks** (the 7 model cases too — this also closes v1.6.0's open re-run: scope code unchanged since F). Run with a key the user supplied for the day (the old key's free-tier quota was spent). 390 tests |
 
-### Phase I — Speed (v1.9.0) — I1–I4 ✅; I5 needs the user's approval
+### Phase I — Speed (v1.9.0) ✅ — I5 needs the user's approval
 
 | ID | Task | Status | Check before ✅ | Evidence |
 |---|---|---|---|---|
@@ -149,7 +149,7 @@ done) → G1–G4 → H1–H4 → I1 → I2–I5.
 | I3 | First token ≤ 3 s (3.9–6.1 s measured in B2), or the provider limit measured and recorded | ✅ | `latency.py` first-token column | **Provider limit measured and recorded:** Gemini returns the answer in one burst (model first token 2.87 s vs whole answer 2.98 s p50), so the first word comes after routing + search + generation (5.66 s p50) — streaming cannot reach 3 s with this provider. **Fallback built:** the "writing" stage carries the sources (`events.Stage.sources`, from the scoped search) and the app shows them at once: **2.05 / 2.98 s p50/p95** (`eval/latency/20260929T1059.json`, 14 questions routed without a model call; ~1 s more with one). Test in `tests/test_answer_stream.py`. 405 tests |
 | I4 | Load test: chat p95 rises < 20 % while the worker ingests 100–1,000 PDFs; throughput recorded | ✅ | `latency.py` during an ingest in a throwaway index | **Search (the part that runs on this machine) ✅:** before, the document search took 9.57 / 13.67 s p50/p95 while the worker ingested (**+131 %** at p95). Fewer worker threads help, priority alone barely does; `src/ragbot/ingest/priority.py` makes the ingest scripts run at below-normal priority with 4 embedding threads and **pause while the app searches** (the app touches `data/index/app_busy`; the worker checks between slices of 4 chunks, at most 60 s in a row). Measured: **4.36 / 5.98 s = +12 % p95** (vs 4.10 / 5.36 s without a worker); the worker paused 130 s in 3 min. Throughput: 44.4 chunks/min alone at 4 threads (216 s for 160 chunks; 335 s at the old 16 threads), 24.5 chunks/min while giving way. `tests/test_ingest_yield.py` (6). Load was 20 synthetic PDFs (160 chunks, nothing cached) — the ingest outlasted every latency run. **Full chat during an ingest** (`20260929T1045.json`): 10 documents answers 5.66 / 7.04 s vs 5.71 / 10.58 s without a worker, retrieve +3%; the other 20 and a paced rerun hit the free tier's limits (500 requests/day per model), so the 33-question search-only run (+12% p95) is the larger sample. 47.1 chunks/min for 320 chunks while giving way |
 | I5 | Bulk ingestion: `embed_backend` stored with the index and checked at start; int8 ONNX bge-m3 behind the parity test (needs the user's approval, as D4 did) | ⬜ | parity cosine ≥ 0.99 on 1,000 chunks; `hit_rate.py` drop ≤ 1 | |
-| I✓ | Phase gate | ⬜ | full eval, no drop > 5 points | |
+| I✓ | Phase gate | ✅ | full eval, no drop > 5 points | **Full eval** `eval/results/20260929T1012.json` (62 cases) vs v1.8.0 (`20260929T0919.json`): hit 96% → 96%, faithfulness 100% → 98%, correctness 91% → 90%, citations, not-found, refuse 100%; moved cases: 43 (429 quota error; asked again: correct), 53 (byte-identical answer, judge variance), 22 (left out the guest SSID), 2, 11, 28 up. `hit_rate.py` 29/30. Browser: the progress line showed "Writing the answer… Reading: Bitopi_IT_Policy_Book p. 18; …", answer in 5.2 s with its reference and Open PDF button, no server errors. I5 not included (approval). 405 tests |
 
 ## Small follow-ups noticed along the way
 
@@ -193,3 +193,4 @@ G3, `--samples` for selected tables → G2, raw-table code → name → G1, Gemi
 | 2026-09-28 | Phase G: G1, G3, G4 done, G2 code done (live run waits for a go-ahead). Phase H (on its own branch, while Gemini is down): same-name PDFs, `inspect.py --check` + `ingest.py --redo`, retries, crash-safe rewrites (hard-kill tested), shared lock with heartbeat, no-change passes in seconds; found and fixed a Windows file lock on PDFs that failed to open, a same-name leak in the download button and sidebar caches that ignored the index version. Both gates wait for Gemini |
 | 2026-09-29 | v1.7.0: Phase G gate passed after Gemini's 5-hour outage (correctness 92%, hit 98%, faithful 100%); leak suite no-model cases 0 leaks. The free-tier daily quota ran out right after the gate — F3 (billing) matters. H next |
 | 2026-09-29 | v1.8.0: Phase H gate passed (leak suite 34/34 with 0 leaks; eval: one 429 quota miss, otherwise as v1.7.0) with a key the user supplied for the day. I next |
+| 2026-09-29 | v1.9.0: Phase I — documents answers 7.45 → 5.71 s p50 (reranker 8 × 384; Windows power throttling found and switched off per process, 6–9× on this laptop), sources shown at 2.05 s (the provider sends answers in one burst), the worker no longer slows chat. Both Gemini keys are free tier (500 requests/day per model): F3 still open |

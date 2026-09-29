@@ -8,6 +8,19 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-09-29 — Phase I: speed
+
+Document answers **7.45 s → 5.71 s** (p50, `eval/latency/20260929T1039.json` vs the I1 baseline
+`20260929T0930.json`); the sources are shown at 2.05 s; the first word of an answer comes at ~5.7 s because
+the provider sends each answer in one burst. While the worker ingests, answers stay as fast (5.66 s p50, n = 10;
+search +12% p95, n = 33). Eval (62 cases, `eval/results/20260929T1012.json`, vs v1.8.0): hit rate 96% → 96%,
+faithfulness 100% → 98%, correctness 91% → 90%, citation validity, not-found and refuse 100%; case 43 was a
+429 quota error (asked again: correct), case 53's answer is byte-identical (judge variance). `hit_rate.py`
+29/30. I5 (int8 ONNX embedding model for bulk loads) waits for approval.
+
+**Upgrading:** `config/settings.yaml` → `retrieval.rerank_candidates: 8` (the new default in the example);
+`RERANK_MAX_LENGTH` now defaults to 384 (remove a `RERANK_MAX_LENGTH=512` line from `.env` to use it).
+
 ### Added
 - I1: every answer carries a request id and per-stage timings (`src/ragbot/trace.py`). The id is written
   to `chat.csv`, `calls.csv` and `sql.csv`, so one question can be followed through all three.
