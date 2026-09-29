@@ -44,7 +44,7 @@ retrieval:
   vector_top_k: 20
   keyword_top_k: 20
   rrf_k: 60
-  rerank_candidates: 10   # CPU cross-encoder cost is linear in candidates; final_top_k is 6
+  rerank_candidates: 8    # CPU cross-encoder cost is linear in candidates (~0.3 s each); final_top_k is 6
   final_top_k: 6
   default_filters:
     superseded: false

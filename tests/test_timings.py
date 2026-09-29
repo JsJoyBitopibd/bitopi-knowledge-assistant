@@ -140,3 +140,13 @@ def test_importing_the_llm_package_alone_loads_the_env_file():
     out = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, 'src'); import ragbot.llm; "
                           "print('ragbot.config' in sys.modules)"], cwd=root, capture_output=True, text=True)
     assert out.stdout.strip() == "True", out.stderr[-500:]
+
+
+def test_power_throttling_opt_out_is_safe_to_call():
+    """Windows ran the models 6-9x slower in background processes (EcoQoS); the opt-out must never raise
+    and is a no-op elsewhere."""
+    import os
+    from ragbot.cpu import disable_power_throttling
+    disable_power_throttling.cache_clear()
+    ok = disable_power_throttling()
+    assert ok is (os.name == "nt") or ok is False

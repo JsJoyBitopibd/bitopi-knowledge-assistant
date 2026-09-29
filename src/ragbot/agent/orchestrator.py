@@ -181,7 +181,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         if _templated_answer(out, results[0], nf):
             yield Final(_log(out, user, scope)); return
 
-    yield Stage("writing", "Writing the answer…")
+    yield _writing(chunks, results)
     with trace.span("answer"):
         yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
 
@@ -197,7 +197,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             out.warnings.append("data route returned no answer; retried against documents")
             retry = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
             retry.warnings = out.warnings
-            yield Stage("writing", "Writing the answer…")
+            yield _writing(doc_chunks, [])
             with trace.span("answer"):
                 yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
             if not retry.not_found:
@@ -212,6 +212,22 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) -> Stage:
+    """The "writing" stage with the sources the answer is written from. They come from the scoped search
+    and the user's own query, so showing them reveals nothing the answer's references would not."""
+    names: list[str] = []
+    for c in chunks:
+        name = f"{c.title} p. {c.page}"
+        if name not in names:
+            names.append(name)
+    for r in results:
+        name = f"{r.database}: {', '.join(r.views) if r.views else 'query'}"
+        if name not in names:
+            names.append(name)
+    trace.first("sources_shown")
+    return Stage("writing", "Writing the answer…", sources=names[:limit])
 
 
 def _templated_answer(out: Answer, result: QueryResult, nf: str) -> bool:

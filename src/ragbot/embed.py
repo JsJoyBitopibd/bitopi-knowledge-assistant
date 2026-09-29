@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from .cpu import disable_power_throttling
+
 import numpy as np
 
 from . import config  # noqa: F401  — loads .env before the settings below are read; importing this module
@@ -19,7 +21,7 @@ EMBED_BACKEND = os.getenv("EMBED_BACKEND", "sentence_transformers")
 # Cross-encoder cost grows with the square of the sequence length, so 512 instead of the model's
 # 1024 roughly quarters the CPU time. Chunks are ~600 tokens, so a 512-token window covers the
 # question plus most of the chunk; raise it only if scripts/hit_rate.py regresses.
-RERANK_MAX_LENGTH = int(os.getenv("RERANK_MAX_LENGTH", "512"))
+RERANK_MAX_LENGTH = int(os.getenv("RERANK_MAX_LENGTH", "384"))   # I2: 384 cut rerank time, hit rate unchanged
 
 
 class Embedder:
@@ -141,6 +143,7 @@ def _use_all_cpu_threads() -> None:
 
 @lru_cache(maxsize=1)
 def get_embedder() -> Embedder:
+    disable_power_throttling()           # Windows ran the models 6-9x slower in background processes
     return Embedder()
 
 
@@ -149,6 +152,7 @@ def get_reranker() -> Reranker | OnnxReranker | None:
     """RERANK_BACKEND: `torch` (default, sentence-transformers CrossEncoder) or `onnx` (int8 export)."""
     if os.getenv("RERANK_ENABLED", "true").lower() not in {"1", "true", "yes"}:
         return None
+    disable_power_throttling()
     if os.getenv("RERANK_BACKEND", "torch").lower() == "onnx":
         return OnnxReranker()
     return Reranker()

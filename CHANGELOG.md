@@ -15,7 +15,13 @@ each phase is in `docs/ROADMAP.md`.
   `scripts/latency.py` prints p50/p95 per stage, end to end and to the first token, over 51 fixed
   questions, each run cold.
 
+- I3: while an answer is being written, the progress line names its sources ("Reading: Bitopi_IT_SOP_Manual_v2
+  p. 12; …") as soon as the search is done, at 2.1 s (p50). The provider sends each answer in one burst, so
+  the first word cannot come sooner than about 5.7 s.
+
 ### Changed
+- I2: 8 rerank candidates instead of 10, and a reranker window of 384 tokens instead of 512 (hit rate
+  unchanged, 29/30): reranking 3.2 s → 1.9 s. Document answers 7.45 s → 5.71 s (p50).
 - I4: the ingest scripts give the CPU to the chat app: below-normal priority, 4 embedding threads and a
   pause while the app is searching (`ingest.priority`, `ingest.embed_threads`, `ingest.yield_to_app` in
   `config/settings.yaml`). While the worker ingested, the app's document search slowed by 131% (p95);
@@ -26,6 +32,11 @@ each phase is in `docs/ROADMAP.md`.
 - I1: `chat.csv`, `calls.csv` and `sql.csv` gained columns (`request_id`; `chat.csv` also `seconds` and
   `timings`). The first write after the upgrade renames each old file to `<name>.<timestamp>.csv`, as for
   earlier header changes.
+
+### Fixed
+- I2: Windows power throttling (EcoQoS) ran the models 6–9× slower in processes it treats as background —
+  the app as a service, the worker, the scripts. Each of them now opts out when it loads the models.
+
 ## [1.8.0] — 2026-09-29 — Phase H: ingestion robustness
 
 Eval (62 cases, `eval/results/20260929T0919.json`, vs v1.7.0 on the same cases): hit rate 98% → 96%,

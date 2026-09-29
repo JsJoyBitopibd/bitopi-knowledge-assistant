@@ -5,6 +5,7 @@ stage (ragbot/trace.py), end to end and to the first answer token.
                                                   #           3 both, 3 not-found
     python scripts/latency.py --group documents   # one group only
     python scripts/latency.py --repeat 2          # each question twice (still no cache hits)
+    python scripts/latency.py --sleep 4           # a pause between questions for a rate-limited key
     python scripts/latency.py --retrieval-only    # documents search only (no model call): the 33 documents
                                                   # and not-found questions
 
@@ -14,7 +15,7 @@ question runs cold: the answer cache, the query-embedding cache and the SQL resu
 bypassed, so the numbers are what a first-time question costs. Models are loaded before the clock starts.
 Results: eval/latency/<timestamp>.json (git-ignored) — add the summary line to docs/tuning_log.md.
 """
-import argparse, json, math, sys, _path  # noqa: F401
+import argparse, json, math, sys, time, _path  # noqa: F401
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -30,7 +31,7 @@ from ragbot.retrieve import retriever
 ROOT = Path(__file__).resolve().parents[1]
 DOC_KINDS = ("code", "table", "paraphrase", "direct")
 # the order the table prints; keys a run did not produce are left out
-KEYS = ("total", "first_token", "route", "llm.route", "retrieve", "retrieve.embed", "retrieve.vector",
+KEYS = ("total", "sources_shown", "first_token", "route", "llm.route", "retrieve", "retrieve.embed", "retrieve.vector",
         "retrieve.keyword", "retrieve.fetch", "retrieve.rerank", "data", "llm.sql", "data.db", "answer",
         "llm.answer.first_token", "llm.answer", "verify")
 
@@ -66,6 +67,7 @@ def main() -> None:
     ap.add_argument("--group", choices=("documents", "data", "sql", "both", "not_found"))
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--retrieval-only", action="store_true")
+    ap.add_argument("--sleep", type=float, default=0.0, help="pause between questions (a rate-limited key); not timed")
     a = ap.parse_args()
     cases = [json.loads(l) for l in (ROOT / "tests" / "golden.jsonl").read_text(encoding="utf-8").splitlines()
              if l.strip()]
@@ -86,6 +88,8 @@ def main() -> None:
         for c in members:
             for _ in range(a.repeat):
                 n += 1
+                if a.sleep and n > 1:
+                    time.sleep(a.sleep)
                 orchestrator._ANSWERS.clear()
                 retriever._embed_query.cache_clear()
                 if a.retrieval_only:

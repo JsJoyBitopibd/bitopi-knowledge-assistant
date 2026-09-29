@@ -107,6 +107,7 @@ starts; seconds, nearest-rank p50 / p95. Stage keys: `ragbot/trace.py`. Files: `
 | Run | Group (n) | total p50 / p95 | first token p50 / p95 | Main stages p50 | Notes |
 |---|---|---|---|---|---|
 | 2026-09-28 20:32 (`20260928T2032.json`) | fixed tools (10) | 0.14 / 0.71 | — (templated, no model call) | data 0.14, data.db 0.12, route 0.00 (regex) | Partial baseline: Gemini returned 503 all evening, so the documents, model-SQL, both and not-found groups wait. The p95 is the first question, which also loads the fixed tools and catalogs (0.3 s) and opens the first database connection (0.26 s). |
+| 2026-09-29 09:30 (`20260929T0930.json`) — **I1 baseline, full** | documents (30) | **7.45 / 9.72** | 6.96 / 9.04 | route 1.06 (model call in 16 of 30: 1.40), retrieve 2.93 (rerank 2.81, embed 0.13), answer 3.07 (model first token 3.04 = whole answer) | With the embedding fix, 10 candidates, max length 512. Other groups: fixed tools 0.14 / 0.39; model SQL 8.47 / 13.85 (SQL generation 4.83); both 6.83 / 7.46; not-found 7.86 / 13.12. **Gemini sends the answer in one burst** (first token 3.04 s vs 3.04 s total), so streaming cannot bring the first token near 3 s (I3). |
 | 2026-09-28 20:40 (`20260928T2040.json`, `--retrieval-only`) | documents + not-found search (33) | 4.16 / 5.91 | — (no model call) | **rerank 3.87** (93%), embed 0.46, vector 0.01, keyword 0.01, fetch 0.00 | Retrieval baseline: ONNX int8 reranker, 10 candidates, max length 512, onnxruntime default threads (10 on this 6P+4E i7-13620H). The reranker is the retrieval cost; a documents answer is ~10 s end to end (B2), so this is ~40% of it. |
 | 2026-09-28 21:11 (`20260928T2111.json`, `--retrieval-only`) | same 33, **8 candidates, max length 384** | **3.22 / 4.43** | — | rerank 2.91, embed 0.27 | I2 candidate: −0.94 s p50 (−23%). Not applied yet: the G and H gate evals run first with the v1.6.0 settings, then the I2 gate eval with these. |
 
@@ -146,3 +147,33 @@ against the live index; the ingest outlasted every latency run.
 Priority alone does little (the processes also share memory bandwidth, caches and the turbo budget); the
 pause is what keeps the app fast. The model stages of a chat answer run at the provider, so they are
 not slowed by the worker; a full `latency.py` during an ingest is still to run when Gemini is back.
+
+**Windows power throttling (2026-09-29).** From ~09:31 every model stage ran 5–6× slower (rerank 14–16 s,
+query embed 0.6 s) with the CPU nearly idle otherwise. Cause: Windows 11 power throttling (EcoQoS) moved
+the background console processes to the efficiency cores at low clocks. Same process, one call to opt out
+(`src/ragbot/cpu.py`): numpy 10 × matmul 1.25 s → 0.19 s; rerank 10 × 512 14.7–16.4 s → 1.80 s, 8 × 384
+13.5–14.5 s → 1.68 s per question. The runs `20260929T0956.json` and `T1023.json` were throttled and are not
+comparable; the 09:30 baseline may have been partly throttled too.
+
+| Run | Group (n) | total p50 / p95 | first token p50 / p95 | Main stages p50 | Notes |
+|---|---|---|---|---|---|
+| 2026-09-29 10:39 (`20260929T1039.json`) — **I2 applied** | documents (30) | **5.71 / 10.58** | 5.66 / 10.56 | route 0.76 (model 1.00; one 5.6 s outlier at p95), retrieve 2.04 (rerank 1.88, embed 0.12), answer 3.01 (model first token 2.87) | 8 candidates, max length 384, throttling opt-out. Fixed tools 0.14 / 0.37; model SQL 9.72 / 14.68 (SQL generation 4.12); both 4.90 / 5.34; not-found 5.83 / 13.94 |
+| 2026-09-29 10:41 (`20260929T1041.json`, `--retrieval-only`) | 33, **10 candidates, 512**, opt-out | 3.32 / 4.33 | — | rerank 3.21, embed 0.08 | The old settings under the same conditions: I2's change saves 1.3 s of rerank (3.21 → 1.88) |
+
+**I3 (first token).** Gemini (gemini-3.5-flash-lite, OpenAI-compatible endpoint) returns the answer in one
+burst: its first token comes after 2.87 s and the whole answer after 2.98 s (p50). A user therefore sees
+the first word only after routing + search + the whole generation (5.66 s p50). Streaming cannot bring it
+to 3 s with this provider; the plan's fallback applies (show the sources as soon as the search is done).
+
+**I3 fallback (2026-09-29, `20260929T1059.json`).** The "writing" stage now names the sources the answer is
+written from, and the app shows them in the progress line at once: **sources shown at 2.05 / 2.98 s p50/p95**
+(14 documents questions routed without a model call; add ~1 s where the router calls the model). The first
+word of the answer still comes with the provider's single burst (5.66 s p50).
+
+**I4 with the model stages (2026-09-29, `20260929T1045.json`).** Documents questions while the worker ingested
+(below normal, 4 threads, pause): 10 answered, **total 5.66 / 7.04 s** vs 5.71 / 10.58 s without a worker;
+retrieve 2.11 vs 2.04 s (+3%). The other 20 hit the key's per-minute limit, and a paced rerun
+(`--sleep 4`) the free tier's daily limit (500 requests per model, both keys) — so n = 10, with the
+33-question search-only run (+12% p95) as the larger sample. Throughput: 47.1 chunks/min for 320 chunks
+while giving way (65 s paused).
+

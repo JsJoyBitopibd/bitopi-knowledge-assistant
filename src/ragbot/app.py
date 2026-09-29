@@ -338,7 +338,9 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool = 
     text, final = "", None
     for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh, scope=scope):
         if isinstance(ev, Stage):
-            status.update(label=ev.label, state="running")
+            # the sources appear as soon as the search is done; the model's answer arrives in one burst (I3)
+            label = ev.label + (f" Reading: {'; '.join(ev.sources)}" if ev.sources else "")
+            status.update(label=label, state="running")
         elif isinstance(ev, Token):
             text += ev.text
             draft.markdown(text + " ▌")

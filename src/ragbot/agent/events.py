@@ -9,7 +9,7 @@ Final   — the verified Answer. Its text is authoritative: render it in place o
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Union
 
 from ..models import Answer
@@ -19,6 +19,9 @@ from ..models import Answer
 class Stage:
     name: str      # understanding | searching | querying | searching+querying | writing
     label: str     # human-readable progress text
+    # "writing" only: what the answer is being written from ("SOP Manual p. 12", "BitopiSplint: rag.vw_X"),
+    # shown at once — the provider sends the answer in one burst, so this is what the user sees first (I3)
+    sources: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -122,3 +122,13 @@ def test_data_miss_clears_draft_before_documents_retry(wire, monkeypatch):
     retry_search = names.index("Stage:searching")
     assert names[retry_search - 1] == "Replace"
     assert evs[-1].answer.text == GOOD
+
+
+def test_the_writing_stage_names_its_sources_before_the_answer_arrives(wire):
+    """I3: the provider sends the answer in one burst, so the sources are what the user sees first."""
+    wire("documents", [GOOD])
+    evs = list(orch.answer_stream("Which form approves a PCD change?", scope=Scope.unrestricted()))
+    writing = next(e for e in evs if isinstance(e, Stage) and e.name == "writing")
+    assert writing.sources == ["SOP p. 4"]
+    first_token = next(i for i, e in enumerate(evs) if isinstance(e, Token))
+    assert evs.index(writing) < first_token
