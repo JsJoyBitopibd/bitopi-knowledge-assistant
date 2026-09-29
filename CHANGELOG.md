@@ -8,6 +8,15 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-09-29 — Phase H: ingestion robustness
+
+Eval (62 cases, `eval/results/20260929T0919.json`, vs v1.7.0 on the same cases): hit rate 98% → 96%,
+correctness 92% → 91%, faithfulness, citation validity, not-found and refuse 100%. The hit-rate dip is
+case 28, whose answer call got the provider's per-minute quota error (429); asked again on this code it
+gives v1.7.0's answer and cites the expected page. Case 2 lost a second sentence (run-to-run variance,
+as in v1.3.0); case 37 went back to 1.0. Leak suite: all 34 cases, including the 7 that need the model,
+0 leaks (`eval/scope/`). H4 (the scheduled tasks) is the operator's step; the README has the commands.
+
 ### Added
 - H2: `scripts/inspect.py --check` compares the registry, the keyword index and the vector store (orphans
   each way, superseded flag and access tags that differ from the document's, half-written documents)
