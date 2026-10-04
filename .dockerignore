@@ -9,4 +9,10 @@ eval/
 _to_delete/
 .pytest_cache/
 .git/
-docs/schema/
+docs/schema/# not part of the image (mounted or local only); without these lines every build sent ~4 GB of context
+.claude/
+data/models/
+data/pdfs/
+private/
+eval/
+docker-compose.override.yml

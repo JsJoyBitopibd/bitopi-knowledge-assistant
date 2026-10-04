@@ -13,6 +13,7 @@ parameters) are ever written, so there is nothing to hallucinate.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
@@ -57,15 +58,31 @@ def follow_ups(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "", 
     return out[:limit]
 
 
-def try_template(r: QueryResult, tool: Optional[dict[str, Any]]) -> Optional[str]:
-    """The answer text for one fixed-tool result, or None when it should be left to the model."""
-    if r.error or r.tool == "generated" or not r.rows or not r.columns:
+def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False) -> Optional[str]:
+    """The answer text for one data result, or None when it should be left to the model.
+
+    Fixed tools always qualify (their shape is known). With `allow_generated` (setting
+    answer.templated_generated, Phase J3) a model-written query's rows are written the same way — the
+    rows ARE the answer, and the 3-6 s answer-model call that used to restate them is skipped: a
+    scalar as "<Column>: <value>", one row as "Col: v · Col: v", more rows as a table."""
+    if r.error or not r.rows or not r.columns:
+        return None
+    if r.tool == "generated" and not allow_generated:
         return None
     tool = tool or {}
     if len(r.rows) == 1 and len(r.columns) == 1:
         value = r.rows[0][0]
+        if r.tool == "generated" and (value is None or value == 0 or str(value).strip() == ""):
+            # A fixed tool's 0 is an answer (C7). A model-written query's 0 or NULL more often means the SQL
+            # matched nothing — the router sent a policy question to the database — so the answer model
+            # keeps judging it, and its not-found still triggers the documents retry (orchestrator).
+            return None
         lead = _fill(tool["answer"], r, value=value) if tool.get("answer") else None
-        return f"{lead or f'{r.columns[0]}: {fmt(value)}'} [D1]."
+        # a model-written `SELECT COUNT(*) FROM …` without an alias comes back with an empty column name
+        label = r.columns[0].strip() or ("Count" if re.search(r"\bcount\s*\(", r.sql or "", re.I) else "Value")
+        return f"{lead or f'{label}: {fmt(value)}'} [D1]."
+    if r.tool == "generated" and len(r.rows) == 1 and len(r.columns) <= 8:
+        return " · ".join(f"{c}: {fmt(v)}" for c, v in zip(r.columns, r.rows[0])) + " [D1]."
     n = len(r.rows)
     shown = int(settings().get("answer.template_rows", 25))
     lead = _fill(tool["answer_list"], r, n=n) if tool.get("answer_list") else None

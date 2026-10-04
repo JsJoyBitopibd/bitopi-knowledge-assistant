@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
@@ -107,6 +108,9 @@ class Catalog:
     tables: list[Table] = field(default_factory=list)          # discovered tier (may be empty)
     exclude_tables: list[str] = field(default_factory=list)    # fnmatch patterns, e.g. "dbo.*Back", "HR.*"
     hints: list[Hint] = field(default_factory=list)            # code columns -> the table that names them
+    # The database to open on `connection_env`'s server when it is not the one in the connection string:
+    # one read-only login serves the whole instance, so its catalogs share one env var (connectors.dsn).
+    connection_database: str | None = None
 
     def hints_for(self, table: str) -> list[Hint]:
         low = table.lower()
@@ -130,9 +134,16 @@ class Catalog:
     @property
     def offered_tables(self) -> list[Table]:
         """Discovered tables the SQL model may be shown: not excluded, not sensitive by name, and not
-        an empty base table (0 rows can answer nothing; views have no row count and stay)."""
-        return [t for t in self.tables if not t.sensitive and not self.excluded(t.name)
-                and not (t.kind == "table" and t.rows == 0)]
+        an empty base table (0 rows can answer nothing; views have no row count and stay).
+        Memoised on the tables list: with twenty catalogs (~4,300 tables, ~25 patterns) this is read
+        several times per question by the router, the guard and the schema index."""
+        stamp = (id(self.tables), len(self.tables), tuple(self.exclude_tables))
+        memo = self.__dict__.get("_offered")
+        if memo is None or memo[0] != stamp:
+            offered = [t for t in self.tables if not t.sensitive and not self.excluded(t.name)
+                       and not (t.kind == "table" and t.rows == 0)]
+            self.__dict__["_offered"] = memo = (stamp, offered)
+        return list(memo[1])
 
     @property
     def allowed_names(self) -> set[str]:
@@ -170,7 +181,7 @@ class Catalog:
             out.append(f"Purpose: {self.description}")
         out.append("Rules:")
         out += [f"- {r.replace('{today}', today)}" for r in self.rules]
-        out.append("Views:")
+        out.append("Views:" if self.views else "Views: none — use the tables listed for the question as schema.name.")
         for v in self.views:
             out.append(f"- {v.name} — {v.description} Grain: {v.grain}. Keys: {', '.join(v.key_columns)}")
             out += [f"    {c}: {d}" for c, d in v.columns.items()]
@@ -181,6 +192,25 @@ class Catalog:
         return "\n".join(out)
 
 
+_STAMP: dict[Path, tuple[float, tuple]] = {}
+_STAMP_SECONDS = 5.0     # an edited or added catalog is seen within this long
+
+
+def catalog_stamp(folder: Path | None = None) -> tuple:
+    """The catalog folder's files and mtimes: the cache key of load_catalogs(), and part of the
+    question->SQL cache key (tools.py), so an edited catalog invalidates both. Re-read at most every
+    _STAMP_SECONDS: ~36 stats on a Docker bind mount cost tens of milliseconds per question."""
+    folder = folder or settings().path("catalog_dir")
+    now = time.monotonic()
+    hit = _STAMP.get(folder)
+    if hit and now - hit[0] < _STAMP_SECONDS:
+        return hit[1]
+    files = [*folder.glob("*.yaml"), *(folder / "discovered").glob("*.json")]
+    stamp = tuple(sorted((str(f.relative_to(folder)), f.stat().st_mtime_ns) for f in files))
+    _STAMP[folder] = (now, stamp)
+    return stamp
+
+
 def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
     """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded. Definitions are validated.
 
@@ -188,9 +218,7 @@ def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
     sqlglot used to run on every data question. Editing a catalog file invalidates the cache.
     """
     folder = folder or settings().path("catalog_dir")
-    files = [*folder.glob("*.yaml"), *(folder / "discovered").glob("*.json")]
-    stamp = tuple(sorted((str(f.relative_to(folder)), f.stat().st_mtime_ns) for f in files))
-    return dict(_load_catalogs(folder, stamp))   # copy: callers must not mutate the cached mapping
+    return dict(_load_catalogs(folder, catalog_stamp(folder)))   # copy: callers must not mutate the cached mapping
 
 
 def _load_discovered(folder: Path, database: str) -> list[Table]:
@@ -233,5 +261,6 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
         cats[d["database"]] = Catalog(d["database"], d["dialect"], d["connection_env"], d.get("rules", []),
                                       views, d.get("examples", []), d.get("description", ""), d.get("keywords", []),
                                       tables=_load_discovered(folder, d["database"]),
-                                      exclude_tables=d.get("exclude_tables", []), hints=hints)
+                                      exclude_tables=d.get("exclude_tables", []), hints=hints,
+                                      connection_database=d.get("connection_database") or None)
     return cats

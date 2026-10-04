@@ -30,6 +30,34 @@ _DOC_HINT = re.compile(r"\b(sop|policy|procedure|who approves|rule|comment sheet
                        r"passwords?|privileged|it polic(?:y|ies)|it standards?)\b", re.I)
 
 
+# A count/list request ("how many …", "list …", "which …") in a database's own vocabulary — the
+# catalogs' hand-written `keywords:` (GRN, voucher, attendance, recipe …) — is a data question and needs
+# no routing call (Phase J4: ~1.4 s saved on about half the questions). Document nouns still win.
+_LIST_CUE = re.compile(r"^\s*(how many|how much|count|number of|total|list|show|which|give me|"
+                       r"what (is|are|was|were) the (total|number|count|list|latest|last|current))\b", re.I)
+# keywords too common in document questions to decide on their own
+_GENERIC = {"file", "unit", "size", "color", "colour", "ship", "line", "lines", "plan", "card", "device", "user",
+            "users", "menu", "task", "tasks"}
+
+
+def _keyword_data(question: str) -> bool:
+    if not _LIST_CUE.search(question):
+        return False
+    try:
+        from ..data.catalog import load_catalogs   # lazy: the catalogs are optional for document-only pilots
+        cats = load_catalogs()
+    except Exception:
+        return False
+    q = question.lower()
+    for cat in cats.values():
+        for w in cat.keywords:
+            w = w.lower()
+            # 3+ letters: 'grn', 'tna', 'pcd' are specific; two-letter codes ('po', 'ot') are not
+            if len(w) >= 3 and w not in _GENERIC and re.search(rf"(?<![a-z0-9]){re.escape(w)}(?![a-z0-9])", q):
+                return True
+    return False
+
+
 def route(question: str, user: str = "") -> str:
     """Cheap regex first for the obvious cases; small model only when the signals are mixed or absent."""
     if _WRITE.search(question):
@@ -42,6 +70,8 @@ def route(question: str, user: str = "") -> str:
         return "data"
     if p and not d:
         return "documents"
+    if _keyword_data(question):
+        return "data"
     max_tokens = int(settings().get("llm.max_tokens_route", 64))
     reply = get_small_chat().chat([{"role": "user", "content": question}], system=prompt("router"),
                                   max_tokens=max_tokens, temperature=0, purpose="route", user=user)

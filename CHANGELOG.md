@@ -17,6 +17,21 @@ each phase is in `docs/ROADMAP.md`.
 - **No-sign-in mode** `auth.provider: none`: the app skips the sign-in form and every visitor is one shared
   user, `open`, scoped to `auth.open_groups` from `config/scopes.yaml` (fails closed when none of them is
   configured). The default stays `ldap`. `tests/test_auth.py` (+2).
+- **No Deploy button**: `.streamlit/config.toml` sets `client.toolbarMode = "viewer"`, so Streamlit's toolbar no
+  longer offers "Deploy now" (publishing to Streamlit Community Cloud) or Clear cache.
+- **Every database on the SQL Server is catalogued (Phase J)**: 15 new catalogs (HR, Hrms5Misami, erp, Inventory,
+  PlanningTNA, Washing, FM, Dashboard, BiMob, BIMOB_MVC, BIMOB_MVC_TAL, DiskManager, HWATT, SystemManager,
+  VISTAQ — 3,715 offered tables in all with BitopiSplint and Production) answered through schema RAG over the
+  discovered tables; `scripts/gen_catalog.py` writes a catalog from a discovery file. One connection string per
+  server: `connection_database:` in a catalog points the shared `rag_reader` connection at its database
+  (`connectors.dsn`; `discover_schema.py --database`). `data/sensitive.py` also hides medical, tax, bonus, pay and
+  increment names. `config/catalog` is mounted into the container (no rebuild per catalog).
+- **Faster data answers (Phase J)**: `data/db_router.py` ranks the catalogs for a question (keywords, table
+  names, schema vectors; ~15 ms, no model call) and the SQL model sees only the best two instead of every
+  catalog; model-written SQL results are written from a template like fixed tools (no answer-model call;
+  `answer.templated_generated`); a question asked again the same day replays its generated SQL
+  (`data.sql_cache_ttl_seconds`); count/list questions in a database's own vocabulary skip the routing model.
+  `index_schema.py --try` prints the database ranking; `get_index` picks up new vector files without a restart.
 
 ## [1.9.0] — 2026-09-29 — Phase I: speed
 

@@ -48,6 +48,7 @@ def _cat():
 @pytest.fixture
 def wired(monkeypatch):
     si._CACHE.clear()
+    tools._SQL.clear()        # the question->SQL cache (J2) would replay an earlier test's statement
     monkeypatch.setattr(base, "_log_call", lambda *a: None)
     # generate_and_run logs which tables it was shown; tests must not write the real logs/schema_select.csv
     monkeypatch.setattr("ragbot.data.schema_usage.log_selection", lambda *a, **k: None)

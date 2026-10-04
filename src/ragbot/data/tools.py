@@ -21,8 +21,10 @@ from ..auth.models import Scope
 from ..config import prompt, settings
 from ..llm import get_chat
 from ..models import QueryResult
+from ..ttl_cache import TTLCache
 from .cache import cached_run
-from .catalog import Catalog, load_catalogs
+from .catalog import Catalog, catalog_stamp, load_catalogs
+from .db_router import keyword_score, pick_catalogs
 from .guard import GuardError, guard
 from .virtual import rewrite_virtual
 
@@ -166,7 +168,7 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
         timeout = int(settings().get("data.timeout_seconds_heavy", 30)) if tool.get("heavy") else None
         cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env, display_sql=sql,
                                        tool=tool["name"], user=user, refresh=refresh, timeout=timeout,
-                                       scope_key=scope.key())
+                                       scope_key=scope.key(), database=getattr(cat, "connection_database", None))
         return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=sql, sql_executed=sql_exec,
                            params=params, tool=tool["name"], columns=cols, rows=rows, key_columns=_keys_for(views, cat),
                            as_of=as_of)
@@ -196,7 +198,18 @@ def _keys_for(views: list[str], cat: Catalog) -> list[str]:
     return keys
 
 
-def _schema_selection(question: str, cats: dict[str, Catalog]) -> dict[str, list[str]]:
+def _query_vector(question: str) -> Optional[list[float]]:
+    """The question's bge-m3 vector (the same cached embedding document retrieval uses), for the schema
+    index and the database router; None when no embedder is available (keyword-only still works)."""
+    try:
+        from ..retrieve.retriever import _embed_query
+        return list(_embed_query(question))
+    except Exception:
+        return None
+
+
+def _schema_selection(question: str, cats: dict[str, Catalog],
+                      qvec: Optional[list[float]] = None) -> dict[str, list[str]]:
     """Phase C5: the discovered tables to show for this question, per database ({} when schema RAG is
     off or no catalog has a discovered tier). Uses the same query vector as document retrieval."""
     s = settings()
@@ -204,12 +217,6 @@ def _schema_selection(question: str, cats: dict[str, Catalog]) -> dict[str, list
         return {}
     from .schema_index import select_tables
     k = int(s.get("data.schema_rag_k", 6))
-    qvec = None
-    try:
-        from ..retrieve.retriever import _embed_query
-        qvec = list(_embed_query(question))
-    except Exception:
-        pass   # keyword-only selection still works without the embedder
     return {name: select_tables(question, c, k, qvec) for name, c in cats.items() if c.offered_tables}
 
 
@@ -238,16 +245,23 @@ def _extract_params(sql: str, cat: Catalog) -> dict[str, Any]:
     return {n: known[n] for n in names}
 
 
-def _score(question: str, cat: Catalog) -> int:
-    q = question.lower()
-    kw = sum(3 for w in cat.keywords if w.lower() in q)
-    cols = sum(1 for v in cat.views for w in [v.name.split(".")[-1].lower(), *[c.lower() for c in v.columns]]
-              if w and w in q)
-    return kw + cols
-
-
 def _pick_catalog(question: str, cats: dict[str, Catalog]) -> Catalog:
-    return max(cats.values(), key=lambda c: _score(question, c))
+    """Fallback when the model's reply names no database: the best keyword match (db_router)."""
+    return max(cats.values(), key=lambda c: keyword_score(question, c))
+
+
+# Question -> (database, guarded SQL) the model wrote for it (J2). A repeated question — the same one
+# from another user, a dashboard chip, a follow-up after Refresh — re-executes that SQL against the live
+# database and skips the 3-5 s generation call. Keyed on the day (the model writes literal dates for
+# "this month"), the catalogs' file stamp (an edited catalog may change the right SQL), the catalogs
+# picked and the user's scope. Only SQL that passed the guard AND ran is stored, and it is guarded
+# again on replay. Setting: data.sql_cache_ttl_seconds (default a day; 0 = off).
+_SQL = TTLCache(maxsize=512)
+
+
+def _sql_key(question: str, cats: dict[str, Catalog], scope: Scope) -> tuple:
+    norm = re.sub(r"\s+", " ", question.strip().lower()).rstrip("?!. ")
+    return norm, tuple(sorted(cats)), catalog_stamp(), scope.key(), date.today().isoformat()
 
 
 def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -> tuple[str, str]:
@@ -262,17 +276,22 @@ def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -
 
 
 def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
-                     scope: Scope) -> QueryResult:
-    """One SQL-generation call sees every loaded catalog and must name the database it chose
-    (`DATABASE: <name>`) before the SQL, so the guard's view allow-list matches the right catalog."""
+                     scope: Scope, qvec: Optional[list[float]] = None) -> QueryResult:
+    """One SQL-generation call sees the catalogs picked for the question (data/db_router.py) and must
+    name the database it chose (`DATABASE: <name>`) before the SQL, so the guard's view allow-list
+    matches the right catalog. A question answered before today replays its cached SQL instead (J2)."""
     s = settings()
+    considered = list(cats)
+    ttl = int(s.get("data.sql_cache_ttl_seconds", 86400))
+    key = _sql_key(question, cats, scope) if ttl > 0 else None
+    cached = _SQL.get(key) if key is not None and not refresh else None
     chat = get_chat()
     catalogs_text = "\n\n".join(
         f"=== Database: {name} ({c.dialect}) — {c.description or 'no description'} ===\n{c.render()}"
         for name, c in cats.items())
     from .schema_index import join_hints
     # raw tables are not offered to a user limited to some factories (see _guard_for)
-    selected = _schema_selection(question, cats) if scope.all_factories else {}
+    selected = _schema_selection(question, cats, qvec) if scope.all_factories else {}
     from .schema_usage import log_selection
     for name, sel in selected.items():
         log_selection(name, sel, question, user)       # which tables to sample (G2)
@@ -286,11 +305,18 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
     messages = [{"role": "user", "content": question}]
     fallback = _pick_catalog(question, cats)
     last_err = ""
-    for attempt in range(1 + int(s["data.sql_retries"])):
-        reply = chat.chat(messages, system=system, max_tokens=int(s.get("llm.max_tokens_sql", 1536)),
-                          temperature=0, purpose="sql", user=user)
-        raw = re.sub(r"^```\w*|```$", "", reply.text.strip(), flags=re.M).strip()
-        db_name, sql = _split_database_line(raw, cats, fallback.database)
+    attempts = 1 + int(s["data.sql_retries"]) + (1 if cached else 0)   # a failed replay costs no model attempt
+    for attempt in range(attempts):
+        replay = attempt == 0 and cached is not None
+        if replay:
+            db_name, sql = cached
+            raw = None
+        else:
+            # ChatModel.chat() records the call as `llm.sql` itself (ragbot/trace.py): no span here
+            reply = chat.chat(messages, system=system, max_tokens=int(s.get("llm.max_tokens_sql", 1536)),
+                              temperature=0, purpose="sql", user=user)
+            raw = re.sub(r"^```\w*|```$", "", reply.text.strip(), flags=re.M).strip()
+            db_name, sql = _split_database_line(raw, cats, fallback.database)
         cat = cats[db_name]
         try:
             safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
@@ -298,22 +324,30 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             views += [n for n in _views_in(safe, cat) if not cat.view(n)]   # raw tables, for the [D#] reference
             params = _extract_params(safe, cat)
             cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
-                                           display_sql=safe, user=user, refresh=refresh, scope_key=scope.key())
+                                           display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
+                                           database=getattr(cat, "connection_database", None))
+            if key is not None and not replay:
+                _SQL.put(key, (db_name, safe), ttl)
             return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
-                               params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of)
+                               params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
+                               databases_considered=considered, sql_cached=replay)
         except Exception as e:
             last_err = f"{e.__class__.__name__}: {e}"
+            if replay:
+                _SQL.put(key, None, 0)    # a cached statement that no longer runs is dropped (schema change?)
+                continue                  # and the question is generated afresh
             messages += [{"role": "assistant", "content": raw},
                          {"role": "user", "content": f"That query failed: {last_err}\n"
                                                       "Return DATABASE: <name> on the first line, then the corrected SQL only."}]
     return QueryResult(database=fallback.database, engine=fallback.engine, views=[], sql="", columns=[], rows=[],
-                       error=last_err)
+                       error=last_err, databases_considered=considered)
 
 
 def answer_from_data(question: str, user: str = "", refresh: bool = False, *, scope: Scope) -> list[QueryResult]:
-    """Try fixed tools across all catalogs; else generate SQL, letting the model pick the database.
-    refresh=True skips the SQL result cache (data/cache.py) and reads live. Every statement is limited
-    to the user's scope (data/virtual.py)."""
+    """Try fixed tools across all catalogs; else pick the catalogs the question is about (db_router)
+    and generate SQL, letting the model name the database among them. refresh=True skips the SQL
+    result and question->SQL caches and reads live. Every statement is limited to the user's scope
+    (data/virtual.py)."""
     with trace.span("data"):
         cats = load_catalogs()
         if not cats:
@@ -323,4 +357,7 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
             tool, params = hit
             if tool["database"] in cats:
                 return [run_fixed_tool(tool, params, cats, user, refresh, scope=scope)]
-        return [generate_and_run(question, cats, user, refresh, scope=scope)]
+        qvec = _query_vector(question)
+        with trace.span("data.pick"):
+            picked = pick_catalogs(question, cats, qvec)
+        return [generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec)]

@@ -59,8 +59,23 @@ CREATE VIEW rag.vw_fabric_stock AS SELECT … FROM inventory.stock …;
 GRANT SELECT ON rag.* TO 'rag_reader'@'%';
 ```
 
-Connection strings go in `.env` (`SQLSERVER_CONN`, `MYSQL_CONN`). Connections are opened with
+Connection strings go in `.env` (`SQLSERVER_CONN_<DB>`, `MYSQL_CONN`). Connections are opened with
 a 10-second command timeout and read-uncommitted / read-committed-snapshot isolation.
+
+**One connection string per server, not per database (Phase J).** `rag_reader` reads every database
+on `192.168.10.6\MSSQLSERVER2019`, so a catalog for another database on that server reuses an existing
+variable and names its database: `connection_env: SQLSERVER_CONN_PRODUCTION` +
+`connection_database: HR`. `connectors.dsn()` swaps the `Database=` value at connect time; pools, the
+SQL result cache and `[D#]` references are per database. The password is therefore in `.env` once.
+Catalogued on 2026-10-04 (17 of the server's 20 databases; the three `erp_*` test copies are left out):
+BitopiSplint, Production (curated views), HR, Hrms5Misami, erp, Inventory, PlanningTNA, Washing, FM,
+Dashboard, BiMob, BIMOB_MVC, BIMOB_MVC_TAL, DiskManager, HWATT, SystemManager, VISTAQ. The 15 new
+catalogs have no curated views: their questions are answered through schema RAG over the discovered
+tables (section 2), under the same guard. Sensitive-name rules (`data/sensitive.py`) cover the HR and
+payroll data: salary, wage, bonus, tax, pay, increment, bank, NID, medical, blood, religion, phone,
+address, date of birth — those tables and columns are never offered to the model and never pass the
+guard. The server-side DENYs (above) were generated before these databases were discovered: re-run
+`scripts/gen_reader_grants.py` and the script it writes to extend them.
 
 ## 2. The catalog (semantic layer) — `config/catalog/<db>.yaml`
 
@@ -97,6 +112,23 @@ examples:
 ```
 
 `key_columns` drive the "Row key" line in `[D#]` references.
+
+A catalog may have **no views** (`views: []`) — every database added in Phase J starts that way, written
+by `scripts/gen_catalog.py` from the discovery file. Then the SQL model is shown the discovered tables
+the question selects (schema RAG, `data.schema_rag_k` per database), referenced as `schema.name`, and
+the guard allows exactly the catalog's offered tables. Three fields matter for such a catalog:
+`description` (one line, shown to the SQL model as the database's purpose), `keywords` (the words staff
+use for this data — the router scores them) and `exclude_tables` (dated copies, backups, scratch tables).
+`connection_database` is described in section 1.
+
+**Which database a question goes to** (`src/ragbot/data/db_router.py`). Before any SQL is written the
+catalogs are ranked, with no model call, on: hand-written keywords found in the question as whole words
+(3 points each) and curated view/column names (1); how much of a discovered table's own name the
+question mentions (up to 2); and, once most catalogs have schema vectors, the closest table vector
+(2 for the best database, 1 for the next). The SQL model is shown the best
+`data.max_databases_per_question` (default 2) and still names its choice with `DATABASE:`. A question
+in nobody's vocabulary goes to the curated catalogs (tie-break) and, if no rows come back, falls through
+to the documents as before. `python scripts/index_schema.py --try "<question>"` prints the ranking.
 
 ## 3. Fixed tools — `config/fixed_tools.yaml`
 

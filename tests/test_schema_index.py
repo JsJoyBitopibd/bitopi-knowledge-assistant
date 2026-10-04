@@ -76,6 +76,7 @@ def test_hybrid_uses_saved_vectors_and_ignores_stale_ones(isolated):
     q = "brands we sell garments to"
     assert si.select_tables(q, cat, k=1, qvec=_hash_vec(q).tolist())[0] == "dbo.Buyer"
     isolated[0] = "sha-2"                       # discovery re-run: saved vectors no longer match
+    si._CHECKED.clear()                         # get_index re-checks the files at most every 5 s (J5)
     assert si.get_index(cat).vectors is None
 
 

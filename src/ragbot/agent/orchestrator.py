@@ -176,9 +176,10 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         out.not_found = True
         yield Final(_log(out, user, scope)); return
 
-    # A single fixed-tool result has a known shape: write it from a template, no model call (C7).
+    # A single data result is written from a template, no model call: fixed tools (C7) and, unless
+    # answer.templated_generated is off, model-written SQL too (J3) — the rows are the answer.
     if r == "data" and not chunks and len(results) == 1 and s.get("answer.templated", True):
-        if _templated_answer(out, results[0], nf):
+        if _templated_answer(out, results[0], nf, allow_generated=bool(s.get("answer.templated_generated", True))):
             yield Final(_log(out, user, scope)); return
 
     yield _writing(chunks, results)
@@ -230,12 +231,12 @@ def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) ->
     return Stage("writing", "Writing the answer…", sources=names[:limit])
 
 
-def _templated_answer(out: Answer, result: QueryResult, nf: str) -> bool:
-    """Fill `out` from agent/templated.py when the result is a fixed tool's and the text verifies."""
+def _templated_answer(out: Answer, result: QueryResult, nf: str, allow_generated: bool = False) -> bool:
+    """Fill `out` from agent/templated.py when the result qualifies and the text verifies."""
     from ..data.tools import load_fixed_tools
     from .templated import try_template
     tool = next((t for t in load_fixed_tools() if t.get("name") == result.tool), None)
-    text = try_template(result, tool)
+    text = try_template(result, tool, allow_generated)
     if not text:
         return False
     block, refs = sources_block([], [result])

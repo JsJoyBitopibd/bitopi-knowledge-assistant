@@ -1,0 +1,90 @@
+# PlanningTNA: no curated views yet — answered through schema RAG over the discovered tables
+# (config/catalog/discovered/PlanningTNA.json: 213 tables, discovered 2026-10-04).
+# Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
+# words staff use for this data — the router scores them to pick the database for a question
+# (src/ragbot/data/db_router.py). The last 7 were derived from table names.
+# `connection_database:` opens this database through the login of `connection_env` (docs/DATA_ACCESS.md §1).
+database: PlanningTNA
+description: 'Production planning and TNA (time and action): line plans and capacity, day-wise line targets and
+  manpower, TNA tasks and templates per order, daily cut input, production, defect and rejection records, pack lists
+  and deliveries.'
+dialect: tsql
+connection_env: SQLSERVER_CONN_PRODUCTION
+connection_database: PlanningTNA
+keywords:
+- planning
+- plan
+- plans
+- tna
+- time and action
+- task
+- tasks
+- milestone
+- milestones
+- line plan
+- capacity
+- target
+- targets
+- efficiency
+- defect
+- defects
+- rejection
+- rejections
+- rejected
+- cut input
+- cutting input
+- daily production
+- hourly production
+- pack list
+- packlist
+- pack lists
+- delivery
+- deliveries
+- article
+- articles
+- variant
+- variants
+- line
+- rhl
+- tal
+- production
+- buyer
+- product
+- location
+exclude_tables:
+- '*back'
+- '*back_*'
+- '*backup*'
+- '*_bak*'
+- '*bak_*'
+- '*$'
+- '*$'''
+- '*$_*'
+- '*_old*'
+- '*.tmp*'
+- '*.temp_*'
+- '*_temp'
+- '*_test*'
+- '*.test_*'
+- '*daytest'
+- '*delete*'
+- '*_mail_on_*'
+- '*_before_*'
+- '*_till*'
+- '*_[0-9]_*'
+- '*_[0-9][0-9]_*'
+- '*_[0-9][0-9][0-9][0-9]*'
+- '*.backfill_*'
+- '*.shadow_*'
+- '*.baseline_*'
+- '*._linechange_*'
+rules:
+- Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
+- Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
+  Monday.
+- 'This database has no rag.* views: query the tables listed for the question as schema.name and name the columns
+  you need (never SELECT *).'
+- Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
+- Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
+  doesn't have the data."
+views: []

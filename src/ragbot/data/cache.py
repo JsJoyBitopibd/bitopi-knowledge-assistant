@@ -27,10 +27,11 @@ _CACHE = TTLCache(maxsize=256)
 
 def cached_run(engine: str, sql_exec: str, params: dict[str, Any], *, conn_env: str, display_sql: str,
                tool: str = "generated", user: str = "", refresh: bool = False,
-               timeout: Optional[int] = None, scope_key: str = "") -> tuple[list[str], list[list[Any]], datetime]:
+               timeout: Optional[int] = None, scope_key: str = "",
+               database: Optional[str] = None) -> tuple[list[str], list[list[Any]], datetime]:
     """connectors.run() behind the cache. Returns (columns, rows, as_of)."""
     ttl = int(settings().get("data.result_cache_ttl_seconds", 180))
-    key = (engine, conn_env, sql_exec, json.dumps(params, default=str, sort_keys=True), scope_key)
+    key = (engine, conn_env, database or "", sql_exec, json.dumps(params, default=str, sort_keys=True), scope_key)
     if ttl > 0 and not refresh:
         hit = _CACHE.get(key)
         if hit is not None:
@@ -39,6 +40,8 @@ def cached_run(engine: str, sql_exec: str, params: dict[str, Any], *, conn_env: 
             return list(cols), [list(r) for r in rows], as_of
     kw: dict[str, Any] = {"conn_env": conn_env, "display_sql": display_sql, "tool": tool, "user": user,
                           "scope": scope_key}
+    if database:
+        kw["database"] = database
     if timeout:
         kw["timeout"] = timeout
     cols, rows = run(engine, sql_exec, params, **kw)

@@ -9,3 +9,8 @@ headless = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Hide Streamlit's developer menu items (Deploy, Clear cache): "Deploy now" would publish the app to
+# Streamlit Community Cloud, which must never receive company data. Staff keep the theme switch and Print.
+toolbarMode = "viewer"

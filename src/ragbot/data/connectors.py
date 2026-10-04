@@ -45,6 +45,21 @@ def _log(engine: str, tool: str, display_sql: str, sql_exec: str, params: dict, 
                                        f"{ms:.0f}", error, params, display_sql, sql_exec, trace.request_id()])
 
 
+_DB_KEY = re.compile(r"((?:^|;)\s*(?:database|initial catalog)\s*=)[^;]*", re.IGNORECASE)
+
+
+def dsn(conn_env: str, database: Optional[str] = None) -> str:
+    """The connection string named by `conn_env` in .env, pointed at `database` when one is given. One
+    read-only login covers the whole SQL Server instance, so the catalogs of that server share one env var
+    and each names its own database (catalog `connection_database:`) instead of repeating the credentials."""
+    raw = env(conn_env)
+    if not database:
+        return raw
+    if _DB_KEY.search(raw):
+        return _DB_KEY.sub(lambda m: m.group(1) + database, raw, count=1)
+    return raw.rstrip(";") + f";Database={database}"
+
+
 def _positional(sql: str, marker: str) -> tuple[str, list[str]]:
     """Replace `marker+name` placeholders with positional `?`/`%(name)s`-style markers, but only
     outside single-quoted string literals — an email address or free-text containing '@' or ':' in a
@@ -97,19 +112,20 @@ _POOLS: dict[str, _Pool] = {}
 _POOLS_LOCK = threading.Lock()
 
 
-def _sqlserver_pool(conn_env: str) -> _Pool:
+def _sqlserver_pool(conn_env: str, database: Optional[str] = None) -> _Pool:
+    key = f"{conn_env}|{database or ''}"     # one pool per database: a session is bound to the one it opened
     with _POOLS_LOCK:
-        pool = _POOLS.get(conn_env)
+        pool = _POOLS.get(key)
         if pool is None:
             def connect() -> Any:
                 import pyodbc
-                cn = pyodbc.connect(env(conn_env), timeout=int(settings()["data.timeout_seconds"]),
+                cn = pyodbc.connect(dsn(conn_env, database), timeout=int(settings()["data.timeout_seconds"]),
                                     autocommit=False, readonly=True)
                 cur = cn.cursor()
                 cur.execute("SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
                 cur.close()
                 return cn
-            pool = _POOLS[conn_env] = _Pool(connect)
+            pool = _POOLS[key] = _Pool(connect)
         return pool
 
 
@@ -121,13 +137,13 @@ def _is_link_error(e: Exception) -> bool:
 
 def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVER_CONN", display_sql: str = "",
                   tool: str = "generated", user: str = "", timeout: Optional[int] = None,
-                  scope: str = "") -> tuple[list[str], list[list[Any]]]:
+                  scope: str = "", database: Optional[str] = None) -> tuple[list[str], list[list[Any]]]:
     s = settings()
     timeout = timeout or int(s["data.timeout_seconds"])
     max_rows = int(s["data.max_rows"])
     q, names = _positional(sql, "@")
     args = [params[n] for n in names]
-    pool = _sqlserver_pool(conn_env)
+    pool = _sqlserver_pool(conn_env, database)
     t0 = time.perf_counter()
     for attempt in (1, 2):
         cn, reused = None, False
@@ -159,7 +175,7 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
 
 def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN", display_sql: str = "",
              tool: str = "generated", user: str = "", timeout: Optional[int] = None,
-             scope: str = "") -> tuple[list[str], list[list[Any]]]:
+             scope: str = "", database: Optional[str] = None) -> tuple[list[str], list[list[Any]]]:
     import mysql.connector
     timeout = timeout or int(settings()["data.timeout_seconds"])
     u = urlparse(env(conn_env))  # mysql://user:pwd@host:3306/rag
@@ -171,7 +187,8 @@ def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN",
     cn = None
     try:
         cn = mysql.connector.connect(host=u.hostname, port=u.port or 3306, user=u.username, password=u.password,
-                                     database=u.path.lstrip("/"), connection_timeout=timeout, autocommit=False)
+                                     database=database or u.path.lstrip("/"), connection_timeout=timeout,
+                                     autocommit=False)
         cur = cn.cursor()
         cur.execute("SET SESSION TRANSACTION READ ONLY")
         cur.execute(f"SET SESSION MAX_EXECUTION_TIME={timeout * 1000}")
@@ -197,14 +214,15 @@ def run(engine: str, sql: str, params: dict[str, Any], **kw) -> tuple[list[str],
     return (run_sqlserver if engine == "sqlserver" else run_mysql)(sql, params, **kw)
 
 
-def stream_sqlserver(sql: str, *, conn_env: str, timeout: int, batch: int = 50_000, tool: str = "aggregate"):
+def stream_sqlserver(sql: str, *, conn_env: str, timeout: int, batch: int = 50_000, tool: str = "aggregate",
+                     database: Optional[str] = None):
     """Yield (columns, rows-batch) for a long read-only scan (scripts/refresh_aggregates.py). NOT pooled
     and NOT row-capped like run_sqlserver: it exists to copy a whole curated result once. Same write
     barrier: read-only, autocommit off, rolled back and closed however it ends. Logged once to sql.csv."""
     import pyodbc
     t0, total, cn = time.perf_counter(), 0, None
     try:
-        cn = pyodbc.connect(env(conn_env), timeout=timeout, autocommit=False, readonly=True)
+        cn = pyodbc.connect(dsn(conn_env, database), timeout=timeout, autocommit=False, readonly=True)
         cn.timeout = timeout
         cur = cn.cursor()
         cur.execute("SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")

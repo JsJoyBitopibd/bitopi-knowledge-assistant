@@ -232,6 +232,26 @@ python scripts\index_schema.py --try "how many suppliers do we have?"
 `--samples` on discovery also reads up to 30 distinct values of short text columns in small tables.
 A full pass is ~6,700 small queries on production, so it is off by default.
 
+### Adding a database (Phase J)
+
+Every database on the SQL Server is one catalog file. The login already reads them all, so a new one
+costs three read-only commands and no new secret (`connection_database:` points the existing connection
+string at it — `docs/DATA_ACCESS.md` §1):
+
+```powershell
+python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Payroll --database Payroll --json   # sys.* only, seconds
+python scripts\gen_catalog.py Payroll --description "Payroll: ..." --keywords "payroll,salary sheet,..."
+python scripts\index_schema.py Payroll          # schema vectors, minutes on CPU; keyword search works meanwhile
+python scripts\db_ping.py Payroll               # proves the connection, read-only
+```
+
+Then edit `config\catalog\Payroll.yaml`: the `description` is what the SQL model reads as the database's
+purpose and the `keywords` are what the router (`src/ragbot/data/db_router.py`) scores to send a question
+there — `python scripts\index_schema.py --try "how many ... ?"` shows the ranking. In Docker the catalog
+folder is mounted, so no rebuild is needed. Fast answers: a question whose rows come back is written from
+a template (no answer-model call), and the same question asked again today replays its SQL without the
+generation call; both are settings (`answer.templated_generated`, `data.sql_cache_ttl_seconds`).
+
 ### Aggregates: heavy queries answered from a nightly local copy (Phase C6)
 
 `config/aggregates.yaml` lists curated queries too slow to run per question (PCD history scans the

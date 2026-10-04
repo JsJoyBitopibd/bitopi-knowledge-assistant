@@ -75,7 +75,10 @@ def _warm() -> bool:
     get_keyword_index()
     get_store()
     try:
-        load_catalogs()
+        from ragbot.data.schema_index import get_index
+        for cat in load_catalogs().values():
+            if cat.offered_tables:   # the per-database table indexes the router reads on every data question
+                get_index(cat)
     except Exception:
         pass  # DB catalogs are optional for document-only pilots
     return True

@@ -34,7 +34,7 @@ def refresh(names: list[str], timeout: int) -> int:
             sql_exec, _ = rewrite_virtual(spec["sql"].strip(), cat, scope=Scope.unrestricted())   # the copy holds every factory; reads are scoped
             rows = aggregates.write(spec["name"],
                                     stream_sqlserver(sql_exec, conn_env=cat.connection_env, timeout=timeout,
-                                                     tool=f"aggregate:{spec['name']}"),
+                                                     tool=f"aggregate:{spec['name']}", database=cat.connection_database),
                                     spec.get("indexes", []), spec.get("views", []))
             print(f"{datetime.now():%Y-%m-%d %H:%M} {spec['name']}: {rows:,} rows in {time.perf_counter() - t0:.0f} s")
         except Exception as e:   # keep the previous copy; report and continue with the next aggregate

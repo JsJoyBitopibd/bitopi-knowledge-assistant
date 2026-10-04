@@ -59,6 +59,8 @@ class QueryResult(BaseModel):
     as_of: datetime = Field(default_factory=datetime.now)
     error: Optional[str] = None
     denied: bool = False         # refused before running: the question names data outside the user's scope
+    databases_considered: list[str] = Field(default_factory=list)  # catalogs the SQL model was shown (data/db_router.py)
+    sql_cached: bool = False     # the SQL came from the question->SQL cache, no generation call (tools.py)
 
     @property
     def row_keys(self) -> list[str]:

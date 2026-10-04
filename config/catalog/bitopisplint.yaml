@@ -5,8 +5,11 @@ database: BitopiSplint
 description: Export orders, buyer files, styles, colour/size breakdowns, PCD history and cancellation register.
 dialect: tsql
 connection_env: SQLSERVER_CONN_BITOPISPLINT
-keywords: [order, orders, eo, exportorder, po, exportpo, style, buyer, factory, merchandiser, pcd, ship, shipment,
-           file, fileref, filerefno, unit, tal, rhl, bgl, ktl, cancel, cancelled, colour, color, size]
+# Routing words (data/db_router.py, whole-word match). Factory codes (TAL, RHL …) are not listed: every
+# database's rows belong to a factory, so they would pull HR or inventory questions here.
+keywords: [order, orders, eo, exportorder, po, exportpo, style, styles, buyer, buyers, factory, merchandiser, pcd,
+           ship, shipment, shipments, fileref, filerefno, cancel, cancelled, colour, color, size, lc, bom, sample,
+           samples, booking, supplier, suppliers]
 # Discovered tables never offered to the SQL model (fnmatch, case-insensitive): history/backup
 # copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
 exclude_tables: ["*back", "*backup*", "*$", "*$'", "*_old", "*_bak", "*.tmp*", "*.temp_*", "*_test", "*daytest"]

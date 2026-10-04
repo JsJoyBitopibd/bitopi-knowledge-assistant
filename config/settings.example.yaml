@@ -61,6 +61,8 @@ data:
   schema_rag: true                # show generated SQL the discovered tables a question needs (Phase C5)
   schema_rag_k: 6                 # tables selected per database (+ up to 6 foreign-key neighbours)
   big_table_rows: 1000000         # raw tables above this need a WHERE clause (guard)
+  max_databases_per_question: 2   # catalogs shown to the SQL model per question, ranked by data/db_router.py (J1)
+  sql_cache_ttl_seconds: 86400    # question -> generated SQL replayed within the day (J2); 0 = off
 
 llm:
   temperature: 0
@@ -75,6 +77,7 @@ answer:
   history_turns: 3
   cache_ttl_seconds: 3600         # repeat documents question served from cache; 0 = off
   templated: true                 # fixed-tool results written from a template, no model call (C7)
+  templated_generated: true       # model-written SQL results too (J3): the rows are the answer, no answer-model call
   template_rows: 25               # rows shown in a templated table
 
 ui:

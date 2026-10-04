@@ -17,7 +17,8 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -47,18 +48,30 @@ _STOP = {"the", "all", "for", "and", "with", "list", "show", "how", "many", "muc
           "tbl", "vw", "view", "dbo", "info", "master", "details", "data"}
 
 
-def _name_matches(question: str, names: list[str], k: int) -> list[str]:
-    """Tables ranked by how much of their OWN name the question mentions ('buyer' + 'info' ->
-    tblBuyerInfo). Column-level BM25 dilutes this: dozens of tables have a BuyerName column."""
+def _name_words(name: str) -> list[str]:
+    """The words of a table's own name, stop words removed (all of them if nothing else is left)."""
+    return [w for w in words(name.split(".")[-1]) if w not in _STOP] or words(name.split(".")[-1])
+
+
+def _name_scores(question: str, names: list[str],
+                 name_words: Optional[list[list[str]]] = None) -> list[tuple[float, int, int, str]]:
+    """(share of the table's own name words the question mentions, hits, -name length, name), best first.
+    `name_words` (SchemaIndex.name_words) saves re-splitting ~3,700 names on every question."""
     qw = {w for w in words(_with_singulars(question)) if w not in _STOP}
+    name_words = name_words or [_name_words(n) for n in names]
     scored = []
-    for n in names:
-        nw = [w for w in words(n.split(".")[-1]) if w not in _STOP] or words(n.split(".")[-1])
+    for n, nw in zip(names, name_words):
         hit = sum(1 for w in nw if w in qw or (w.endswith("s") and w[:-1] in qw))
         if hit:
             scored.append((hit / len(nw), hit, -len(nw), n))
     scored.sort(reverse=True)
-    return [n for *_, n in scored[:k]]
+    return scored
+
+
+def _name_matches(question: str, names: list[str], k: int, name_words: Optional[list[list[str]]] = None) -> list[str]:
+    """Tables ranked by how much of their OWN name the question mentions ('buyer' + 'info' ->
+    tblBuyerInfo). Column-level BM25 dilutes this: dozens of tables have a BuyerName column."""
+    return [n for *_, n in _name_scores(question, names, name_words)[:k]]
 
 
 def table_document(t: Table) -> str:
@@ -85,9 +98,21 @@ def vectors_path(database: str) -> Path:
     return settings().path("index_dir") / "schema" / f"{database}.npz"
 
 
+_SHA: dict[tuple, str] = {}
+
+
 def json_sha(cat: Catalog) -> str:
+    """SHA-256 of the discovered JSON, memoised on (path, size, mtime): hashing all 17 files (~11 MB)
+    on every question cost more than the routing itself."""
     f = _json_path(cat)
-    return hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else ""
+    if not f.exists():
+        return ""
+    st = f.stat()
+    key = (str(f), st.st_size, st.st_mtime_ns)
+    sha = _SHA.get(key)
+    if sha is None:
+        sha = _SHA[key] = hashlib.sha256(f.read_bytes()).hexdigest()
+    return sha
 
 
 @dataclass
@@ -95,16 +120,33 @@ class SchemaIndex:
     names: list[str]
     keyword: KeywordIndex
     vectors: Optional[np.ndarray] = None     # rows aligned with names, unit length
+    name_words: list[list[str]] = field(default_factory=list)   # words of each name, for _name_scores
+
+    def __post_init__(self) -> None:
+        if not self.name_words:
+            self.name_words = [_name_words(n) for n in self.names]
 
     def search(self, question: str, k: int, qvec: Optional[list[float]] = None) -> list[str]:
         pool = max(k * 4, 30)
         sparse = [n for n, _ in self.keyword.search(_with_singulars(question), pool)]
-        lists = [sparse, _name_matches(question, self.names, pool)]
+        lists = [sparse, _name_matches(question, self.names, pool, self.name_words)]
         if self.vectors is not None and qvec is not None and len(self.names):
             scores = self.vectors @ np.asarray(qvec, dtype=np.float32)
             top = np.argsort(-scores)[:pool]
             lists.insert(0, [self.names[i] for i in top])
         return rrf(lists, int(settings().get("retrieval.rrf_k", 60)))[:k]
+
+    def best_cosine(self, qvec: Optional[list[float]]) -> Optional[float]:
+        """The closest table document's cosine to the question — comparable across databases (same
+        model, same question), which is what db_router needs. None without vectors."""
+        if self.vectors is None or qvec is None or not len(self.names):
+            return None
+        return float(np.max(self.vectors @ np.asarray(qvec, dtype=np.float32)))
+
+    def best_name_share(self, question: str) -> float:
+        """How much of the best-matching table's own name the question mentions (0..1)."""
+        scored = _name_scores(question, self.names, self.name_words)
+        return scored[0][0] if scored else 0.0
 
 
 def build(cat: Catalog, embed: bool = True) -> SchemaIndex:
@@ -123,27 +165,38 @@ def build(cat: Catalog, embed: bool = True) -> SchemaIndex:
     return idx
 
 
-_CACHE: dict[str, tuple[str, SchemaIndex]] = {}
+_CACHE: dict[str, tuple[tuple, SchemaIndex]] = {}
+_CHECKED: dict[str, float] = {}      # database -> when its files were last stat'ed
+_RECHECK_SECONDS = 5.0               # a new discovery or vector file is seen within this long
 _LOCK = threading.Lock()
 
 
 def get_index(cat: Catalog) -> SchemaIndex:
-    """Cached per database, keyed on the discovered JSON's hash. Loads saved vectors only if they
-    were built from the same JSON with the same embedding model; otherwise keyword-only."""
-    sha = json_sha(cat)
+    """Cached per database, keyed on the discovered JSON's hash and the vector file's mtime — so vectors
+    written by scripts/index_schema.py while the app runs are picked up at the next question instead of
+    after a restart. The files are stat'ed at most every _RECHECK_SECONDS: with 17 databases on a Docker
+    bind mount the checks alone cost ~70 ms per question. Loads saved vectors only if they were built
+    from the same JSON with the same embedding model; otherwise keyword-only."""
+    now = time.monotonic()
     with _LOCK:
         hit = _CACHE.get(cat.database)
-        if hit and hit[0] == sha:
+        if hit and now - _CHECKED.get(cat.database, 0.0) < _RECHECK_SECONDS:
+            return hit[1]
+    p = vectors_path(cat.database)
+    key = (json_sha(cat), p.stat().st_mtime_ns if p.exists() else 0)
+    with _LOCK:
+        _CHECKED[cat.database] = now
+        hit = _CACHE.get(cat.database)
+        if hit and hit[0] == key:
             return hit[1]
     idx = build(cat, embed=False)
-    p = vectors_path(cat.database)
     if p.exists():
         from ..embed import EMBED_MODEL
         z = np.load(p, allow_pickle=False)
-        if str(z["sha"]) == sha and str(z["model"]) == EMBED_MODEL and list(z["names"]) == idx.names:
+        if str(z["sha"]) == key[0] and str(z["model"]) == EMBED_MODEL and list(z["names"]) == idx.names:
             idx.vectors = z["vectors"]
     with _LOCK:
-        _CACHE[cat.database] = (sha, idx)
+        _CACHE[cat.database] = (key, idx)
     return idx
 
 

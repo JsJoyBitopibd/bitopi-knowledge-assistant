@@ -23,7 +23,8 @@ def main() -> None:
         sql = "SELECT @@VERSION AS Version, DB_NAME() AS DbName, SUSER_SNAME() AS LoginName" if cat.dialect == "tsql" \
             else "SELECT VERSION() AS Version, DATABASE() AS DbName, CURRENT_USER() AS LoginName"
         try:
-            cols, rows = run(cat.engine, sql, {}, conn_env=cat.connection_env, tool="db_ping")
+            cols, rows = run(cat.engine, sql, {}, conn_env=cat.connection_env, tool="db_ping",
+                             database=cat.connection_database)
             row = dict(zip(cols, rows[0])) if rows else {}
             print(f"{name} ({cat.connection_env}): OK — {row}")
         except Exception as e:

@@ -19,6 +19,9 @@ Usage:
   python scripts/discover_schema.py <ConnEnvVarName> <FriendlyName> [--schemas dbo,PPM]
   python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json [--samples]
   python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json --samples --tables-from-logs
+  python scripts/discover_schema.py SQLSERVER_CONN_PRODUCTION HR --database HR --json
+      (--database: another database on the same server, through the same read-only login; the catalog
+       YAML then says `connection_database: HR` — see docs/DATA_ACCESS.md)
 """
 import argparse, json, sys, _path  # noqa: F401
 from pathlib import Path
@@ -162,10 +165,12 @@ def main() -> None:
     ap.add_argument("--tables-from-logs", action="store_true",
                     help="with --samples: only the raw tables schema selection showed or generated SQL read "
                          "(logs/schema_select.csv, logs/sql.csv)")
+    ap.add_argument("--database", default=None,
+                    help="open this database instead of the one named in the connection string (same server, same login)")
     a = ap.parse_args()
 
-    from ragbot.config import env   # loads .env; os.environ alone does not see it
-    cn = pyodbc.connect(env(a.conn_env), timeout=30, autocommit=False, readonly=True)
+    from ragbot.data.connectors import dsn   # loads .env; os.environ alone does not see it
+    cn = pyodbc.connect(dsn(a.conn_env, a.database), timeout=30, autocommit=False, readonly=True)
     try:
         cur = cn.cursor()
         schemas = a.schemas.split(",") if a.schemas else None

@@ -438,3 +438,36 @@ Paid key in `.env` (PRD FR-8.9: free-tier keys are never used with company data)
   384: −0.94 s, hit rate 29/30) waits for the G/H gate evals.
 - I4: priority alone does not protect the app; the worker pausing while the app searches does
   (`data/index/app_busy`, `src/ragbot/ingest/priority.py`): the search p95 rise went from +131% to +12%.
+
+## Phase J — Every database, faster data answers → v1.10.0
+
+Asked for on 2026-10-04: catalogues for all databases on the SQL Server, and a faster reply to every
+data question. `rag_reader` already reads the whole instance (F2), so the work is catalogs and the
+answer path, not permissions.
+
+- **J1 one catalog per database, picked per question.** Discovery (`discover_schema.py --database`)
+  for the 17 non-test databases; `scripts/gen_catalog.py` writes a views-less catalog (description,
+  keywords, excludes, `connection_database:`) that schema RAG answers from. One connection string per
+  server (`connectors.dsn`). With 17 catalogs the SQL prompt cannot carry every catalog, so
+  `data/db_router.py` ranks them without a model call — hand-written keywords (3 points, whole words),
+  curated view/column names (1), the share of a table's own name the question mentions (≤ 2), and the
+  best schema-vector cosine once most databases have vectors (2 / 1) — and the SQL model sees the best
+  `data.max_databases_per_question` (2). Target: ≤ 50 ms warm; every sample question's database in
+  the top 2.
+- **J2 question → SQL cache.** The guarded statement a question produced is replayed for the same
+  question the same day (key: normalised question, catalogs picked, catalog file stamp, scope, date;
+  `data.sql_cache_ttl_seconds`), guarded again, rows read live; a replay that fails is dropped and the
+  question generated afresh. Saves the 3.5–5 s generation call on repeats.
+- **J3 templated answers for model-written SQL.** The rows are the answer: scalar → "Column: value",
+  one row → "Col: v · Col: v", more → table (`answer.templated_generated`). Saves the 2.5–6.4 s answer
+  call and the model's habit of calling a real result not-found. A generated 0/NULL scalar is still
+  judged by the model, so the documents retry for mis-routed policy questions keeps working.
+- **J4 routing without the model for database vocabulary.** A count/list question containing a
+  catalog keyword (≥ 3 letters, not a generic word) and no document noun is `data` (router regex
+  tier); the routing prompt (v8) lists the new domains for the questions that still reach it.
+- **J5 schema vectors for every database** in the background (`index_schema.py`, ~0.4 s per table on
+  the server's Xeon); `get_index` picks a new vector file up within 5 s without a restart. Catalog
+  folder mounted into the container so a catalog edit needs no rebuild. Sensitive-name rules extended
+  for the HR/payroll databases (medical, tax, bonus, pay, increment).
+- Gate: `pytest`; `index_schema.py --try` on ~16 questions across databases; `db_ping.py` all 17;
+  data/both eval cases no drop > 5 points; a live question per new domain through the app.

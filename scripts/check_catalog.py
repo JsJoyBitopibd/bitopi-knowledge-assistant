@@ -74,7 +74,8 @@ def live(cats) -> int:
                 if cat.dialect == "tsql" else \
                 f"SELECT * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q LIMIT 1"
             try:
-                cols, rows = run(cat.engine, sql, {}, conn_env=cat.connection_env, tool="check_catalog")
+                cols, rows = run(cat.engine, sql, {}, conn_env=cat.connection_env, tool="check_catalog",
+                                 database=cat.connection_database)
                 missing = set(v.columns) - set(cols)
                 extra = set(cols) - set(v.columns)
                 if missing:

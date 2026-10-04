@@ -100,10 +100,50 @@ def test_orchestrator_answers_fixed_tool_without_a_model_call(wired):
     assert [r.marker for r in a.references] == ["D1"]
 
 
-def test_generated_sql_still_uses_the_model(wired):
+def test_generated_sql_is_templated_by_default(wired):
+    """J3: a model-written query's rows are the answer; no answer-model call."""
+    wired(_qr(["Orders"], [[7]], tool="generated"), [])
+    a = orch.answer("some free-form data question", scope=Scope.unrestricted())
+    assert a.text == "Orders: 7 [D1]." and a.usage.calls == 0 and not a.not_found
+    assert a.results and a.results[0].tool == "generated"
+
+
+def test_generated_sql_uses_the_model_when_templating_is_off(wired, monkeypatch):
     chat = wired(_qr(["Orders"], [[7]], tool="generated"), ["There are 7 orders [D1]."])
+    real = orch.settings()
+
+    class Off:
+        def __getitem__(self, k):
+            return real[k]
+
+        def get(self, k, default=None):
+            return False if k == "answer.templated_generated" else real.get(k, default)
+    monkeypatch.setattr(orch, "settings", lambda: Off())
     a = orch.answer("some free-form data question", scope=Scope.unrestricted())
     assert a.text == "There are 7 orders [D1]." and a.usage.calls == 1 and not chat.replies
+
+
+def test_generated_zero_or_null_scalar_is_left_to_the_model():
+    assert try_template(_qr(["n"], [[0]], tool="generated", params={}), None, allow_generated=True) is None
+    assert try_template(_qr(["n"], [[None]], tool="generated", params={}), None, allow_generated=True) is None
+    assert try_template(_qr(["n"], [[0]], params={}), {"answer": "{value} found"}) == "0 found [D1]."   # fixed tool: an answer
+
+
+def test_generated_unnamed_count_column_gets_a_label():
+    """Live 2026-10-04: `SELECT COUNT(*) FROM dbo.tblEmployee` answered ': 13199 [D1].'"""
+    r = QueryResult(database="Hrms5Misami", engine="sqlserver", views=["dbo.tblEmployee"],
+                    sql="SELECT TOP (200) COUNT(*) FROM dbo.tblEmployee", tool="generated", columns=[""], rows=[[13199]])
+    assert try_template(r, None, allow_generated=True) == "Count: 13199 [D1]."
+    r.sql = "SELECT TOP (1) MAX(Qty) FROM dbo.X"
+    assert try_template(r, None, allow_generated=True) == "Value: 13199 [D1]."
+
+
+def test_generated_single_row_is_one_line():
+    r = _qr(["ExportOrderID", "PCD", "Qty"], [["TAL-25-1", date(2026, 10, 12), 1200]], tool="generated", params={})
+    text = try_template(r, None, allow_generated=True)
+    assert text == "ExportOrderID: TAL-25-1 · PCD: 2026-10-12 · Qty: 1200 [D1]."
+    assert verify(text, [], [r], NF) == (True, [])
+    assert try_template(r, None) is None                      # fixed-tool-only behaviour without the flag
 
 
 def test_missing_order_id_asks_instead_of_querying(wired, monkeypatch):

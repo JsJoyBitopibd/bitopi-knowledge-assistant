@@ -28,7 +28,10 @@ def main() -> None:
         return
     if a.question:
         from ragbot.retrieve.retriever import _embed_query
+        from ragbot.data.db_router import explain, pick_catalogs
         qvec = list(_embed_query(a.question))
+        print(f"databases: {explain(a.question, cats, qvec)}")
+        print(f"picked: {list(pick_catalogs(a.question, cats, qvec))}")
         for n in names:
             idx = si.get_index(cats[n])
             sel = si.select_tables(a.question, cats[n], a.k, qvec)

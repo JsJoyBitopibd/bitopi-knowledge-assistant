@@ -16,7 +16,9 @@ from __future__ import annotations
 import re
 
 DEFAULT_PATTERNS = ["salar", "wage", "bank", "nid", "passport", "password", "pwd", "token", "secret",
-                    "blood", "religion", "phone", "mobile", "email", "address", "dob", "birth"]
+                    "blood", "religion", "phone", "mobile", "email", "address", "dob", "birth",
+                    # added with the HR/payroll databases (Phase J): health records and pay components
+                    "medical", "tax", "bonus", "increment", "pay"]
 
 
 def patterns() -> tuple[str, ...]:

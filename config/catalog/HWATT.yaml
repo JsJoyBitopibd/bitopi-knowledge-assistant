@@ -1,0 +1,76 @@
+# HWATT: no curated views yet — answered through schema RAG over the discovered tables
+# (config/catalog/discovered/HWATT.json: 98 tables, discovered 2026-10-04).
+# Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
+# words staff use for this data — the router scores them to pick the database for a question
+# (src/ragbot/data/db_router.py). The last 10 were derived from table names.
+# `connection_database:` opens this database through the login of `connection_env` (docs/DATA_ACCESS.md §1).
+database: HWATT
+description: 'Attendance device system (HWATT): employee card punches (KQZ_Card), devices and branches, attendance
+  rules, vacation shift ratios, late and leave-early levels.'
+dialect: tsql
+connection_env: SQLSERVER_CONN_PRODUCTION
+connection_database: HWATT
+keywords:
+- hwatt
+- card
+- cards
+- punch
+- punches
+- swipe
+- swipes
+- attendance device
+- attendance devices
+- biometric
+- kqz
+- in time
+- out time
+- late level
+- leave early
+- access card
+- tables
+- dual1
+- exceptionalemployee
+- admin
+- adminbrch
+- admindevice
+- adminmodule
+- attrule
+- basicinfo
+- brch
+exclude_tables:
+- '*back'
+- '*back_*'
+- '*backup*'
+- '*_bak*'
+- '*bak_*'
+- '*$'
+- '*$'''
+- '*$_*'
+- '*_old*'
+- '*.tmp*'
+- '*.temp_*'
+- '*_temp'
+- '*_test*'
+- '*.test_*'
+- '*daytest'
+- '*delete*'
+- '*_mail_on_*'
+- '*_before_*'
+- '*_till*'
+- '*_[0-9]_*'
+- '*_[0-9][0-9]_*'
+- '*_[0-9][0-9][0-9][0-9]*'
+- '*.backfill_*'
+- '*.shadow_*'
+- '*.baseline_*'
+- '*._linechange_*'
+rules:
+- Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
+- Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
+  Monday.
+- 'This database has no rag.* views: query the tables listed for the question as schema.name and name the columns
+  you need (never SELECT *).'
+- Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
+- Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
+  doesn't have the data."
+views: []
