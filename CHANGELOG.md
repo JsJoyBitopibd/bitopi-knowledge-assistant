@@ -8,6 +8,16 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+- **Read-only SQL Server login** `rag_reader` replaces `sa` (F2). `scripts/gen_reader_grants.py` writes the grant
+  script (server-level `CONNECT ANY DATABASE` + `SELECT ALL USER SECURABLES` + `VIEW ANY DEFINITION`, then a `DENY`
+  on every sensitive table and column schema discovery found — BitopiSplint 27 objects + 332 columns, Production
+  4 + 11) and its rollback to the git-ignored `private/`; the password stays a sqlcmd variable. `docs/DATA_ACCESS.md`
+  §1 explains why read on base tables (virtual views) and keeps the schema-only variant as the F2b target.
+  `tests/test_gen_reader_grants.py` (5).
+- **No-sign-in mode** `auth.provider: none`: the app skips the sign-in form and every visitor is one shared
+  user, `open`, scoped to `auth.open_groups` from `config/scopes.yaml` (fails closed when none of them is
+  configured). The default stays `ldap`. `tests/test_auth.py` (+2).
+
 ## [1.9.0] — 2026-09-29 — Phase I: speed
 
 Document answers **7.45 s → 5.71 s** (p50, `eval/latency/20260929T1039.json` vs the I1 baseline

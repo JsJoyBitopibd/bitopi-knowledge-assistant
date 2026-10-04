@@ -1,17 +1,37 @@
 # Database access rules and the semantic layer
 
-## 1. One read-only login per engine, one schema of views
+## 1. One read-only login per engine
 
-**SQL Server** (run as a DBA on each database the assistant may read):
+**SQL Server** — login `rag_reader`, read-only on the whole instance. `python scripts/gen_reader_grants.py`
+writes the exact script to `private/rag_reader_grants.sql` (git-ignored: it names the sensitive tables); a
+sysadmin runs it in SQLCMD mode with `:setvar RAG_READER_PASSWORD "…"`. In outline:
 
 ```sql
-CREATE LOGIN rag_reader WITH PASSWORD = '<strong password>';
-USE [Production.PPM];
-CREATE USER rag_reader FOR LOGIN rag_reader;
-CREATE SCHEMA rag AUTHORIZATION dbo;
-GRANT SELECT ON SCHEMA::rag TO rag_reader;
--- no other grants: no dbo, no EXECUTE, no linked servers, no cross-database chaining
+CREATE LOGIN rag_reader WITH PASSWORD = N'$(RAG_READER_PASSWORD)', CHECK_POLICY = ON;
+GRANT CONNECT ANY DATABASE TO rag_reader;        -- every current and future database
+GRANT SELECT ALL USER SECURABLES TO rag_reader;  -- read every user table and view in them
+GRANT VIEW ANY DEFINITION TO rag_reader;         -- metadata for scripts/discover_schema.py
+-- in each discovered database: CREATE USER rag_reader FOR LOGIN rag_reader; then
+DENY SELECT ON OBJECT::dbo.<sensitive table> TO rag_reader;               -- whole object
+DENY SELECT ON OBJECT::dbo.<table> (<sensitive columns>) TO rag_reader;   -- columns of other objects
+-- nothing else: no write permission, no CONTROL SERVER, no EXECUTE, no linked servers
+```
 
+Why read on base tables rather than only on a `rag` schema of views: the catalog views of this build are
+*virtual* (section 6) and are expanded over the base tables at run time; `scripts/discover_schema.py`,
+`scripts/check_catalog.py --live`, `scripts/refresh_aggregates.py` and the Phase C raw-table SQL read base
+tables too. What the assistant may *show* is restricted in code (catalog, guard, `data/sensitive.py`); the
+DENYs — generated from the same sensitive-name rules over the discovered schema — make those tables and
+columns unreadable at the server as well, whatever SQL arrives. A DENY beats the server-level GRANT for any
+principal that is not sysadmin. After a new discovery, regenerate and re-run the script (idempotent).
+Rotation: `ALTER LOGIN rag_reader WITH PASSWORD = N'…'`, update `.env`, recreate the containers.
+Removal: `private/rag_reader_rollback.sql`.
+
+The strict variant — SELECT on a `rag` schema of real views only — is the target once a DBA has created
+the views (section 6, Phase F2b): `CREATE SCHEMA rag AUTHORIZATION dbo; GRANT SELECT ON SCHEMA::rag TO
+rag_reader;` and then `REVOKE SELECT ALL USER SECURABLES` once nothing reads base tables any more. A view:
+
+```sql
 CREATE VIEW rag.vw_ExportOrderPCD AS
 SELECT  eo.FileRefID,
         eo.ExportOrderNo   AS EONo,
@@ -149,5 +169,5 @@ per user (Phase F2).
 
 Every connection still opens with `autocommit=False`, and the connector issues an explicit
 `ROLLBACK` in a `finally` block before closing, whether the query succeeded or failed
-(`src/ragbot/data/connectors.py`) — belt and braces alongside the guard, since the `sa` login used
-during this build has no server-side write restriction of its own.
+(`src/ragbot/data/connectors.py`) — belt and braces alongside the guard and the read-only login
+(section 1; until 2026-10-04 the build ran as `sa`, which had no server-side write restriction of its own).

@@ -53,6 +53,9 @@ in every SQL statement (never by the prompt). Setup:
    `LDAP_DOMAIN`, `LDAP_BASE_DN` (LDAPS on 636 by default; `LDAP_USE_SSL=false` uses StartTLS on 389;
    plain LDAP is never used). No service account is needed: the user's own password is checked.
    For development only, `auth.provider: local` with users added by `python scripts/add_local_user.py`.
+   No sign-in at all: `auth.provider: none` — every visitor is one shared user, `open`, whose scope is the
+   groups in `auth.open_groups` (they must exist in `config/scopes.yaml`, or the app stops). Anyone who can
+   reach port 8501 then gets that scope, so use it only where the network limits who reaches the app.
 3. Tag documents: the factory comes from the first folder (`data/pdfs/TAL/...`), everything else is
    group-wide; a `meta.yaml` in a folder sets department / confidentiality (see `data/pdfs/README.md`).
 4. **After upgrading an existing index, run `python scripts/ingest.py` once**: it tags the documents
@@ -122,7 +125,11 @@ scope; admins can look up a user's scope and download their log in the sidebar (
   in `.env`; run `python scripts/eval.py` and compare against the previous run (it blocks on any
   metric dropping more than 5 points).
 - **Rotate keys / connection strings**: edit `.env` only — it is git-ignored and never logged
-  (`logs/calls.csv` records token counts and model names, never prompt text or secrets).
+  (`logs/calls.csv` records token counts and model names, never prompt text or secrets). The SQL Server login
+  is `rag_reader` (read-only on the whole instance; `python scripts/gen_reader_grants.py` writes its grant and
+  rollback scripts to `private/`, see `docs/DATA_ACCESS.md` §1): rotate with `ALTER LOGIN rag_reader WITH
+  PASSWORD = N'…'`, put the new string in `.env`, then `docker compose up -d` — containers read `.env` only
+  when they are created.
 - **Change embedding model**: NOT a plain config change — the vector index is tied to the model
   that built it (`store.py` refuses to open a mismatched index). Set `EMBED_MODEL` in `.env`, then run
   `python scripts/reindex.py --yes` for a full rebuild (there is no separate `--model` flag; the model
