@@ -18,7 +18,7 @@ import streamlit as st  # noqa: E402
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
 from ragbot.agent.orchestrator import answer_stream, log_feedback  # noqa: E402
 from ragbot.auth.filters import scope_where  # noqa: E402
-from ragbot.auth.providers import sign_in  # noqa: E402
+from ragbot.auth.providers import open_user, sign_in, sign_in_required  # noqa: E402
 from ragbot.config import log_dir, settings  # noqa: E402
 from ragbot.data import present  # noqa: E402
 from ragbot.index_version import index_version  # noqa: E402
@@ -54,7 +54,10 @@ def _sign_in_form() -> None:
 
 
 if "user" not in st.session_state:
-    _sign_in_form()
+    guest = open_user()                   # auth.provider: none — one shared, still scoped, user; no form
+    if guest is None:
+        _sign_in_form()
+    st.session_state.user = guest
 me = st.session_state.user
 scope = me.scope
 
@@ -168,10 +171,13 @@ if "pending_q" not in st.session_state:
 
 user = me.name
 with st.sidebar:
-    st.caption(f"Signed in as **{me.display}** ({me.name})")
-    if st.button("Sign out"):
-        st.session_state.clear()          # the next person starts with no history, refs or PDF buttons
-        st.rerun()
+    if sign_in_required():
+        st.caption(f"Signed in as **{me.display}** ({me.name})")
+        if st.button("Sign out"):
+            st.session_state.clear()      # the next person starts with no history, refs or PDF buttons
+            st.rerun()
+    else:
+        st.caption(f"**{me.display}**")
     allowed = tuple(sorted((k, tuple(v)) for k, v in scope_where(scope).items()))
     cats = st.multiselect("Document categories (empty = all)", _categories(ver, allowed))
     # route, tokens and raw warnings (which can quote database errors) are for administrators only

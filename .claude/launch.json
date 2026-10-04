@@ -10,6 +10,11 @@
                       "--server.headless", "true",
                       "--browser.gatherUsageStats", "false"],
       "port": 8501
+    },
+    {
+      "name": "bitopi-chat-docker",
+      "url": "http://localhost:8501",
+      "port": 8501
     }
   ]
 }

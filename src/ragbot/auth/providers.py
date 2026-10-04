@@ -187,4 +187,27 @@ def get_provider() -> AuthProvider:
         return LdapProvider.from_env()
     if kind == "local":
         return LocalProvider()
-    raise RuntimeError(f"auth.provider must be 'ldap' or 'local', not {kind!r}")
+    if kind == "none":
+        raise RuntimeError("auth.provider is 'none': there is no sign-in (the app uses open_user())")
+    raise RuntimeError(f"auth.provider must be 'ldap', 'local' or 'none', not {kind!r}")
+
+
+OPEN_USER = "open"
+
+
+def sign_in_required() -> bool:
+    return str(settings().get("auth.provider", "local")).lower() != "none"
+
+
+def open_user() -> Optional[User]:
+    """auth.provider: none — no sign-in form: every visitor is the one shared user `open`, whose scope is the
+    union of `auth.open_groups` from config/scopes.yaml, enforced like a signed-in user's. None while sign-in
+    is on. Fails closed: groups that config/scopes.yaml does not configure raise, never open everything."""
+    if sign_in_required():
+        return None
+    groups = [str(g) for g in settings().get("auth.open_groups") or []]
+    res = _result(OPEN_USER, "Open access (no sign-in)", groups, load_scopes())
+    if res.user is None:
+        raise RuntimeError(f"auth.provider 'none' needs auth.open_groups that config/scopes.yaml configures; "
+                           f"got {groups!r}")
+    return res.user

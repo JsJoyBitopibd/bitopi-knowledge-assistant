@@ -9,9 +9,11 @@ paths:
   users_file: config/users.yaml     # local sign-in users, auth.provider: local only (copy users.example.yaml)
 
 # Sign-in and per-user scope (PRD FR-4). ldap = Active Directory (.env LDAP_HOST, LDAP_DOMAIN, LDAP_BASE_DN);
-# local = config/users.yaml, for development and tests.
+# local = config/users.yaml, for development and tests. none = no sign-in: every visitor is one shared user
+# whose scope is open_groups (from config/scopes.yaml) — only where the network decides who reaches the app.
 auth:
   provider: ldap
+  open_groups: [KA-Managers]   # auth.provider: none only; groups not in config/scopes.yaml stop the app
   max_failures: 5          # failed sign-ins per account ...
   lockout_seconds: 600     # ... within this window, then the account waits
 

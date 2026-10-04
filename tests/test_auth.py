@@ -101,6 +101,34 @@ def test_local_provider(tmp_path):
     assert p.authenticate("guest", "guest password").reason == "not_enrolled"
 
 
+class _Settings(dict):
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
+def test_no_sign_in_gives_one_user_with_the_open_groups_scope(monkeypatch):
+    monkeypatch.setattr(providers, "settings", lambda: _Settings({"auth.provider": "None",
+                                                                 "auth.open_groups": ["KA-Staff-TAL"]}))
+    monkeypatch.setattr(providers, "load_scopes", lambda: CFG)
+    u = providers.open_user()
+    assert u.name == providers.OPEN_USER and u.scope.factories == {"TAL"} and not u.scope.is_admin
+    assert not providers.sign_in_required()
+    with pytest.raises(RuntimeError):
+        providers.get_provider()                                       # no provider to sign in with
+
+
+def test_no_sign_in_fails_closed_and_is_off_unless_chosen(monkeypatch):
+    monkeypatch.setattr(providers, "load_scopes", lambda: CFG)
+    for groups in (None, [], ["Domain Users"]):                        # nothing configured: refuse, never open all
+        monkeypatch.setattr(providers, "settings", lambda g=groups: _Settings({"auth.provider": "none",
+                                                                              "auth.open_groups": g}))
+        with pytest.raises(RuntimeError):
+            providers.open_user()
+    for kind in (None, "ldap", "local"):
+        monkeypatch.setattr(providers, "settings", lambda k=kind: _Settings({} if k is None else {"auth.provider": k}))
+        assert providers.sign_in_required() and providers.open_user() is None
+
+
 def test_account_names():
     assert account_name(" BITOPI\\JDoe ") == "jdoe" and account_name("jdoe@bitopibd.com") == "jdoe"
     assert account_name("j*doe") == "" and account_name("") == ""
