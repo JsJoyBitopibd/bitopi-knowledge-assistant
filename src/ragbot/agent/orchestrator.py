@@ -156,6 +156,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         yield Stage("querying", "Querying the database…")
         results = list(answer_from_data(q, user, refresh, scope=scope))
     if r in ("data", "both"):
+        out.agent = next((x.agent for x in results if x.agent), "")   # domain agent (Phase K), for the log
         # a failed query is not a source: never let the model cite an error message
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
         denied = any(x.denied for x in results)
@@ -275,7 +276,8 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
                 f"\n\nQuestion: {question}" + (f"\n(searched as: {q})" if q != question else "") +
                 "\n\nAnswer from the sources only and cite each fact with its [P#]/[D#] id.")
     chat = get_chat()
-    system = prompt("system_answer")
+    agent = out.agent if results else ""    # the charter speaks about database rows; not for a documents retry
+    system = _system("system_answer", agent)
     chunk_ids = [c.id for c in chunks]
     rows_sent = sum(min(len(x.rows), int(s["data.max_rows_to_llm"])) for x in results)
 
@@ -322,10 +324,17 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
         # is to verify first and only then reveal the text.
         _log_verify_failure(question, q, [f"streamed draft replaced (attempt {attempt + 1})", *problems])
         yield Replace("verification failed")
-        system = prompt("system_answer_strict")
+        system = _system("system_answer_strict", agent)
 
     out.not_found = True
     out.text = ""
+
+
+def _system(name: str, agent: str) -> str:
+    """The answer prompt, plus the domain agent's charter (prompts/agents/<agent>.txt) when one answered."""
+    from ..domain_agents import charter_text
+    extra = charter_text(agent) if agent else ""
+    return prompt(name) + (f"\n\n{extra}" if extra else "")
 
 
 def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str = "",
@@ -333,14 +342,15 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str
     """Thumbs up/down from the UI go to logs/chat.csv as a feedback row (docs/PLAN.md M5)."""
     append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "feedback",
                                           f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}",
-                                          "", request_id, "", ""])
+                                          "", request_id, "", "", ""])
 
 
 # `scope` (PRD FR-6.2): what the user was allowed to see when they asked, so an administrator can
 # reconstruct what each user saw (FR-4.8). `request_id` joins the row to its calls.csv and sql.csv rows;
-# `seconds` and `timings` (JSON, ragbot/trace.py) say where the time went.
+# `seconds` and `timings` (JSON, ragbot/trace.py) say where the time went; `agent` is the domain agent
+# that answered a data question (Phase K).
 _CHAT_HEADER = ["ts", "user", "scope", "route", "question", "rewritten", "not_found", "refs", "in_tokens",
-                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings"]
+                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings", "agent"]
 
 
 def _log(a: Answer, user: str, scope: Scope) -> Answer:
@@ -352,7 +362,7 @@ def _log(a: Answer, user: str, scope: Scope) -> Answer:
         datetime.now().isoformat(timespec="seconds"), user, scope.key(), a.route, a.question, a.rewritten_question,
         a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
         a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind, a.request_id,
-        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else ""])
+        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else "", a.agent])
     return a
 
 

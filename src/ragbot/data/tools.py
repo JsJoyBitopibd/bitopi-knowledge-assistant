@@ -58,6 +58,13 @@ def _date_window(text: str) -> tuple[date, date]:
     t = text.lower()
     today = date.today()
     monday = today - timedelta(days=today.weekday())
+    # single days first: "today" used to fall through to the 7-day default below
+    if "yesterday" in t:
+        return today - timedelta(days=1), today
+    if "tomorrow" in t:
+        return today + timedelta(days=1), today + timedelta(days=2)
+    if "today" in t:
+        return today, today + timedelta(days=1)
     if "this week" in t:
         return monday, monday + timedelta(days=7)
     if "next week" in t:
@@ -95,6 +102,8 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             groups = groups if isinstance(groups, list) else [groups]
             raw = next((m.group(g) for g in groups if g <= (m.lastindex or 0) and m.group(g)), None)
             if raw is None:
+                raw = spec.get("default")      # e.g. window: { default: 'last 30 days' } for an optional phrase
+            if raw is None:
                 break
             if spec.get("type") == "date_window":
                 params["from"], params["to"] = _date_window(raw)
@@ -106,6 +115,8 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
                 raw = str(raw).upper()
             params[name] = raw
         else:
+            if "@today" in tool.get("sql", "") or "@today" in tool.get("local_sql", ""):
+                params["today"] = date.today()   # "has passed" = before today, not before the window's end
             return tool, params
     return None
 
@@ -259,9 +270,9 @@ def _pick_catalog(question: str, cats: dict[str, Catalog]) -> Catalog:
 _SQL = TTLCache(maxsize=512)
 
 
-def _sql_key(question: str, cats: dict[str, Catalog], scope: Scope) -> tuple:
+def _sql_key(question: str, cats: dict[str, Catalog], scope: Scope, agent: str = "") -> tuple:
     norm = re.sub(r"\s+", " ", question.strip().lower()).rstrip("?!. ")
-    return norm, tuple(sorted(cats)), catalog_stamp(), scope.key(), date.today().isoformat()
+    return norm, tuple(sorted(cats)), catalog_stamp(), scope.key(), date.today().isoformat(), agent
 
 
 def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -> tuple[str, str]:
@@ -276,14 +287,16 @@ def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -
 
 
 def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
-                     scope: Scope, qvec: Optional[list[float]] = None) -> QueryResult:
+                     scope: Scope, qvec: Optional[list[float]] = None, agent: str = "") -> QueryResult:
     """One SQL-generation call sees the catalogs picked for the question (data/db_router.py) and must
     name the database it chose (`DATABASE: <name>`) before the SQL, so the guard's view allow-list
-    matches the right catalog. A question answered before today replays its cached SQL instead (J2)."""
+    matches the right catalog. A question answered before today replays its cached SQL instead (J2).
+    `agent` (Phase K) adds that domain agent's charter to the prompt."""
+    from ..domain_agents import charter_text
     s = settings()
     considered = list(cats)
     ttl = int(s.get("data.sql_cache_ttl_seconds", 86400))
-    key = _sql_key(question, cats, scope) if ttl > 0 else None
+    key = _sql_key(question, cats, scope, agent) if ttl > 0 else None
     cached = _SQL.get(key) if key is not None and not refresh else None
     chat = get_chat()
     catalogs_text = "\n\n".join(
@@ -299,7 +312,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                                           for n, sel in selected.items()) if t)
     # Static text first (rules, curated views, examples), the per-question tables last: a stable
     # prefix lets the provider reuse its cached prompt across questions.
-    system = (prompt("sql_generate").replace("{catalogs}", catalogs_text)
+    system = (prompt("sql_generate").replace("{agent}", charter_text(agent))
+              .replace("{catalogs}", catalogs_text)
               .replace("{tables}", tables_text or "(none selected for this question)")
               .replace("{today}", date.today().isoformat()))
     messages = [{"role": "user", "content": question}]
@@ -322,6 +336,13 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
             sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
             views += [n for n in _views_in(safe, cat) if not cat.view(n)]   # raw tables, for the [D#] reference
+            if not views:
+                # A statement that reads no view or table — the model's way of saying "not found", e.g.
+                # SELECT 'System doesn''t have the data.' — is not a source: its constant row would become
+                # a cited "database answer" (found by the scope leak suite, case s33, 2026-10-06).
+                return QueryResult(database=cat.database, engine=cat.engine, views=[], sql=safe, columns=[],
+                                   rows=[], error="the generated SQL reads no view or table (the model found none)",
+                                   databases_considered=considered, agent=agent)
             params = _extract_params(safe, cat)
             cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
                                            display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
@@ -330,7 +351,7 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                 _SQL.put(key, (db_name, safe), ttl)
             return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
                                params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
-                               databases_considered=considered, sql_cached=replay)
+                               databases_considered=considered, sql_cached=replay, agent=agent)
         except Exception as e:
             last_err = f"{e.__class__.__name__}: {e}"
             if replay:
@@ -340,14 +361,28 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                          {"role": "user", "content": f"That query failed: {last_err}\n"
                                                       "Return DATABASE: <name> on the first line, then the corrected SQL only."}]
     return QueryResult(database=fallback.database, engine=fallback.engine, views=[], sql="", columns=[], rows=[],
-                       error=last_err, databases_considered=considered)
+                       error=last_err, databases_considered=considered, agent=agent)
+
+
+def _with_agent_catalog(question: str, picked: dict[str, Catalog], cats: dict[str, Catalog], agent: Any,
+                        qvec: Optional[list[float]]) -> dict[str, Catalog]:
+    """Make sure the SQL model sees at least one of the agent's databases: when the ranking picked none,
+    the agent's best database replaces the last pick. The ranking still decides otherwise, so a question
+    the agent's keywords caught by mistake keeps the database its own words point to."""
+    own = {n: cats[n] for n in getattr(agent, "catalogs", ()) if n in cats}
+    if not own or set(own) & set(picked):
+        return picked
+    best = pick_catalogs(question, own, qvec, k=1)
+    keep = list(picked.items())[:max(len(picked) - 1, 0)]
+    return dict(keep + list(best.items()))
 
 
 def answer_from_data(question: str, user: str = "", refresh: bool = False, *, scope: Scope) -> list[QueryResult]:
     """Try fixed tools across all catalogs; else pick the catalogs the question is about (db_router)
     and generate SQL, letting the model name the database among them. refresh=True skips the SQL
     result and question->SQL caches and reads live. Every statement is limited to the user's scope
-    (data/virtual.py)."""
+    (data/virtual.py). Each result names the domain agent that answered (Phase K, domain_agents)."""
+    from ..domain_agents import pick_agent
     with trace.span("data"):
         cats = load_catalogs()
         if not cats:
@@ -356,8 +391,15 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
         if hit:
             tool, params = hit
             if tool["database"] in cats:
-                return [run_fixed_tool(tool, params, cats, user, refresh, scope=scope)]
+                result = run_fixed_tool(tool, params, cats, user, refresh, scope=scope)
+                a = pick_agent(question, tool)
+                result.agent = a.name if a else ""
+                return [result]
+        agent = pick_agent(question)
         qvec = _query_vector(question)
         with trace.span("data.pick"):
             picked = pick_catalogs(question, cats, qvec)
-        return [generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec)]
+            if agent is not None:
+                picked = _with_agent_catalog(question, picked, cats, agent, qvec)
+        return [generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec,
+                                 agent=agent.name if agent else "")]

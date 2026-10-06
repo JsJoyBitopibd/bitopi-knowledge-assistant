@@ -1,0 +1,9 @@
+# Order agent (docs/AGENTS_DESIGN.md). Owns the export-order fixed tools (config/fixed_tools.yaml `agent: order`).
+name: order
+title: Order agent
+description: Export orders and buyer commitments — PCD, ship and ex-factory dates, status, PPM meetings, cancellations, and whether an order has been invoiced for export.
+stage: 1
+catalogs: [BitopiSplint, Production]
+keywords: [order, orders, export order, eo, po, pcd, ppm, ship date, ex-factory, exfactory, shipment, shipments,
+           behind schedule, late, overdue, delayed, buyer, buyers, style, styles, merchandiser, cancelled, file reference]
+charter: agents/order

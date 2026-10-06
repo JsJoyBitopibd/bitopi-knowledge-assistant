@@ -1,0 +1,11 @@
+# Production agent (docs/AGENTS_DESIGN.md). Owns the line tools (config/fixed_tools.yaml `agent: production`).
+name: production
+title: Production agent
+description: Sewing lines — day targets and output, efficiency, manpower, inspected and defective pieces.
+stage: 1
+catalogs: [PlanningTNA, BiMob, Production]
+keywords: [line, lines, sewing, output, target, targets, efficiency, dhu, defect, defects, defective, manpower,
+           operator, operators, production, hourly, below target]
+charter: agents/production
+status: >-
+  The daily line record on this server was last updated on 20 Sep 2026; answers show the production date.

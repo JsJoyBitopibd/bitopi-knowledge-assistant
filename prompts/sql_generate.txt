@@ -16,6 +16,8 @@ Choosing what to query:
 - A table shown with more than 1,000,000 rows must be filtered with a WHERE clause.
 - Join only along a listed key, a listed "Joins:" line, or a "Likely joins" line.
 
+{agent}
+
 {catalogs}
 
 {tables}

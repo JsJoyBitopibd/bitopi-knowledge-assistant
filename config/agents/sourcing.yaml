@@ -1,0 +1,12 @@
+# Sourcing agent (docs/AGENTS_DESIGN.md). No fixed tools yet: see `status`.
+name: sourcing
+title: Sourcing agent
+description: Fabric, trims and accessories purchase orders, suppliers, planned and actual in-house dates, goods receipts.
+stage: 1
+catalogs: [BitopiSplint, Inventory]
+keywords: [fabric, fabrics, trims, accessories, supplier, suppliers, purchase order, purchase orders, grn,
+           goods receipt, goods received, in-house, inhouse, material, materials, yarn]
+charter: agents/sourcing
+status: >-
+  Stage-1 tools wait for current receipt data: goods receipts (GRN) on this server stop on 22 Aug 2026, and the
+  order files carry planned in-house dates only. "What fabric has not arrived?" cannot be answered correctly yet.

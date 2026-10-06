@@ -4,6 +4,7 @@ paths:
   prompts_dir: prompts
   catalog_dir: config/catalog
   fixed_tools: config/fixed_tools.yaml
+  agents_dir: config/agents         # domain agents (Phase K, docs/AGENTS_DESIGN.md)
   golden_set: tests/golden.jsonl
   scopes_file: config/scopes.yaml   # AD group -> what its members may see (copy scopes.example.yaml)
   users_file: config/users.yaml     # local sign-in users, auth.provider: local only (copy users.example.yaml)

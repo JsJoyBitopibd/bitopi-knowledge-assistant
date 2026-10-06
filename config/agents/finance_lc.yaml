@@ -1,0 +1,10 @@
+# Finance/LC agent (docs/AGENTS_DESIGN.md). Payroll stays out: the sensitive-name rules hide it and that does not change.
+name: finance_lc
+title: Finance/LC agent
+description: Export LCs and sales contracts, back-to-back LCs to suppliers, expiry and last shipment dates, amendments, receivables and payables.
+stage: 1
+catalogs: [BitopiSplint, FM]
+keywords: [lc, lcs, letter of credit, letters of credit, sales contract, back-to-back, btb, bblc, bblcs, expiry,
+           expire, expires, expiring, expired, amendment, amendments, maturity, receivable, receivables, payable,
+           payables, realization, realisation]
+charter: agents/finance_lc

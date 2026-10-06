@@ -525,6 +525,28 @@ new question type; none deleted).
   It is the evidence for the Stage-2 gate in `AGENTS_DESIGN.md` §4.
 - Gate: as above, plus a live run of every K3 example through the app as a scoped user.
 
+**As built (2026-10-06)** — what the live data allowed, and where it differs from the plan above:
+- K1: the agent does not *limit* the databases. `db_router` still ranks all 17; when its top picks hold
+  none of the agent's databases, the agent's best one replaces the last pick (`tools._with_agent_catalog`),
+  so a question the agent's keywords catch by mistake keeps the database its own words point to. Every
+  fixed tool carries `agent:`; `chat.csv` has an `agent` column; admins see it under the answer.
+- K2: built `rag.vw_ExportLC` (expiry after the latest amendment: amendments do not update the master
+  row, 47 of 49 checked), `rag.vw_BackToBackLC` (no open/closed column: the close flag is 96% unmaintained),
+  `rag.vw_OrderShipment` (invoiced or not, from export invoices: the order's ShipmentStatus is 100%
+  "TO SHIP" for past ship dates) and `rag.vw_LineDailyOutput` (PlanningTNA's daily VistaQ copy; it also
+  carries inspected and defective pieces, so it replaces the planned line-defects view). Not built: the
+  material PO vs receipt view — goods receipts on this server stop on 22 Aug 2026. `rag.vw_FileRef`'s
+  fabric/trims "in-house" dates are re-described as plans (426 of 1,477 active files have future dates).
+- K3: eight tools — LCs expiring, back-to-back LCs expiring (count and list), lines below target (all /
+  by factory, on the latest production day in the data), orders past their ship date with no export
+  invoice (count, list, by factory; default window the last 30 days). Not built: shipments by buyer
+  region (needs `config/reference/buyers.yaml` from merchandising) and "fabric not arrived" (stale
+  receipts). Engine: `today` / `yesterday` / `tomorrow` windows ("today" used to mean 7 days), a
+  `default:` for an optional window, and `@today` in tool SQL.
+- K4: `config/data_quality.yaml` (13 checks) + `scripts/data_quality.py` → `logs/data_quality_<date>.md`.
+- Found by the gate: model-written SQL that reads no table (`SELECT 'System doesn''t have the data.'`)
+  was templated into a cited one-row "answer" (J3); such a statement is now a no-data result.
+
 ## Phase L — Watchers and the morning brief → v1.12.0
 
 Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open item in

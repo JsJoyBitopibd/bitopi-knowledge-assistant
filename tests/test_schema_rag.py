@@ -71,6 +71,15 @@ def wired(monkeypatch):
     si._CACHE.clear()
 
 
+def test_constant_select_is_not_a_source(wired):
+    """Scope leak suite s33 (2026-10-06): asked about a table it may not read, the model wrote a SELECT of
+    the not-found sentence. That row must not become a cited database answer, and must not be cached."""
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (200) 'System doesn''t have the data.'"])
+    r = tools.generate_and_run("How many suppliers are in dbo.SupplierData?", _cat(), scope=Scope.unrestricted())
+    assert r.rows == [] and r.error and "reads no view or table" in r.error
+    assert ran == []                       # nothing executed, so nothing reached the question->SQL cache
+
+
 def test_selected_raw_table_reaches_prompt_and_runs(wired):
     chat, ran = wired(["DATABASE: Demo\nSELECT COUNT(*) AS N FROM dbo.SupplierData"])
     r = tools.generate_and_run("How many suppliers are in the supplier data?", _cat(), scope=Scope.unrestricted())

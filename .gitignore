@@ -7,6 +7,7 @@ data/index/
 data/pdfs/**/*.pdf
 logs/*.csv
 logs/*.log
+logs/*.md
 .pytest_cache/
 # leftover duplicate of the original scaffold — not part of the project
 _to_delete/

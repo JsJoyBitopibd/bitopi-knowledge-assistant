@@ -9,7 +9,7 @@ connection_env: SQLSERVER_CONN_BITOPISPLINT
 # database's rows belong to a factory, so they would pull HR or inventory questions here.
 keywords: [order, orders, eo, exportorder, po, exportpo, style, styles, buyer, buyers, factory, merchandiser, pcd,
            ship, shipment, shipments, fileref, filerefno, cancel, cancelled, colour, color, size, lc, bom, sample,
-           samples, booking, supplier, suppliers]
+           samples, booking, supplier, suppliers, lcs, bblc, expiry, expire, expires, expiring, invoiced]
 # Discovered tables never offered to the SQL model (fnmatch, case-insensitive): history/backup
 # copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
 exclude_tables: ["*back", "*backup*", "*$", "*$'", "*_old", "*_bak", "*.tmp*", "*.temp_*", "*_test", "*daytest"]
@@ -59,7 +59,7 @@ views:
       ExfactoryDate: planned ex-factory date
       ExportOrderStatus: ACTIVE / APPROVED FOR SHIPMENT / PENDING / PRODUCTION COMPLETE / READY FOR SHIPMENT / RUNNING / TO CLOSE / CLOSED / CANCELLED
       ExportOrderCategory: ALLOTED / CONFIRMED / PROJECTED
-      ShipmentStatus: TO SHIP / SHIPPED / SHORT SHIPPED / CANCELLED
+      ShipmentStatus: TO SHIP / SHIPPED / SHORT SHIPPED / CANCELLED — not kept up to date (most orders past their ship date still say TO SHIP); whether an order was invoiced for export is in rag.vw_OrderShipment
       Factory: factory short name — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
       Merchandiser: merchandiser name from the file
       Season: buyer season
@@ -99,8 +99,9 @@ views:
     scope_column: Factory
     grain: one row per file reference (order file); FileRefID is unique.
     description: >
-      Buyer file references with product category, fabric/trims in-house dates and current status.
-      One file usually spans several export orders.
+      Buyer file references with product category, planned fabric/trims in-house dates and current status.
+      One file usually spans several export orders. The in-house dates are plans (checked 2026-10-06: 426 of
+      1,477 active 2026 files have them in the future, none empty); actual receipts are not in this view.
     key_columns: [FileRefID, FileRefNo]
     columns:
       FileRefID: internal file key
@@ -117,10 +118,10 @@ views:
       Merchandiser: merchandiser name
       StyleName: primary style name
       Season: buyer season
-      FabricFirstInhanseDate: date fabric first arrived in-house
-      FabricSecondInhanseDate: date of second fabric receipt
-      TrimsFirstInhanseDate: date trims first arrived in-house
-      TrimsSecondInhanseDate: date of second trims receipt
+      FabricFirstInhanseDate: PLANNED date for the first fabric in-house (a plan, not a receipt; often in the future)
+      FabricSecondInhanseDate: planned date for the second fabric in-house
+      TrimsFirstInhanseDate: PLANNED date for the first trims in-house (a plan, not a receipt)
+      TrimsSecondInhanseDate: planned date for the second trims in-house
     definition: |
       SELECT
         fr.FileRefID,
@@ -253,6 +254,169 @@ views:
       FROM dbo.CancellExportOrderList cel
       LEFT JOIN dbo.ExportOrder eo ON eo.ExportOrderID = cel.ExportOrderID
       LEFT JOIN dbo.FileRef fr     ON fr.FileRefID = eo.FileRefID
+
+  # Phase K (Finance/LC agent). Master LCs: amendments do not update the master row (checked
+  # 2026-10-06: 47 of 49 amended LCs still carry their original expiry), so the latest amendment's
+  # dates win. Bank columns are sensitive and left out.
+  - name: rag.vw_ExportLC
+    scope_column: Factory
+    grain: one row per export (master) LC or sales contract; MasterLCID is unique.
+    description: >
+      Export LCs and sales contracts opened by buyers, with the current expiry and last shipment dates
+      (after amendments), amount, status and whether the LC is closed. Bank details are not included.
+    key_columns: [MasterLCID, MasterLCRef]
+    columns:
+      MasterLCID: internal LC key, e.g. ML-26-86
+      MasterLCRef: LC or contract reference, e.g. TAL/SRS/ZARA/667/026
+      BuyerLCRef: the buyer's LC reference
+      LCDate: date the LC or contract was opened
+      Buyer: buyer name
+      LCType: LC or Contract
+      LCQty: quantity on the LC
+      LCAmount: LC value
+      Currency: currency code, e.g. USD
+      LastShipDate: latest shipment date allowed (after amendments)
+      ExpiryDate: LC expiry date (after amendments)
+      OriginalExpiryDate: expiry date before any amendment
+      Amended: 1 when an amendment changed the dates, else 0
+      LCStatus: Approved / Propose / Rejected / Not Recommended
+      LCClosed: 1 when the LC is closed, else 0
+      Factory: factory short name (beneficiary company) — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
+    definition: |
+      SELECT
+        m.MasterLCID,
+        m.MasterLCRef,
+        m.BuyerLCRef,
+        CAST(m.LCDate AS date) AS LCDate,
+        buyer.ContactName AS Buyer,
+        m.LCorContractType AS LCType,
+        m.LCQty,
+        m.LCAmt AS LCAmount,
+        m.CurCode AS Currency,
+        CAST(COALESCE(a.NewShipDate, m.ShipDate) AS date) AS LastShipDate,
+        CAST(COALESCE(a.NewExpireDate, m.ExpiryDate) AS date) AS ExpiryDate,
+        CAST(m.ExpiryDate AS date) AS OriginalExpiryDate,
+        CASE WHEN a.MasterLCID IS NULL THEN 0 ELSE 1 END AS Amended,
+        m.LCStatus,
+        CAST(ISNULL(m.LCClosed, 0) AS int) AS LCClosed,
+        CASE m.Beneficiary
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE m.Beneficiary
+        END AS Factory
+      FROM dbo.MasterLC m
+      LEFT JOIN dbo.Contact_Master buyer ON buyer.ContactID = m.Buyer
+      LEFT JOIN (
+        SELECT MasterLCID, NewExpireDate, NewShipDate,
+               ROW_NUMBER() OVER (PARTITION BY MasterLCID ORDER BY AmendmentDate DESC, SLNo DESC) AS rn
+        FROM dbo.MasterLC_Amendment
+        WHERE NewExpireDate IS NOT NULL
+      ) a ON a.MasterLCID = m.MasterLCID AND a.rn = 1
+
+  # Back-to-back LCs opened to suppliers. The close flag (IsLCClose) is not kept up to date (checked
+  # 2026-10-06: 44,677 of TAL's 45,657 still "open"), so it is left out rather than shown as a status.
+  # Cancelled and fake LCs are kept as columns; the tools filter them.
+  - name: rag.vw_BackToBackLC
+    scope_column: Factory
+    grain: one row per back-to-back LC; BBLCID is unique.
+    description: >
+      Back-to-back LCs opened to fabric, trims and accessories suppliers against export LCs, with
+      supplier, purpose, amount, last shipment date and expiry. Bank details are not included.
+    key_columns: [BBLCID, BBLCNo]
+    columns:
+      BBLCID: internal key, e.g. BL-26-5340
+      BBLCNo: back-to-back LC number
+      BBLCDate: date the LC was opened
+      Supplier: supplier name
+      BBLCType: Local / Foreign Import / TT / RTGS LOCAL …
+      Purpose: what it pays for, e.g. Fabric, Accessories
+      BBLCAmount: LC value
+      Currency: currency code
+      LastShipDate: latest shipment date allowed
+      ExpiryDate: LC expiry date
+      MaturityDate: payment maturity date, when set
+      GroupLCCode: group LC code
+      ShipMode: shipment mode
+      Cancelled: 1 when the LC was cancelled, else 0
+      Fake: 1 for a placeholder ("fake") LC, else 0
+      Factory: factory short name (opening company) — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
+    definition: |
+      SELECT
+        b.BBLCID,
+        b.BBLCNo,
+        CAST(b.BBLCDate AS date) AS BBLCDate,
+        sup.ContactName AS Supplier,
+        b.BBLCType,
+        b.Purpose,
+        b.BBLCAmt AS BBLCAmount,
+        b.CurCode AS Currency,
+        CAST(b.LastShipDate AS date) AS LastShipDate,
+        CAST(b.LCExpireDate AS date) AS ExpiryDate,
+        CAST(b.MaturityDateFrom AS date) AS MaturityDate,
+        b.GroupLCCode,
+        b.ShipMode,
+        CAST(ISNULL(b.LCCancel, 0) AS int) AS Cancelled,
+        CAST(ISNULL(b.FakeLC, 0) AS int) AS Fake,
+        CASE b.Company
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE b.Company
+        END AS Factory
+      FROM dbo.BBLCMaster b
+      LEFT JOIN dbo.Contact_Master sup ON sup.ContactID = b.SupplierCode
+
+  # Phase K (Order agent). ShipmentStatus on the order is not kept up to date, so "shipped" is read
+  # from the export invoices: an order with no invoice line has not been invoiced for export. Limited
+  # to confirmed, not-cancelled orders with a ship date in the last 365 days or later.
+  - name: rag.vw_OrderShipment
+    scope_column: Factory
+    grain: one row per confirmed, not-cancelled export order with a ship date from 365 days ago onward.
+    description: >
+      Whether each recent confirmed export order has been invoiced for export: invoiced quantity,
+      number of export invoices and the first invoice's ex-factory date, next to the order's planned
+      ship and ex-factory dates. No invoice (InvoicedQty empty) means not yet invoiced for export.
+    key_columns: [ExportOrderID]
+    columns:
+      ExportOrderID: order key, e.g. TAL-17-382-1
+      ExportPONo: buyer's PO number
+      Buyer: buyer name
+      OrderQty: order quantity in pieces
+      ShipDate: planned ship date
+      ExfactoryDate: planned ex-factory date
+      ExportOrderStatus: order status (ACTIVE / RUNNING / READY FOR SHIPMENT / CLOSED …)
+      Factory: factory short name — TAL, RHL, BGL, KTL, CKDL, or the raw company code for other units
+      Merchandiser: merchandiser name
+      InvoicedQty: pieces on export invoices; empty when the order has no export invoice
+      Invoices: number of export invoices for the order
+      FirstInvoiceExFactoryDate: ex-factory date on the order's first export invoice
+    definition: |
+      SELECT
+        eo.ExportOrderID,
+        eo.ExportPONo,
+        buyer.ContactName AS Buyer,
+        eo.OrderQty,
+        CAST(eo.ShipDate AS date) AS ShipDate,
+        CAST(eo.ExfactoryDate AS date) AS ExfactoryDate,
+        eo.ExportOrderStatus,
+        CASE fr.Factory
+          WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL'
+          WHEN '08' THEN 'KTL' WHEN '11' THEN 'CKDL' ELSE fr.Factory
+        END AS Factory,
+        fr.Merchandiser,
+        s.InvoicedQty,
+        s.Invoices,
+        CAST(s.FirstExFactoryDate AS date) AS FirstInvoiceExFactoryDate
+      FROM dbo.ExportOrder eo
+      LEFT JOIN dbo.FileRef fr ON fr.FileRefID = eo.FileRefID
+      LEFT JOIN dbo.Contact_Master buyer ON buyer.ContactID = fr.Buyer
+      LEFT JOIN (
+        SELECT ei.ExportOrderID, SUM(ei.ExportQty) AS InvoicedQty, COUNT(*) AS Invoices,
+               MIN(i.ExFactoryDate) AS FirstExFactoryDate
+        FROM dbo.EI_ExportOrder ei
+        JOIN dbo.ExportInvoice i ON i.ExportInvoiceID = ei.ExportInvoiceID
+        GROUP BY ei.ExportOrderID
+      ) s ON s.ExportOrderID = eo.ExportOrderID
+      WHERE eo.ExportOrderCategory = 'CONFIRMED'
+        AND eo.ExportOrderStatus <> 'CANCELLED'
+        AND eo.ShipDate >= DATEADD(day, -365, CAST(GETDATE() AS date))
 
 examples:
   - question: Which TAL orders have PCD next week?

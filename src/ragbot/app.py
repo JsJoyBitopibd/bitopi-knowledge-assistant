@@ -278,7 +278,8 @@ def render_answer(a, turn: int) -> None:
         # where the seconds went (ragbot/trace.py); the request id finds the answer's rows in the logs
         took = " · ".join(f"{k} {t[k]:.1f}s" for k in ("route", "retrieve", "data", "first_token", "answer")
                           if k in t)
-        st.caption(f"route: {a.route} · tokens in/out: {a.usage.input_tokens}/{a.usage.output_tokens}"
+        st.caption(f"route: {a.route}" + (f" · agent: {a.agent}" if a.agent else "")
+                   + f" · tokens in/out: {a.usage.input_tokens}/{a.usage.output_tokens}"
                    + (f" · {t['total']:.1f}s ({took})" if "total" in t else "")
                    + (f" · request {a.request_id}" if a.request_id else "")
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))

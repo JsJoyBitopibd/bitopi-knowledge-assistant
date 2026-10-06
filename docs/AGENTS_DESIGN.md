@@ -1,7 +1,8 @@
 # Factory-intelligence agents: design
 
-Status: design only, written 2026-10-06. No code yet. The build is Phases K–O in `docs/ROADMAP.md`.
-Progress is tracked in `docs/PROGRESS.md`.
+Status: designed 2026-10-06. Phase K (Stage 1 for the Order, Finance/LC and Production agents, plus the
+data-quality report) is built and released as v1.11.0; "As built" in `docs/ROADMAP.md` lists where the live
+data changed the plan. Phases L–O are not started. Progress is tracked in `docs/PROGRESS.md`.
 
 ## Summary
 

@@ -8,6 +8,37 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-06 — Phase K: Stage-1 domain agents
+
+The first stage of the factory-intelligence design (`docs/AGENTS_DESIGN.md`): the Order, Finance/LC and Production
+agents answer their Stage-1 questions from fixed tools with no model call (0.1–0.9 s live), and the data-quality report
+shows what the source systems need before Stage 2 (risk levels) can rely on them. The Sourcing agent exists but its
+tools wait for current goods receipts. Eval data + both (18 cases, 5 new, `eval/results/20261006T0614.json`): 100% on
+every metric. Leak suite 34 cases, 0 leaks. 475 tests.
+
+**Upgrading:** rebuild the image (new `config/agents/`, `config/data_quality.yaml`, prompts v9); `paths.agents_dir`
+defaults to `config/agents`. `chat.csv` gains an `agent` column (the old file is renamed on the first write). Run
+`python scripts/data_quality.py` and give the report to the data owners.
+
+- **Domain agents, Stage 1 (Phase K)**: `config/agents/` (order, finance_lc, sourcing, production) with charters in
+  `prompts/agents/`; `src/ragbot/domain_agents/` picks the agent without a model call (a fixed tool's `agent:` tag, else
+  the most keyword hits; a tie means none), adds its charter to the SQL and answer prompts, and makes sure the SQL model
+  sees at least one of its databases. Every fixed tool names its agent; `chat.csv` gains an `agent` column; admins see
+  it under the answer. `check_catalog.py` validates agents and tags.
+- **New views**: `rag.vw_ExportLC` (expiry and last shipment date after the latest amendment), `rag.vw_BackToBackLC`,
+  `rag.vw_OrderShipment` (invoiced for export or not — the order's ShipmentStatus is not maintained) and
+  `rag.vw_LineDailyOutput` (PlanningTNA daily line record). `rag.vw_FileRef`'s fabric/trims in-house dates are now
+  described as plans, which they are.
+- **New fixed tools** (no model call): LCs expiring; back-to-back LCs expiring (count, list); lines below target on the
+  latest production day in the data (all, by factory); confirmed orders past their ship date with no export invoice
+  (count, list, by factory; default the last 30 days). Ranking and grouping questions skip them and go to model-written
+  SQL. Date windows: `today`, `yesterday`, `tomorrow` (a "today" question used to query 7 days), a `default:` for an
+  optional window, `@today` in tool SQL.
+- **Data-quality report**: `config/data_quality.yaml` (14 read-only checks) and `scripts/data_quality.py` →
+  `logs/data_quality_<date>.md`.
+- **Fixed**: model-written SQL that reads no table (e.g. `SELECT 'System doesn''t have the data.'`) was templated into a
+  cited one-row "database answer" since v1.10.0; it is now treated as no data (scope leak suite case s33).
+
 ## [1.10.0] — 2026-10-06 — Phase J: every database, faster data answers
 
 All 17 non-test databases on the SQL Server are catalogued and answered through one read-only login,

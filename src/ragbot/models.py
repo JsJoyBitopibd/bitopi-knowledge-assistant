@@ -61,6 +61,7 @@ class QueryResult(BaseModel):
     denied: bool = False         # refused before running: the question names data outside the user's scope
     databases_considered: list[str] = Field(default_factory=list)  # catalogs the SQL model was shown (data/db_router.py)
     sql_cached: bool = False     # the SQL came from the question->SQL cache, no generation call (tools.py)
+    agent: str = ""              # domain agent that answered (config/agents, Phase K); "" when none
 
     @property
     def row_keys(self) -> list[str]:
@@ -113,6 +114,7 @@ class Answer(BaseModel):
     not_found: bool = False
     references: list[Reference] = Field(default_factory=list)
     route: str = ""
+    agent: str = ""              # domain agent of the data result the answer used (Phase K); "" when none
     question: str = ""
     rewritten_question: str = ""
     usage: Usage = Field(default_factory=Usage)

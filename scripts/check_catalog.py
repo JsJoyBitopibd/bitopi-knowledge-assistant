@@ -10,6 +10,7 @@ from ragbot.data.connectors import run
 from ragbot.data.guard import GuardError
 from ragbot.data.tools import load_fixed_tools, match_fixed_tool, run_fixed_tool, _views_in
 from ragbot.data.virtual import validate_definition
+from ragbot.domain_agents import load_agents, validate_agents
 
 
 def offline(cats) -> int:
@@ -61,8 +62,13 @@ def offline(cats) -> int:
                 print(f"[offline] fixed tool {tool['name']}: its example reaches "
                       f"{hit[0]['name'] if hit else 'no fixed tool'}")
                 problems += 1
+    # Phase K: every agent's catalogs and charter exist, every tool names a known agent that owns its database
+    agents = load_agents()
+    for p in validate_agents(agents, cats, tools):
+        print(f"[offline] {p}")
+        problems += 1
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "
-          f"{len(tools)} fixed tools — {problems} problem(s)")
+          f"{len(tools)} fixed tools, {len(agents)} agents — {problems} problem(s)")
     return problems
 
 

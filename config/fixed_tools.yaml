@@ -18,6 +18,7 @@
 # fixed tool so a click answers without a model call (tests/test_follow_ups.py checks both).
 
 - name: pcd_history_by_eo
+  agent: order
   database: BitopiSplint
   example: 'PCD history for TAL-22-523-81'
   follow_ups:
@@ -46,6 +47,7 @@
     ORDER BY VersionNo
 
 - name: orders_count_by_factory_ship_window
+  agent: order
   database: BitopiSplint
   example: 'How many TAL orders are shipping next week?'
   follow_ups:
@@ -63,6 +65,7 @@
     WHERE Factory = @factory AND ShipDate >= @from AND ShipDate < @to
 
 - name: ppm_meetings_count_by_factory_window
+  agent: order
   database: Production
   example: 'How many PPM meetings does TAL have next week?'
   follow_ups:
@@ -79,6 +82,7 @@
     WHERE FactoryID = @factory AND PPMDate >= @from AND PPMDate < @to
 
 - name: orders_by_factory_pcd_window
+  agent: order
   database: BitopiSplint
   example: 'Which TAL orders have a PCD next week?'
   follow_ups:
@@ -99,6 +103,7 @@
     ORDER BY PCD, ExportOrderID
 
 - name: orders_by_factory_ship_window
+  agent: order
   database: BitopiSplint
   example: 'Which RHL orders have a ship date next week?'
   follow_ups:
@@ -119,6 +124,7 @@
     ORDER BY ShipDate, ExportOrderID
 
 - name: ppm_meetings_by_factory_window
+  agent: order
   database: Production
   example: 'PPM meetings for TAL next week'
   follow_ups:
@@ -140,6 +146,7 @@
 
 # --- added 2026-09-27 from real questions in logs/chat.csv (C7): each used to cost a SQL-generation call
 - name: upcoming_pcds_by_factory
+  agent: order
   database: BitopiSplint
   example: 'What are the next PCDs at TAL?'
   follow_ups:
@@ -158,6 +165,7 @@
     ORDER BY PCD, ExportOrderID
 
 - name: upcoming_pcds_by_buyer
+  agent: order
   database: BitopiSplint
   example: 'H&M upcoming PCDs'
   follow_ups:
@@ -176,6 +184,7 @@
     ORDER BY PCD, ExportOrderID
 
 - name: upcoming_pcds
+  agent: order
   database: BitopiSplint
   example: 'What are the upcoming PCDs?'
   follow_ups:
@@ -190,7 +199,168 @@
     WHERE PCD >= CAST(GETDATE() AS date) AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
     ORDER BY PCD, ExportOrderID
 
+# ---- Phase K: Stage-1 agent tools (docs/AGENTS_DESIGN.md). `agent:` names the domain agent that owns the
+# tool (config/agents/<agent>.yaml); it is logged with the answer and picks the agent's charter.
+
+- name: bblcs_expiring_count_window
+  agent: finance_lc
+  database: BitopiSplint
+  example: 'How many back-to-back LCs expire next month?'
+  follow_ups:
+    - 'Which back-to-back LCs expire {window}?'
+  description: Count of back-to-back LCs (not cancelled, not placeholders) expiring in a date window.
+  answer: 'Back-to-back LCs expiring {window}: {value}'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\bhow many\b.*\b(?:back[\s-]*to[\s-]*back|btb|bb\s*lcs?)\b.*\bexpir\w*\b.*\b(today|this week|next week|this month|next month|next \d+ days|last \d+ days)\b'
+  params:
+    window: { from_group: 1, type: date_window }
+  sql: |
+    SELECT COUNT(*) AS BackToBackLCs
+    FROM rag.vw_BackToBackLC
+    WHERE ExpiryDate >= @from AND ExpiryDate < @to AND Cancelled = 0 AND Fake = 0
+
+- name: bblcs_expiring_window
+  agent: finance_lc
+  database: BitopiSplint
+  example: 'Which back-to-back LCs expire next week?'
+  follow_ups:
+    - 'How many back-to-back LCs expire {window}?'
+    - 'Which LCs expire {window}?'
+  description: Back-to-back LCs (not cancelled, not placeholders) expiring in a date window, earliest first.
+  answer_list: 'Back-to-back LCs expiring {window}, earliest first ({n} shown; ask "how many" for the total)'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(?:back[\s-]*to[\s-]*back|btb|bb\s*lcs?)\b.*\bexpir\w*\b.*\b(today|this week|next week|this month|next month|next \d+ days|last \d+ days)\b'
+  params:
+    window: { from_group: 1, type: date_window }
+  sql: |
+    SELECT TOP (200)
+      BBLCNo, Supplier, Factory, Purpose, BBLCAmount, Currency, LastShipDate, ExpiryDate
+    FROM rag.vw_BackToBackLC
+    WHERE ExpiryDate >= @from AND ExpiryDate < @to AND Cancelled = 0 AND Fake = 0
+    ORDER BY ExpiryDate, BBLCNo
+
+- name: lcs_expiring_window
+  agent: finance_lc
+  database: BitopiSplint
+  example: 'Which LCs expire next month?'
+  follow_ups:
+    - 'Which back-to-back LCs expire {window}?'
+    - 'How many back-to-back LCs expire {window}?'
+  description: Open export (master) LCs and sales contracts whose expiry date, after amendments, falls in a date window.
+  answer_list: '{n} open export LC(s) expiring {window}'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(?:lcs?|letters?\s+of\s+credit|sales\s+contracts?)\b.*\bexpir\w*\b.*\b(today|this week|next week|this month|next month|next \d+ days|last \d+ days)\b'
+  params:
+    window: { from_group: 1, type: date_window }
+  sql: |
+    SELECT TOP (200)
+      MasterLCRef, Buyer, Factory, LCType, LCAmount, Currency, LastShipDate, ExpiryDate, LCStatus
+    FROM rag.vw_ExportLC
+    WHERE ExpiryDate >= @from AND ExpiryDate < @to AND LCClosed = 0
+    ORDER BY ExpiryDate, MasterLCRef
+
+- name: lines_below_target_by_factory
+  agent: production
+  database: PlanningTNA
+  example: 'Which TAL lines are below target?'
+  follow_ups:
+    - 'Which lines are below target?'
+  description: One factory's sewing lines whose output was below their day target on that factory's latest production day in the data.
+  answer_list: '{n} {factory} line(s) below their day target on the latest production day in the data'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(TAL|RHL|BGL)\b.*\blines?\b.*\b(?:below|under|behind|short\s+of|missed?)\b.*\btargets?\b'
+  params:
+    factory: { from_group: 1, upper: true }
+  sql: |
+    SELECT TOP (200)
+      ProductionDate, Factory, Unit, LineNumber,
+      SUM(DayTarget) AS DayTarget, SUM(OutputPcs) AS OutputPcs, SUM(DayTarget) - SUM(OutputPcs) AS ShortPcs
+    FROM rag.vw_LineDailyOutput
+    WHERE Factory = @factory
+      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory)
+    GROUP BY ProductionDate, Factory, Unit, LineNumber
+    HAVING SUM(DayTarget) > 0 AND SUM(OutputPcs) < SUM(DayTarget)
+    ORDER BY ShortPcs DESC
+
+- name: lines_below_target
+  agent: production
+  database: PlanningTNA
+  example: 'Which lines are below target?'
+  follow_ups:
+    - 'Which TAL lines are below target?'
+    - 'Which RHL lines are below target?'
+  description: Sewing lines whose output was below their day target on the latest production day in the data (all factories in scope).
+  answer_list: '{n} line(s) below their day target on the latest production day in the data'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\blines?\b.*\b(?:below|under|behind|short\s+of|missed?)\b.*\btargets?\b'
+  sql: |
+    SELECT TOP (200)
+      ProductionDate, Factory, Unit, LineNumber,
+      SUM(DayTarget) AS DayTarget, SUM(OutputPcs) AS OutputPcs, SUM(DayTarget) - SUM(OutputPcs) AS ShortPcs
+    FROM rag.vw_LineDailyOutput
+    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+    GROUP BY ProductionDate, Factory, Unit, LineNumber
+    HAVING SUM(DayTarget) > 0 AND SUM(OutputPcs) < SUM(DayTarget)
+    ORDER BY ShortPcs DESC
+
+# "Behind schedule", as a fact the data can show: a confirmed order whose ship date has passed and that
+# has no export invoice yet. The order's own ShipmentStatus is not kept up to date (rag.vw_OrderShipment).
+# Counts first ("how many"): a list stops at 200 rows, so only a count gives the total.
+- name: orders_past_ship_not_invoiced_count
+  agent: order
+  database: BitopiSplint
+  example: 'How many orders are behind schedule?'
+  follow_ups:
+    - 'Which orders are behind schedule?'
+  description: Count of confirmed orders whose ship date passed in the window (default the last 30 days) with no export invoice yet.
+  answer: 'Confirmed orders past their ship date ({window}) with no export invoice yet: {value}'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\bhow many\b.*\b(?:orders?|eos?)\b.*\b(?:behind\s+schedule|late|overdue|delayed|past\s+(?:their\s+|the\s+)?ship(?:ment)?\s+dates?|missed\s+(?:their\s+|the\s+)?ship(?:ment)?\s+dates?|not\s+(?:yet\s+)?(?:shipped|invoiced))\b(?:.*\b(last \d+ days|this month|this week)\b)?'
+  params:
+    window: { from_group: 1, type: date_window, default: 'last 30 days' }
+  heavy: true
+  sql: |
+    SELECT COUNT(*) AS Orders
+    FROM rag.vw_OrderShipment
+    WHERE ShipDate >= @from AND ShipDate < @today AND InvoicedQty IS NULL
+
+- name: orders_past_ship_not_invoiced_by_factory
+  agent: order
+  database: BitopiSplint
+  example: 'Which TAL orders are behind schedule?'
+  follow_ups:
+    - 'Which orders are behind schedule?'
+    - 'How many orders are behind schedule?'
+  description: One factory's confirmed orders whose ship date passed in the window (default the last 30 days) with no export invoice yet.
+  answer_list: '{factory} confirmed orders past their ship date ({window}) with no export invoice yet, earliest first ({n} shown)'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(TAL|RHL|BGL|KTL)\b.*\b(?:orders?|eos?)\b.*\b(?:behind\s+schedule|late|overdue|delayed|past\s+(?:their\s+|the\s+)?ship(?:ment)?\s+dates?|missed\s+(?:their\s+|the\s+)?ship(?:ment)?\s+dates?|not\s+(?:yet\s+)?(?:shipped|invoiced))\b(?:.*\b(last \d+ days|this month|this week)\b)?'
+  params:
+    factory: { from_group: 1, upper: true }
+    window:  { from_group: 2, type: date_window, default: 'last 30 days' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      ExportOrderID, ExportPONo, Buyer, Factory, OrderQty, ShipDate, ExportOrderStatus, Merchandiser
+    FROM rag.vw_OrderShipment
+    WHERE Factory = @factory AND ShipDate >= @from AND ShipDate < @today AND InvoicedQty IS NULL
+    ORDER BY ShipDate, ExportOrderID
+
+- name: orders_past_ship_not_invoiced
+  agent: order
+  database: BitopiSplint
+  example: 'Which orders are behind schedule?'
+  follow_ups:
+    - 'How many orders are behind schedule?'
+    - 'Which TAL orders are behind schedule?'
+  description: Confirmed orders whose ship date passed in the window (default the last 30 days) with no export invoice yet.
+  answer_list: 'Confirmed orders past their ship date ({window}) with no export invoice yet, earliest first ({n} shown)'
+  match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(?:orders?|eos?)\b.*\b(?:behind\s+schedule|late|overdue|delayed|past\s+(?:their\s+|the\s+)?ship(?:ment)?\s+dates?|missed\s+(?:their\s+|the\s+)?ship(?:ment)?\s+dates?|not\s+(?:yet\s+)?(?:shipped|invoiced))\b(?:.*\b(last \d+ days|this month|this week)\b)?'
+  params:
+    window: { from_group: 1, type: date_window, default: 'last 30 days' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      ExportOrderID, ExportPONo, Buyer, Factory, OrderQty, ShipDate, ExportOrderStatus, Merchandiser
+    FROM rag.vw_OrderShipment
+    WHERE ShipDate >= @from AND ShipDate < @today AND InvoicedQty IS NULL
+    ORDER BY ShipDate, ExportOrderID
+
 - name: buyer_list
+  agent: order
   database: BitopiSplint
   example: 'give me buyer names'
   follow_ups:
@@ -206,6 +376,7 @@
     ORDER BY Buyer
 
 - name: cancelled_orders_count_window
+  agent: order
   database: BitopiSplint
   example: 'How many export orders were cancelled this month?'
   follow_ups:
@@ -221,6 +392,7 @@
     WHERE CancelledDate >= @from AND CancelledDate < @to
 
 - name: cancelled_orders_window
+  agent: order
   database: BitopiSplint
   example: 'list the cancelled orders this month'
   follow_ups:
@@ -237,6 +409,7 @@
     ORDER BY CancelledDate DESC
 
 - name: orders_by_fileref
+  agent: order
   database: BitopiSplint
   example: 'Which orders are under file ref "121394 SS17"?'
   description: >
@@ -256,6 +429,7 @@
     ORDER BY PCD, ExportOrderID
 
 - name: eo_by_po
+  agent: order
   database: BitopiSplint
   example: 'What is the status of PO 594520-9192?'
   description: PCD, ship date, buyer and status for an export order by buyer PO number.
@@ -274,6 +448,7 @@
     ORDER BY PCD
 
 - name: eo_by_id
+  agent: order
   database: BitopiSplint
   example: 'What is the PCD of TAL-25-1493-215?'
   follow_ups:

@@ -1,0 +1,171 @@
+# Data-quality checks (Phase K4, docs/AGENTS_DESIGN.md §3). Run: python scripts/data_quality.py
+# Each check is ONE read-only SELECT returning ONE row, validated like a view definition (no parameters,
+# no ORDER BY / TOP, no write or system keywords). Raw tables are fine: this is our SQL, not the model's.
+#
+#   kind: freshness  -> column last_date; "stale" when older than max_age_days
+#   kind: count      -> column n; "issue" when n > max (default 0); max: null = information only
+#   kind: share      -> columns bad, total; "issue" when bad / total > max_share
+#
+# `agent` groups the report; `fix` says who should act. Findings go to the data owners: Stage 2 risk
+# levels are built only on domains whose checks are clean (AGENTS_DESIGN.md §4).
+checks:
+  # ---- Order
+  - name: order_entries_fresh
+    agent: order
+    database: BitopiSplint
+    kind: freshness
+    max_age_days: 3
+    what: Newest export order entered
+    fix: none expected; a stale date means the order system stopped syncing to this server
+    sql: SELECT MAX(DateAdded) AS last_date FROM dbo.ExportOrder
+
+  - name: shipment_status_not_maintained
+    agent: order
+    database: BitopiSplint
+    kind: share
+    max_share: 0.2
+    what: Confirmed orders with a ship date in the last 60 days that still say TO SHIP
+    fix: commercial/merchandising update ShipmentStatus on shipment, or the assistant keeps reading export invoices instead
+    sql: |
+      SELECT
+        SUM(CASE WHEN ShipmentStatus = 'TO SHIP' THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.ExportOrder
+      WHERE ExportOrderCategory = 'CONFIRMED' AND ExportOrderStatus <> 'CANCELLED'
+        AND ShipDate >= DATEADD(day, -60, CAST(GETDATE() AS date)) AND ShipDate < CAST(GETDATE() AS date)
+
+  - name: future_cancellations
+    agent: order
+    database: BitopiSplint
+    kind: count
+    what: Order cancellations dated in the future
+    fix: merchandising correct the cancellation date
+    sql: SELECT COUNT(*) AS n FROM dbo.CancellExportOrderList WHERE CancelledDate > CAST(GETDATE() AS date)
+
+  # ---- Finance/LC
+  - name: master_lc_fresh
+    agent: finance_lc
+    database: BitopiSplint
+    kind: freshness
+    max_age_days: 30
+    what: Newest export LC opened
+    fix: none expected; LCs open a few times a month
+    sql: SELECT MAX(LCDate) AS last_date FROM dbo.MasterLC
+
+  - name: lc_amendments_not_on_master
+    agent: finance_lc
+    database: BitopiSplint
+    kind: count
+    max: null
+    what: Amended export LCs whose master row still shows the pre-amendment expiry (the LC view uses the amendment)
+    fix: information only; commercial may want the master row updated on amendment
+    sql: |
+      SELECT COUNT(*) AS n
+      FROM dbo.MasterLC m
+      JOIN (
+        SELECT MasterLCID, NewExpireDate,
+               ROW_NUMBER() OVER (PARTITION BY MasterLCID ORDER BY AmendmentDate DESC, SLNo DESC) AS rn
+        FROM dbo.MasterLC_Amendment
+        WHERE NewExpireDate IS NOT NULL
+      ) a ON a.MasterLCID = m.MasterLCID AND a.rn = 1
+      WHERE m.ExpiryDate <> a.NewExpireDate
+
+  - name: bblc_fresh
+    agent: finance_lc
+    database: BitopiSplint
+    kind: freshness
+    max_age_days: 7
+    what: Newest back-to-back LC opened
+    fix: none expected
+    sql: SELECT MAX(BBLCDate) AS last_date FROM dbo.BBLCMaster
+
+  - name: bblc_close_flag_not_maintained
+    agent: finance_lc
+    database: BitopiSplint
+    kind: share
+    max_share: 0.2
+    what: Back-to-back LCs that expired over 180 days ago and are still not closed
+    fix: commercial close back-to-back LCs when settled, so "open LCs" can be answered
+    sql: |
+      SELECT
+        SUM(CASE WHEN ISNULL(IsLCClose, 0) = 0 THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.BBLCMaster
+      WHERE ISNULL(LCCancel, 0) = 0 AND ISNULL(FakeLC, 0) = 0
+        AND LCExpireDate < DATEADD(day, -180, CAST(GETDATE() AS date))
+
+  # ---- Sourcing
+  - name: goods_receipts_fresh
+    agent: sourcing
+    database: Inventory
+    kind: freshness
+    max_age_days: 3
+    what: Newest goods receipt (GRN)
+    fix: IT confirm where goods receipts are recorded now; the Sourcing agent's Stage-1 tools wait for current receipts
+    sql: SELECT MAX(GRNDate) AS last_date FROM dbo.GRNMaster
+
+  - name: po_dates_far_future
+    agent: sourcing
+    database: BitopiSplint
+    kind: count
+    what: Purchase orders dated more than a year ahead (typing errors such as year 9009)
+    fix: purchase correct the PO date
+    sql: SELECT COUNT(*) AS n FROM dbo.POMaster WHERE PODate > DATEADD(year, 1, CAST(GETDATE() AS date))
+
+  # ---- Production
+  - name: line_output_fresh
+    agent: production
+    database: PlanningTNA
+    kind: freshness
+    max_age_days: 2
+    what: Newest day in the daily line record (VistaQ copy)
+    fix: IT check the VistaQ copy job; the Production agent shows the date it has
+    sql: SELECT MAX(Date) AS last_date FROM dbo.VistaQDailyProduction
+
+  - name: line_rows_without_target
+    agent: production
+    database: PlanningTNA
+    kind: share
+    max_share: 0.2
+    what: Daily line rows in the last 60 days of data with no day target (DayTarget 0)
+    fix: IE/planning set a day target for every running line and style
+    sql: |
+      SELECT
+        SUM(CASE WHEN ISNULL(DayTarget, 0) = 0 THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.VistaQDailyProduction
+      WHERE Date >= DATEADD(day, -60, (SELECT MAX(Date) FROM dbo.VistaQDailyProduction))
+
+  - name: line_targets_above_100_percent
+    agent: production
+    database: PlanningTNA
+    kind: count
+    max: null
+    what: Daily line rows in the last 60 days of data planned at more than 100% efficiency (targets the line cannot reach)
+    fix: information for IE/planning; "below target" counts depend on realistic targets
+    sql: |
+      SELECT COUNT(*) AS n
+      FROM dbo.VistaQDailyProduction
+      WHERE TargetEfficiency > 100
+        AND Date >= DATEADD(day, -60, (SELECT MAX(Date) FROM dbo.VistaQDailyProduction))
+
+  - name: bimob_hourly_line_fresh
+    agent: production
+    database: BiMob
+    kind: freshness
+    max_age_days: 2
+    what: Newest day in the older hourly line table (BiMob)
+    fix: information; this table appears retired — the agent uses the VistaQ copy instead
+    sql: SELECT MAX(HourlyPdate) AS last_date FROM dbo.tblHourlyLineWiseProductionDetail
+
+  # ---- Other (seen while building)
+  - name: visitor_dates_missing
+    agent: other
+    database: HR
+    kind: share
+    max_share: 0.05
+    what: Visitor records with no date added
+    fix: HR/admin; date questions about visitors cannot be answered
+    sql: |
+      SELECT SUM(CASE WHEN DateAdded IS NULL THEN 1 ELSE 0 END) AS bad, COUNT(*) AS total
+      FROM dbo.VisitorInformation

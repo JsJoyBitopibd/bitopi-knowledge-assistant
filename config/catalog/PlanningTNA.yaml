@@ -1,4 +1,4 @@
-# PlanningTNA: no curated views yet — answered through schema RAG over the discovered tables
+# PlanningTNA: one curated view (rag.vw_LineDailyOutput, Phase K); everything else through schema RAG over the discovered tables
 # (config/catalog/discovered/PlanningTNA.json: 213 tables, discovered 2026-10-04).
 # Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
 # words staff use for this data — the router scores them to pick the database for a question
@@ -82,9 +82,60 @@ rules:
 - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
 - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
   Monday.
-- 'This database has no rag.* views: query the tables listed for the question as schema.name and name the columns
-  you need (never SELECT *).'
+- 'For daily line target, output, efficiency and inspected/defective pieces use rag.vw_LineDailyOutput. Otherwise
+  query the tables listed for the question as schema.name and name the columns you need (never SELECT *).'
 - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
 - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
   doesn't have the data."
-views: []
+# Phase K (Production agent). dbo.VistaQDailyProduction is the daily line record copied from VistaQ (one row
+# per day, line and style). Checked 2026-10-06: TAL, RHL and BGL lines, last day 2026-09-20 — the copy is not
+# updated daily, so answers must show the production date. The older line tables (BiMob hourly, 2022; the
+# factory daily summary, Feb 2026) have stopped.
+views:
+- name: rag.vw_LineDailyOutput
+  scope_column: Factory
+  grain: one row per production day, line and style.
+  description: >-
+    Daily sewing line record: day target, output, target and achieved efficiency, manpower, and pieces
+    inspected and found defective, per line and style. A line running two styles has two rows a day.
+    Not updated every day: always show ProductionDate.
+  key_columns: [ProductionDate, Factory, LineNumber, Style]
+  columns:
+    ProductionDate: production day
+    Factory: factory short name — TAL, RHL, BGL (other names as stored)
+    Unit: building / unit name, e.g. Unit 01
+    LineNumber: sewing line number
+    Buyer: buyer name
+    Style: style code
+    PONumber: buyer PO number (often TBA)
+    DayTarget: planned pieces for the day (0 when no target was set)
+    IETarget: industrial-engineering target pieces
+    OutputPcs: pieces produced that day
+    TargetEfficiency: planned efficiency, percent
+    AchievedEfficiency: achieved efficiency, percent
+    ManPowerPresent: people present on the line
+    InspectedPcs: pieces inspected
+    DefectPcs: defective pieces found
+  definition: |
+    SELECT
+      CAST(d.Date AS date) AS ProductionDate,
+      CASE
+        WHEN d.WorkspaceFactoryName LIKE 'Tarasima%' THEN 'TAL'
+        WHEN d.WorkspaceFactoryName LIKE 'Remi%' THEN 'RHL'
+        WHEN d.WorkspaceFactoryName LIKE 'Baridhi%' THEN 'BGL'
+        ELSE d.WorkspaceFactoryName
+      END AS Factory,
+      d.WorkspaceBuildingName AS Unit,
+      d.WorkspaceLineNumber AS LineNumber,
+      d.BuyerName AS Buyer,
+      d.StyleCode AS Style,
+      d.PONumber,
+      d.DayTarget,
+      d.IETarget,
+      d.OutputPCS AS OutputPcs,
+      CAST(d.TargetEfficiency AS decimal(7,2)) AS TargetEfficiency,
+      CAST(d.AchievedEfficiency AS decimal(7,2)) AS AchievedEfficiency,
+      d.ManPowerPresent,
+      d.InspectionPCS AS InspectedPcs,
+      d.DefectPCS AS DefectPcs
+    FROM dbo.VistaQDailyProduction d
