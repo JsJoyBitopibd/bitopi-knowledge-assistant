@@ -8,6 +8,9 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+- **Design for factory-intelligence agents (Phases K–O)**, docs only: `docs/AGENTS_DESIGN.md` (eight domain
+  agents, four stages of trust, the morning brief, the model gateway, data readiness, owner decisions) and the
+  tasks in `docs/ROADMAP.md` "Phases K–O". Nothing is built yet.
 - **Read-only SQL Server login** `rag_reader` replaces `sa` (F2). `scripts/gen_reader_grants.py` writes the grant
   script (server-level `CONNECT ANY DATABASE` + `SELECT ALL USER SECURABLES` + `VIEW ANY DEFINITION`, then a `DENY`
   on every sensitive table and column schema discovery found — BitopiSplint 27 objects + 332 columns, Production

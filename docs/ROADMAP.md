@@ -471,3 +471,115 @@ answer path, not permissions.
   for the HR/payroll databases (medical, tax, bonus, pay, increment).
 - Gate: `pytest`; `index_schema.py --try` on ~16 questions across databases; `db_ping.py` all 17;
   data/both eval cases no drop > 5 points; a live question per new domain through the app.
+
+---
+
+# Phases K–O — factory-intelligence agents (after v1.10.0)
+
+Asked about on 2026-10-06: eight domain agents (Order, Sourcing, Production, Quality, Logistics,
+Finance/LC, Energy, Executive), a morning brief, and four stages from "what is happening" to drafts.
+The why, the data readiness per agent and the owner decisions are in `docs/AGENTS_DESIGN.md`; this
+section holds the tasks. Status lives in `docs/PROGRESS.md`. The table-level map of where each
+agent's data lives is in the git-ignored `private/AGENTS_DATA_MAP.md` (the repo is public).
+
+An agent is configuration plus tools, not a free-running model: a charter (`prompts/agents/`), its
+catalogs, fixed tools and Python calculators, watch rules, and later rules and playbooks. Every
+number, date, risk level and cost is computed by SQL or Python; the model explains and ranks.
+
+Decided with the user on 2026-10-06: the brief is a home page in this Streamlit app; Stage 4 is
+drafts only, after sign-off, never sent; the model gateway gets task tiers plus a fallback provider.
+
+Every phase ends with the usual gate: `pytest`, `check_catalog.py --live` for every new tool
+`example:`, `scope_check.py` 0 leaks, eval with no drop > 5 points (new golden cases added for each
+new question type; none deleted).
+
+## Phase K — Stage 1 for Order, Finance/LC, Sourcing, Production → v1.11.0
+
+- **K1 agent registry.** `config/agents/<agent>.yaml`: catalogs, keywords, fixed tools, watch rules
+  (used from L), charter file. `src/ragbot/domain_agents/registry.py` loads and validates it (every
+  catalog, tool and charter exists). After `db_router.pick_catalogs` ranks the catalogs, the agent
+  whose catalogs and keywords match best is chosen without a model call; its charter is added to the
+  SQL and answer prompts and its catalogs limit what the SQL model sees. Charters are prompts:
+  versioned in `prompts/CHANGELOG.md`, so the gate eval covers them.
+- **K2 curated virtual views** (`definition:` blocks, expanded by `data/virtual.py`; no server DDL):
+  `rag.vw_ExportLC`, `rag.vw_BackToBackLC`, `rag.vw_MaterialPOReceipt` (PO commitment date vs goods
+  receipt), `rag.vw_LineDailyOutput`, `rag.vw_LineDefects`. Each carries a factory column
+  (`scope_column:`, the F4 rule) and no sensitive column (bank fields stay out). PO and receipt live in
+  different databases: if a virtual view cannot join across them, the tool runs two guarded queries and
+  Python merges the rows.
+- **K3 fixed tools for the concept's Stage-1 questions**, each with `agent:`, `example:`,
+  `follow_ups:` and a templated answer (no model call):
+  - `lcs_expiring_window`: "Which LCs expire in the next 30 days?" (`_date_window` already knows
+    "next month" and "next N days").
+  - `bblcs_expiring_window`: "Which back-to-back LCs expire next month?"
+  - `orders_shipping_window_by_region`: "Which European buyers have shipments in the next 14 days?"
+    Needs `config/reference/buyers.yaml` (buyer → region, owned by merchandising); until it exists the
+    tool answers not-found and says the map is missing.
+  - `fabric_not_inhouse`: "What fabric has not arrived for orders with a PCD in the next 14 days?"
+  - `lines_below_target_on_date`: "Which lines are below target today?" / "yesterday?"
+  - `orders_behind_schedule`: the definition in `config/rules/behind_schedule.yaml`, agreed with
+    merchandising first (proposal in `AGENTS_DESIGN.md` §3).
+- **K4 data-quality report.** `scripts/data_quality.py`, read-only: per domain, missing key dates,
+  past ship dates not shipped, future-dated events, catalogued tables with no rows, orphan keys
+  (orders without a factory, POs without a file reference). Output to `logs/` (internal content).
+  It is the evidence for the Stage-2 gate in `AGENTS_DESIGN.md` §4.
+- Gate: as above, plus a live run of every K3 example through the app as a scoped user.
+
+## Phase L — Watchers and the morning brief → v1.12.0
+
+Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open item in
+`docs/PROGRESS.md`), because the watcher runs unattended.
+
+- **L1 signals store.** `data/index/signals.db` (SQLite): `watch_run` and `signal` (agent, kind,
+  factory, subject key, level, reason, the SQL, `as_of`, run id). Written only by the watcher.
+- **L2 watcher.** `scripts/watch.py --every <minutes>`, a docker-compose service like `aggregates`,
+  with a lock and heartbeat like the ingestion worker. Runs each agent's `watch:` rules (guarded SQL,
+  fixed windows), no model call. Every signal carries its factory; nothing is filtered at write time.
+- **L3 health score and attention ranking** in `src/ragbot/domain_agents/health.py`, the formula and
+  ranking from `AGENTS_DESIGN.md` §4, unit-tested, the calculation shown under the score.
+- **L4 home page** in `app.py`: greeting (signed-in name; none in open mode), health score, counts,
+  attention list for the viewer's scope only. A click asks the item's question, which reaches a
+  fixed tool, so the answer needs no model call. Signals older than twice the watcher period show as
+  stale.
+- **L5 Quality Stage-1 tools**: DHU by line today, top defects by line this week.
+- Gate: as above, plus a scope test (a TAL user's home page shows no other factory's signal) and a
+  browser check of the page and two click-throughs.
+
+## Phase M — Stage 2: risk levels → v1.13.0
+
+- **M1 rules from the interviews** (run alongside K and L): `config/rules/<dimension>.yaml` for
+  material, production, quality, shipping, finance (thresholds and the reason text);
+  supplier lead-time rows (promised vs actual by supplier, material, season).
+- **M2 risk engine** `src/ragbot/domain_agents/risk.py`: order × dimension → green / amber / red,
+  the reasons, and the source rows. Deterministic; one test per rule.
+- **M3 predictions and outcomes.** Every evaluation stored (`prediction`, with its inputs); a job
+  fills in the outcome (actual ex-factory and ship dates) once the order's dates pass.
+- **M4 UI.** Levels on order answers and on the brief; "why" shows the rule and the rows.
+- Gate: as above, plus a backtest report over past orders (late-shipment share per level), recorded
+  in `docs/tuning_log.md` as the baseline the Stage-3 gate compares against.
+
+## Phase N — Stage 3: recommendations, model gateway → v1.14.0
+
+- **N1 playbooks.** `config/playbooks/*.yaml`: a risk pattern → candidate actions with parameters.
+  Cost and date effects computed in Python (needs the cost data in `AGENTS_DESIGN.md` §3).
+- **N2 recommendation answers.** "What can we do?" / "Which option costs least?": the tools produce
+  the candidates with computed cost and effect; the executive-tier model ranks and explains, citing
+  `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged.
+- **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
+  recommendation); the outcome is recorded as in M3.
+- **N4 model gateway.** `get_model(task)` in `src/ragbot/llm/__init__.py` with tiers in
+  `settings.yaml` (small: rewrite, route; main: answers, SQL; executive: recommendations,
+  cross-domain ranking); on `LLMError` quota or timeout, one retry on a fallback provider from
+  `.env`. `get_chat()` and `get_small_chat()` stay as thin wrappers. Every call still logged.
+- Gate: as above, plus gateway tests with fake providers (fallback on quota, no fallback on auth),
+  and recommendation eval cases at 100% citations.
+
+## Phase O — Stage 4: drafts → v1.15.0 (only after the owner's sign-off)
+
+- **O1 sign-off** recorded in `docs/PROGRESS.md`: it re-opens "write requests are refused".
+- **O2 `draft` route** for: supplier escalation email, production meeting agenda, request for a new
+  delivery date, QC investigation ticket, LC document checklist. Templates in `prompts/drafts/`,
+  filled with cited facts; stored in a `draft` table; the page offers copy only. "Send", "update" and
+  "delete" requests are still refused.
+- Gate: as above, plus a test that the code has no mail, webhook or ticket-system client, and the
+  existing refusal tests unchanged.

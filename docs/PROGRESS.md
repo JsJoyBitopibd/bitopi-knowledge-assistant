@@ -9,12 +9,12 @@ Design: `docs/ROADMAP.md` (Phases A–E). Release history: `CHANGELOG.md`. Miles
 | | |
 |---|---|
 | Released | **v1.9.0** (Phase I: speed), tag `v1.9.0`, on `main` |
-| Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I** |
+| Plan | **Phases F–I** (below; design in `docs/ROADMAP.md` "Phases F–I"), merged 2026-09-28 from two sessions' proposals. Order: **H0 hotfix → F → G → H → I**. **Phases K–O** (factory-intelligence agents) designed 2026-10-06 — `docs/AGENTS_DESIGN.md`, tasks in `docs/ROADMAP.md` "Phases K–O"; not started, start after v1.10.0 |
 | In progress | **Phase J** (every database, faster data answers) — complete and verified 2026-10-04 (J1–J5 + gate), **uncommitted** on `fix/rag-reader-login` together with the F2 work; release as v1.10.0 |
 | Next task | Commit Phase J, release v1.10.0. Then: re-run `gen_reader_grants.py` + the grant script for the 15 new databases (server-side DENYs); hand-tune the new catalogs' `keywords:` from `logs/chat.csv` as staff use them; curated views for the most-asked new databases. Waiting on others: I5 approval, F2b (DBA views), F3 (billing — free-tier keys, 500 requests/day per model), F1 AD details, G2 go-ahead, H4 scheduled tasks |
 | Last eval | 2026-10-04, data + both (13 cases) `eval/results/20261004T1033.json` + data re-run `20261004T1036`: 100% on every metric (one judge-variance miss in the first run, same answer text). Full 62-case eval last run 2026-09-29 (`20260929T1012.json`: correctness 90%, faithful 98%, hit 96%) |
 | Tests | 435 passing (on RAG-CHAT-BOT: `docker run --rm -v ./src:/app/src -v ./tests:/app/tests -v ./scripts:/app/scripts -v ./prompts:/app/prompts -w /app --entrypoint python bitopi-assistant:1.0 -m pytest -q`; on a dev machine `.venv\Scripts\python -m pytest -q`) |
-| Last updated | 2026-10-04 |
+| Last updated | 2026-10-06 |
 
 ## How to update this file (every session)
 
@@ -166,6 +166,31 @@ and a faster reply to every data question. The three `erp_*` test copies are lef
 | J5 | Schema vectors for every database; `get_index` reloads a new vector file within 5 s; catalog folder mounted; sensitive patterns for HR/payroll | ✅ | `index_schema.py` for the 17 databases (background); `--check` recall unchanged on `tests/schema_cases.jsonl` | **All 17 vector files built** (`data/index/schema/*.npz`, 2026-10-04, `nice -n 19` in a one-off container while the app ran): BitopiSplint 1,069 tables in 1,469 s, the other 16 (2,646 tables) in ~22 min together — ~0.4–1.4 s per table on the server's Xeon E5-2620 v3. `index_schema.py --check`: hybrid **10/11**, keyword 9/11 — identical to 27 Sep. `--try` with vectors: employees → Hrms5Misami, GRN → Inventory, Primark cartons → BIMOB_MVC, stock value by store → Inventory (cosines 0.37–0.55 across databases: the vector is the tie-breaker, the keywords decide). The app picked the files up without a restart (mounted `data/index`). `data/sensitive.py` + medical, tax, bonus, pay, increment |
 | J✓ | Phase gate | ✅ | `pytest`; data/both eval no drop > 5 points; `latency.py --group sql` vs the I1 baseline (8.47 / 13.85 s p50/p95); live questions per domain through the app | **435 tests** pass (Docker). **Eval** data + both, 13 cases (`eval/results/20261004T1033.json`): hit 100%, citations 100%, faithful/correct 92% — the one miss, case 53, is a fixed-tool templated table **byte-identical** to this morning's 1.0 answer (judge variance, as in the I gate); re-run of the 10 data cases (`20261004T1036`…): **100% on every metric**, case 53 back to 1.0. **Latency** (`eval/latency/20261004T1036.json`, 5 model-written-SQL questions, quiet machine): total **5.98 / 16.53 s** p50/p95 (I1 baseline 8.47 / 13.85 on the laptop, 2 catalogs); `llm.sql` 3.50 p50; the answer model ran for only 2 of 5 (a 0-row fallback and a 0 count); the p95 is the no-rows → documents fallback whose rerank took 8.3 s while another container loaded models. **Through the app** (RAG-CHAT-BOT, 17 catalogs): "How many employees are there in total?" → Hrms5Misami `dbo.tblEmployee`, **4.2 s**, no answer-model call (found and fixed: an unaliased COUNT came back with an empty column name → the template now says "Count: 13199"); "How many vouchers were posted in September 2026?" → FM `dbo.Voucher_Master`, 11.7 s, 0 (verified read-only: last voucher 9 Aug 2026); "How many visitors were registered in September 2026?" → HR `dbo.VisitorInformation`, 9.6 s, 0 (verified: `DateAdded` is NULL in all 64,558 rows — a data gap in HR, not a routing error). Both zeros took the model path on purpose (J3). Not run: the full 62-case eval (free-tier budget); the documents path is untouched by this phase |
 
+## Plan after v1.10.0 — Phases K–O: factory-intelligence agents
+
+Designed 2026-10-06 from a concept the user shared: eight domain agents (Order, Sourcing, Production,
+Quality, Logistics, Finance/LC, Energy, Executive), a morning brief, and four stages from "what is
+happening" to drafts. Why and what: `docs/AGENTS_DESIGN.md`. Tasks and gates: `docs/ROADMAP.md`
+"Phases K–O". Table-level data map: `private/AGENTS_DATA_MAP.md` (git-ignored). Decided with the
+user: design first; the brief is a home page in this app; Stage 4 is drafts only, after sign-off,
+never sent; the model gateway gets task tiers plus a fallback provider. Nothing below is built yet.
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| K1 | Agent registry (`config/agents/`, charters in `prompts/agents/`), agent picked without a model call | ⬜ | unit tests; each example question picks its agent | |
+| K2 | Curated virtual views: export LCs, back-to-back LCs, material PO vs receipt, line daily output, line defects (factory column, no sensitive column) | ⬜ | `check_catalog.py --live` 0 problems; every row resolves to a factory | |
+| K3 | Fixed tools for the Stage-1 questions (LCs expiring, back-to-back LCs expiring, shipments by buyer region, fabric not in-house, lines below target, orders behind schedule) | ⬜ | `check_catalog.py --live`; new golden cases; live run as a scoped user | |
+| K4 | `scripts/data_quality.py` report per domain | ⬜ | live read-only run; findings handed to data owners | |
+| K✓ | Phase gate → v1.11.0 | ⬜ | `pytest`; `scope_check.py` 0 leaks; eval no drop > 5 points | |
+| L1–L5 | Signals store, watcher service, health score and ranking, home-page brief, Quality Stage-1 tools | ⬜ | prerequisite: server DENYs regenerated for the 15 newer databases; scope test on the brief; browser | |
+| M1–M4 | Stage 2: risk rules from staff interviews, risk engine, predictions and outcomes, UI | ⬜ | one test per rule; backtest baseline in `docs/tuning_log.md` | |
+| N1–N4 | Stage 3: playbooks, recommendation answers, approve / reject records, model gateway | ⬜ | gateway fallback tests; recommendation eval cases at 100% citations | |
+| O1–O2 | Stage 4: owner sign-off, then a `draft` route (stored, never sent) | ⬜ | sign-off recorded; no mail / webhook / ticket client in the code; refusal tests unchanged | |
+
+Waiting on others before or during K–L: a buyer → region map and the "behind schedule" definition
+(merchandising), risk thresholds and cost data (interviews), a logistics feed and meter data (for
+the Logistics and Energy agents), a decision on FOB value in the views, and F3 (paid key).
+
 ## Small follow-ups noticed along the way
 
 The open follow-ups from Phases A–E are now tasks above: torchvision noise → G4, follow-up chips →
@@ -219,3 +244,4 @@ G3, `--samples` for selected tables → G2, raw-table code → name → G1, Gemi
 | 2026-09-30 → 10-01 | **Server RAG-CHAT-BOT** (Windows Server 2022 VM, Docker Desktop after nested virtualization was enabled on PHYSRV-01): v1.9.0 pulled, image built, `app` running in compose on 8501 with the index, PDFs and models copied over; `auth.provider: none` added (no sign-in; one shared scoped user) at the owner's request. Plan for a floating chat button in **bimob** (ASP.NET/IIS) + publishing on this VM (Caddy/TLS, token sign-in, API + widget, auto-start, ops) written and approved — not started |
 | 2026-10-04 | **Phase J** on RAG-CHAT-BOT: discovery of all 17 non-test databases (66 s), 15 new catalogs (`gen_catalog.py`; 3,715 offered tables in all), one connection string per server (`connection_database:`), `db_router.py` picks the catalogs per question in 15–20 ms (16/16 sample questions right), templated answers for model-written SQL, question → SQL cache, keyword routing shortcut, routing prompt v8, sensitive patterns for HR/payroll. Gate: 435 tests; data/both eval 100%; model-SQL questions 5.98 s p50 (was 8.47); headcount question through the app in 4.2 s. Schema-vector embedding for the new databases left running in the background. Also: Streamlit Deploy button hidden; `.dockerignore` trimmed (build context 4 GB → MBs); `config/catalog` mounted into the container |
 | 2026-10-04 | **F2**: SQL Server `sa` → `rag_reader` (instance-wide read, 153 DENYs; `scripts/gen_reader_grants.py`); data eval 13/13 at 100%; aggregates refreshed (4.2M rows, 19 min on this VM's link). Discovery found Production has grown (285 vs 279 objects) → re-discover, re-generate, re-run the grants. F2b (real views) and F3 (billing) next |
+| 2026-10-06 | **Phases K–O designed** (docs only, no code): factory-intelligence agents in four stages of trust. `docs/AGENTS_DESIGN.md`, `docs/ROADMAP.md` "Phases K–O", `private/AGENTS_DATA_MAP.md`. Data readiness: Order and Finance/LC good; Sourcing, Production, Quality partial; Logistics and Energy need new feeds. Start after v1.10.0 |
