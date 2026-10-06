@@ -8,6 +8,22 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-10-06 — Phase J: every database, faster data answers
+
+All 17 non-test databases on the SQL Server are catalogued and answered through one read-only login,
+`rag_reader` (no more `sa`). A model-written SQL question takes **5.98 s** p50 (`eval/latency/20261004T1036.json`;
+8.47 s in the I1 baseline with 2 catalogs); the database is picked in 15–20 ms with no model call (16/16 sample
+questions right). Data + both eval (13 cases, `eval/results/20261004T1033.json` + data re-run `20261004T1036`):
+100% on every metric. 435 tests. The full 62-case eval was not re-run (free-tier quota); the documents path is
+unchanged since v1.9.0.
+
+**Upgrading:** in `.env`, point the SQL Server connection strings at `rag_reader` (the grant script comes from
+`scripts/gen_reader_grants.py`, run by a DBA as `sa`). New settings with defaults in the example:
+`data.max_databases_per_question: 2`, `data.sql_cache_ttl_seconds: 86400`, `answer.templated_generated: true`,
+`auth.open_groups` (only for `auth.provider: none`). Mount `config/catalog` into the container
+(`docker-compose.override.yml`) so a catalog edit needs no rebuild. Still open: re-run the grant script so the
+15 newer databases' sensitive columns are denied at the server too (until then the code hides them).
+
 - **Design for factory-intelligence agents (Phases K–O)**, docs only: `docs/AGENTS_DESIGN.md` (eight domain
   agents, four stages of trust, the morning brief, the model gateway, data readiness, owner decisions) and the
   tasks in `docs/ROADMAP.md` "Phases K–O". Nothing is built yet.
