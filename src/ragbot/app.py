@@ -319,12 +319,64 @@ for i, t in enumerate(st.session_state.history):
                     follow_up_chips(i, t.get("follow_ups"))
             st.feedback("thumbs", key=f"fb{i}", on_change=feedback, args=(i,))
 
-# Suggested-question chips on an empty conversation.
-chips = st.empty()   # a slot, so the chips can be cleared the moment a question is asked
+def _when(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%d %b %Y %H:%M")
+    except ValueError:
+        return iso
+
+
+def morning_brief() -> None:
+    """Phase L (docs/AGENTS_DESIGN.md §4): the viewer's signals from the last watcher run (scripts/watch.py),
+    filtered to their factories. Python only — no model call, no database query. Each item asks its question,
+    and the answer that comes back carries the cited source."""
+    from datetime import timezone
+    from ragbot.domain_agents import brief as bf
+    from ragbot.domain_agents.signals import latest
+    if not s.get("brief.enabled", True):
+        return
+    run, sigs = latest(scope)
+    if run is None or not sigs:
+        return
+    b = bf.build(sigs, int(s.get("brief.max_items", 5)))
+    hello = bf.greeting(datetime.now(timezone.utc), float(s.get("ui.utc_offset_hours", 6)))
+    first = me.display.split()[0] if sign_in_required() and me.display else ""
+    st.subheader(f"{hello}{', ' + first if first else ''}")
+    cols = st.columns(1 + len(b.metrics))
+    cols[0].metric("Factory health", f"{b.health.score}/100" if b.health.score is not None else "—")
+    for c, (label, v) in zip(cols[1:], b.metrics):
+        c.metric(label, f"{v:,.0f}")
+    st.markdown(f":red[●] {b.health.red} red · :orange[●] {b.health.amber} amber · :green[●] {b.health.green} green")
+    with st.expander("How the health score is calculated"):
+        st.caption(b.health.how)
+    if b.data_warnings:
+        st.warning("Data to check: " + " · ".join(f"{w.factory}: {w.title}" for w in b.data_warnings))
+    if b.attention:
+        st.markdown("**Needs your attention**")
+        for k, sig in enumerate(b.attention, 1):
+            dot = ":red[●]" if sig.level == "red" else ":orange[●]"
+            left, right = st.columns([6, 1])
+            left.markdown(f"{k}. {dot} **{sig.factory}** · {sig.title}")
+            left.caption(f"{sig.database} · {', '.join(sig.views)} · as of {_when(sig.as_of)}")
+            if sig.question and right.button("Ask", key=f"att{k}", help=sig.question):
+                st.session_state.pending_q = sig.question
+                st.rerun()
+    note = f"Checked {_when(run['finished'])} by the watcher; signals are facts from the databases, not predictions."
+    if bf.is_stale(run["finished"], datetime.now(), int(s.get("brief.stale_after_minutes", 180))):
+        note = "⚠ " + note + " This check is older than expected — the watcher may have stopped."
+    st.caption(note)
+    if scope.is_admin and run.get("errors"):
+        st.caption("Watch rules that failed: " + " | ".join(run["errors"]))
+    st.divider()
+
+
+# Morning brief and suggested-question chips on an empty conversation.
+chips = st.empty()   # a slot, so the brief and chips can be cleared the moment a question is asked
 if not st.session_state.history:
     picks = s.get("ui.suggestions", []) or []
-    if picks:
-        with chips.container():
+    with chips.container():      # one container: a second .container() on an st.empty() replaces the first
+        morning_brief()
+        if picks:
             st.caption("Try one of these:")
             cols = st.columns(min(len(picks), 2))
             for j, sug in enumerate(picks):

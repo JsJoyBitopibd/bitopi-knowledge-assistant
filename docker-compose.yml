@@ -4,6 +4,7 @@
 #                   without a restart (the app hot-reloads its caches when the index changes)
 #   aggregates    - refreshes the pre-computed heavy results (config/aggregates.yaml) daily;
 #                   one read-only scan each, swapped into data/index/aggregates.db atomically
+#   watch         - runs the domain agents' watch rules hourly into data/index/signals.db (morning brief)
 #
 #   docker compose up -d
 #
@@ -50,4 +51,17 @@ services:
     volumes:
       - ./data/index:/app/data/index
     mem_limit: 2g
+    restart: unless-stopped
+
+  watch:
+    # Phase L: runs every agent's watch rules (config/agents/*.yaml) every 60 minutes and stores the signals in
+    # data/index/signals.db for the morning brief. Guarded SELECTs over rag.* views only; no model call.
+    image: bitopi-assistant:1.0
+    depends_on:
+      - app
+    command: ["python", "scripts/watch.py", "--every", "60"]
+    env_file: .env
+    volumes:
+      - ./data/index:/app/data/index
+    mem_limit: 1g
     restart: unless-stopped

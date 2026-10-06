@@ -34,6 +34,19 @@ checks:
       WHERE ExportOrderCategory = 'CONFIRMED' AND ExportOrderStatus <> 'CANCELLED'
         AND ShipDate >= DATEADD(day, -60, CAST(GETDATE() AS date)) AND ShipDate < CAST(GETDATE() AS date)
 
+  - name: confirmed_orders_without_quantity
+    agent: order
+    database: BitopiSplint
+    kind: count
+    max: null
+    what: Confirmed, not-cancelled orders with a ship date in the last 365 days and quantity 0 (left out of shipment answers)
+    fix: merchandising set the quantity or cancel the placeholder order
+    sql: |
+      SELECT COUNT(*) AS n
+      FROM dbo.ExportOrder
+      WHERE ExportOrderCategory = 'CONFIRMED' AND ExportOrderStatus <> 'CANCELLED' AND ISNULL(OrderQty, 0) <= 0
+        AND ShipDate >= DATEADD(day, -365, CAST(GETDATE() AS date))
+
   - name: future_cancellations
     agent: order
     database: BitopiSplint

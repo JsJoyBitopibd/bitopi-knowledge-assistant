@@ -64,7 +64,8 @@ def offline(cats) -> int:
                 problems += 1
     # Phase K: every agent's catalogs and charter exist, every tool names a known agent that owns its database
     agents = load_agents()
-    for p in validate_agents(agents, cats, tools):
+    from ragbot.domain_agents.watch import validate as validate_watch
+    for p in validate_agents(agents, cats, tools) + validate_watch(agents, cats):
         print(f"[offline] {p}")
         problems += 1
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "

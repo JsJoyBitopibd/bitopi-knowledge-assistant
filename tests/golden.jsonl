@@ -49,7 +49,7 @@
 {"id": 49, "kind": "data", "q": "What is the PCD for export order TAL-25-1493-215?", "expected": "The planned cut date (PCD) is 28 Sep 2026.", "view": "rag.vw_ExportOrder"}
 {"id": 50, "kind": "data", "q": "What is the ship date for TAL-25-1493-215?", "expected": "The planned ship date is 19 Oct 2026.", "view": "rag.vw_ExportOrder"}
 {"id": 51, "kind": "data", "q": "Who is the buyer for export order TAL-25-1493-215?", "expected": "The buyer is H&M.", "view": "rag.vw_ExportOrder"}
-{"id": 52, "kind": "data", "q": "What is the status of TAL-25-1493-215?", "expected": "The order status and shipment status from the order record: RUNNING and TO SHIP on 2026-10-06 (the status moves with production: it was ACTIVE on 2026-10-04).", "view": "rag.vw_ExportOrder"}
+{"id": 52, "kind": "data", "q": "What is the status of TAL-25-1493-215?", "expected": "Order status RUNNING, shipment status TO SHIP (as of 2026-10-06; the order status changes as production moves).", "view": "rag.vw_ExportOrder"}
 {"id": 53, "kind": "data", "q": "What is the PCD for the export order under buyer PO 594520-9192?", "expected": "PCD 28 Sep 2026 for order TAL-25-1493-215.", "view": "rag.vw_ExportOrder"}
 {"id": 54, "kind": "data", "q": "Show orders under file reference \"121394 SS17\"", "expected": "A list of export orders for buyer OXYLANE under file reference 121394 SS17, factory TAL.", "view": "rag.vw_ExportOrder"}
 {"id": 55, "kind": "data", "q": "Which TAL orders have PCD next week?", "expected": "A table of TAL export orders with PCD falling in next week's date window.", "view": "rag.vw_ExportOrder"}
@@ -65,3 +65,5 @@
 {"id": 65, "kind": "data", "q": "Which lines are below target?", "expected": "A table of sewing lines whose output was below their day target on the latest production day in the data, with that production date, target, output and pieces short.", "view": "rag.vw_LineDailyOutput"}
 {"id": 66, "kind": "data", "q": "How many orders are behind schedule?", "expected": "A count of confirmed orders whose ship date passed in the last 30 days and that have no export invoice yet.", "view": "rag.vw_OrderShipment"}
 {"id": 67, "kind": "data", "q": "Which TAL orders are behind schedule?", "expected": "A table of TAL confirmed orders whose ship date passed in the last 30 days with no export invoice yet, earliest ship date first.", "view": "rag.vw_OrderShipment"}
+{"id": 68, "kind": "data", "q": "Which lines have the highest DHU?", "expected": "A table of sewing lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first, with that production date, pieces inspected and defects.", "view": "rag.vw_LineDailyOutput"}
+{"id": 69, "kind": "data", "q": "Which TAL lines have the highest DHU?", "expected": "A table of TAL sewing lines by DHU on the latest production day in the data, highest first.", "view": "rag.vw_LineDailyOutput"}

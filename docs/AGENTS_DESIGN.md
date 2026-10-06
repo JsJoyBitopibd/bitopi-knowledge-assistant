@@ -1,8 +1,9 @@
 # Factory-intelligence agents: design
 
 Status: designed 2026-10-06. Phase K (Stage 1 for the Order, Finance/LC and Production agents, plus the
-data-quality report) is built and released as v1.11.0; "As built" in `docs/ROADMAP.md` lists where the live
-data changed the plan. Phases L–O are not started. Progress is tracked in `docs/PROGRESS.md`.
+data-quality report) is built and released as v1.11.0, Phase L (watcher, morning brief, Quality agent) as
+v1.12.0; "As built" in `docs/ROADMAP.md` lists where the live data changed the plan. Phases M–O wait for the
+staff interviews, cost data and the Stage-4 sign-off (§8). Progress is tracked in `docs/PROGRESS.md`.
 
 ## Summary
 
@@ -165,7 +166,9 @@ a `draft` route only after the owner signs off, and drafts stay in the local sto
 - **Health score.** A documented Python formula, shown under the number. Proposed (weights to be
   agreed in the interviews): over the orders shipping in the next 30 days,
   `health = 100 × (1 − (red + 0.5 × amber) / orders)`. With 34 orders, 2 red and 5 amber:
-  100 × (1 − 4.5 / 34) = 87.
+  100 × (1 − 4.5 / 34) = 87. *As built in Phase L:* orders get red/amber levels only in Stage 2, so
+  Stage 1 applies the same formula to the watch checks (one rule for one factory), and checks on the
+  data's own age are shown as a warning line instead of being scored.
 - **Attention list.** Ranked by consequence for shipment: days until the affected ship date first,
   then pieces affected. Ranking by order value would need FOB value, which the views leave out on
   purpose; that is an owner decision (section 6).

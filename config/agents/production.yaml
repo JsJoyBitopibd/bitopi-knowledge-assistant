@@ -4,8 +4,45 @@ title: Production agent
 description: Sewing lines — day targets and output, efficiency, manpower, inspected and defective pieces.
 stage: 1
 catalogs: [PlanningTNA, BiMob, Production]
-keywords: [line, lines, sewing, output, target, targets, efficiency, dhu, defect, defects, defective, manpower,
+keywords: [line, lines, sewing, output, target, targets, efficiency, manpower,
            operator, operators, production, hourly, below target]
 charter: agents/production
 status: >-
   The daily line record on this server was last updated on 20 Sep 2026; answers show the production date.
+# Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the production interviews set them.
+watch:
+  - name: lines_below_target
+    title: '{below} of {lines} lines below their day target on {day}'
+    question: 'Which {factory} lines are below target?'
+    database: PlanningTNA
+    sql: |
+      SELECT Factory, MAX(ProductionDate) AS day, COUNT(*) AS lines,
+             SUM(CASE WHEN o < t THEN 1 ELSE 0 END) AS below,
+             CAST(100.0 * SUM(CASE WHEN o < t THEN 1 ELSE 0 END) / COUNT(*) AS decimal(5,1)) AS pct
+      FROM (
+        SELECT Factory, LineNumber, ProductionDate, SUM(DayTarget) AS t, SUM(OutputPcs) AS o
+        FROM rag.vw_LineDailyOutput
+        WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+        GROUP BY Factory, LineNumber, ProductionDate
+        HAVING SUM(DayTarget) > 0
+      ) AS x
+      GROUP BY Factory
+    value: pct
+    amber: 25
+    red: 50
+    weight: 2
+    metric: ''
+  - name: line_data_age
+    kind: data          # about the data, not the factory: a warning line, not in the health score
+    title: 'Daily line data last updated {day} ({age} day(s) ago)'
+    question: 'Which {factory} lines are below target?'
+    database: PlanningTNA
+    sql: |
+      SELECT Factory, MAX(ProductionDate) AS day,
+             DATEDIFF(day, MAX(ProductionDate), CAST(GETDATE() AS date)) AS age
+      FROM rag.vw_LineDailyOutput
+      GROUP BY Factory
+    value: age
+    amber: 2
+    red: 7
+    weight: 1

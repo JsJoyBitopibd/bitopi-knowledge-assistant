@@ -567,6 +567,27 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
 - Gate: as above, plus a scope test (a TAL user's home page shows no other factory's signal) and a
   browser check of the page and two click-throughs.
 
+**As built (2026-10-06):**
+- The prerequisite: `scripts/gen_reader_grants.py` re-rendered `private/rag_reader_grants.sql` for all 17
+  databases (198 whole objects + 1,334 columns denied; none is a column a view, tool, watch rule or
+  quality check reads). The owner runs it as `sa`. The watcher itself reads only curated rag.* views,
+  which name their columns, so it does not depend on the server DENYs; model-written SQL does.
+- L1–L2: watch rules live in each agent's YAML (`watch:` — one guarded SELECT over rag.* views grouped by
+  Factory, a value column, provisional amber/red thresholds, a click-through question, a weight, an
+  optional metric label, `kind: ops|data`). `src/ragbot/domain_agents/watch.py` runs them (unrestricted
+  scope; the brief filters by the viewer's factories on read), `signals.py` keeps every run in
+  `data/index/signals.db`, `scripts/watch.py --every 60` is the compose service `watch`. Six rules:
+  orders behind schedule, orders shipping in 30 days (metric only), export LCs expiring in 14 days,
+  share of lines below target, daily line data age (`kind: data`), DHU on the latest day.
+- L3: health = 100 × (1 − (red + 0.5 × amber) ÷ checks), over the factory checks (one rule × one
+  factory); data-age checks are a warning line instead. Attention list: red before amber, then the
+  rule's weight, then the value. `src/ragbot/domain_agents/brief.py`.
+- L4: the brief is on the empty-conversation screen (greeting in factory time, UTC+6), above the
+  suggestion chips; each item's "Ask" sends its question, which reaches a fixed tool (no model call).
+- L5: Quality agent (`config/agents/quality.yaml`, charter) with two tools — lines by DHU on the latest
+  day, all and by factory. `rag.vw_LineDailyOutput` now has `Defects` (DHU numerator) and
+  `DefectivePcs`; it had called the defect count "defective pieces".
+
 ## Phase M — Stage 2: risk levels → v1.13.0
 
 - **M1 rules from the interviews** (run alongside K and L): `config/rules/<dimension>.yaml` for

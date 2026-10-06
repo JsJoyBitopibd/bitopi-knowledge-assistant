@@ -88,3 +88,10 @@ ui:
     - "Which export orders ship this month?"
     - "How many Kaspersky licences does the Group have?"
     - "What is the password change policy?"
+  utc_offset_hours: 6             # factory time for the greeting (Bangladesh, no daylight saving)
+
+# Morning brief on the home screen (Phase L): the viewer's signals from the last scripts/watch.py run.
+brief:
+  enabled: true
+  max_items: 5                    # "Needs your attention" items shown
+  stale_after_minutes: 180        # warn when the last watcher run is older (the service runs every 60 minutes)

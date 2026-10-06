@@ -359,6 +359,52 @@
     WHERE ShipDate >= @from AND ShipDate < @today AND InvoicedQty IS NULL
     ORDER BY ShipDate, ExportOrderID
 
+# ---- Phase L5: Quality agent, Stage 1. DHU = defects per hundred pieces inspected, computed in the SQL.
+- name: dhu_by_line_by_factory
+  agent: quality
+  database: PlanningTNA
+  example: 'Which TAL lines have the highest DHU?'
+  follow_ups:
+    - 'Which lines have the highest DHU?'
+    - 'Which {factory} lines are below target?'
+  description: One factory's sewing lines by DHU on that factory's latest production day in the data, highest first.
+  answer_list: '{factory} lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first ({n} lines)'
+  match: '(?i)\b(TAL|RHL|BGL)\b.*\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\b(TAL|RHL|BGL)\b.*\blines?\b'
+  params:
+    factory: { from_group: [1, 2], upper: true }
+  sql: |
+    SELECT TOP (200)
+      ProductionDate, Factory, Unit, LineNumber,
+      SUM(InspectedPcs) AS InspectedPcs, SUM(Defects) AS Defects, SUM(DefectivePcs) AS DefectivePcs,
+      CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS DHU
+    FROM rag.vw_LineDailyOutput
+    WHERE Factory = @factory
+      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory)
+    GROUP BY ProductionDate, Factory, Unit, LineNumber
+    HAVING SUM(InspectedPcs) > 0
+    ORDER BY DHU DESC
+
+- name: dhu_by_line
+  agent: quality
+  database: PlanningTNA
+  example: 'Which lines have the highest DHU?'
+  follow_ups:
+    - 'Which TAL lines have the highest DHU?'
+    - 'Which lines are below target?'
+  description: Sewing lines by DHU on the latest production day in the data (all factories in scope), highest first.
+  answer_list: 'Lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first ({n} lines)'
+  match: '(?i)\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\blines?\b'
+  sql: |
+    SELECT TOP (200)
+      ProductionDate, Factory, Unit, LineNumber,
+      SUM(InspectedPcs) AS InspectedPcs, SUM(Defects) AS Defects, SUM(DefectivePcs) AS DefectivePcs,
+      CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS DHU
+    FROM rag.vw_LineDailyOutput
+    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+    GROUP BY ProductionDate, Factory, Unit, LineNumber
+    HAVING SUM(InspectedPcs) > 0
+    ORDER BY DHU DESC
+
 - name: buyer_list
   agent: order
   database: BitopiSplint

@@ -1,0 +1,29 @@
+# Quality agent (docs/AGENTS_DESIGN.md, Phase L5). Owns the DHU tools (config/fixed_tools.yaml `agent: quality`).
+name: quality
+title: Quality agent
+description: Sewing-line quality — pieces inspected, defects, defective pieces and DHU per line and factory.
+stage: 1
+catalogs: [PlanningTNA, BiMob, Production]
+keywords: [dhu, defect, defects, defective, rejection, rejections, rework, alteration, alterations, qc, quality,
+           inspection, inspected, aql, audit]
+charter: agents/quality
+status: >-
+  Line quality comes from the same daily line record as production (last updated 20 Sep 2026 on this server). No AQL
+  or audit results are in any database yet.
+# Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the QC interviews set them.
+watch:
+  - name: dhu_latest_day
+    title: 'DHU {dhu} on {day}'
+    question: 'Which {factory} lines have the highest DHU?'
+    database: PlanningTNA
+    sql: |
+      SELECT Factory, MAX(ProductionDate) AS day, SUM(InspectedPcs) AS inspected, SUM(Defects) AS defects,
+             CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS dhu
+      FROM rag.vw_LineDailyOutput
+      WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+      GROUP BY Factory
+      HAVING SUM(InspectedPcs) > 0
+    value: dhu
+    amber: 5
+    red: 8
+    weight: 2

@@ -365,10 +365,11 @@ views:
 
   # Phase K (Order agent). ShipmentStatus on the order is not kept up to date, so "shipped" is read
   # from the export invoices: an order with no invoice line has not been invoiced for export. Limited
-  # to confirmed, not-cancelled orders with a ship date in the last 365 days or later.
+  # to confirmed, not-cancelled orders with a ship date in the last 365 days or later. Orders with quantity 0
+  # are placeholders (e.g. PO "TBA19"), not commitments, and are left out (38 of 761 "behind schedule" on 2026-10-06).
   - name: rag.vw_OrderShipment
     scope_column: Factory
-    grain: one row per confirmed, not-cancelled export order with a ship date from 365 days ago onward.
+    grain: one row per confirmed, not-cancelled export order with a quantity and a ship date from 365 days ago onward.
     description: >
       Whether each recent confirmed export order has been invoiced for export: invoiced quantity,
       number of export invoices and the first invoice's ex-factory date, next to the order's planned
@@ -416,6 +417,7 @@ views:
       ) s ON s.ExportOrderID = eo.ExportOrderID
       WHERE eo.ExportOrderCategory = 'CONFIRMED'
         AND eo.ExportOrderStatus <> 'CANCELLED'
+        AND eo.OrderQty > 0
         AND eo.ShipDate >= DATEADD(day, -365, CAST(GETDATE() AS date))
 
 examples:

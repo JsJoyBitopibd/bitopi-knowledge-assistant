@@ -97,7 +97,7 @@ views:
   grain: one row per production day, line and style.
   description: >-
     Daily sewing line record: day target, output, target and achieved efficiency, manpower, and pieces
-    inspected and found defective, per line and style. A line running two styles has two rows a day.
+    inspected, defects and defective pieces, per line and style. A line running two styles has two rows a day.
     Not updated every day: always show ProductionDate.
   key_columns: [ProductionDate, Factory, LineNumber, Style]
   columns:
@@ -114,8 +114,9 @@ views:
     TargetEfficiency: planned efficiency, percent
     AchievedEfficiency: achieved efficiency, percent
     ManPowerPresent: people present on the line
-    InspectedPcs: pieces inspected
-    DefectPcs: defective pieces found
+    InspectedPcs: pieces inspected (inline checks count a piece each time it is checked, so this can exceed OutputPcs)
+    Defects: defects found (DHU = 100 × Defects ÷ InspectedPcs)
+    DefectivePcs: defective pieces found (a piece with two defects counts once)
   definition: |
     SELECT
       CAST(d.Date AS date) AS ProductionDate,
@@ -137,5 +138,6 @@ views:
       CAST(d.AchievedEfficiency AS decimal(7,2)) AS AchievedEfficiency,
       d.ManPowerPresent,
       d.InspectionPCS AS InspectedPcs,
-      d.DefectPCS AS DefectPcs
+      d.DefectPCS AS Defects,
+      d.DefectivePCS AS DefectivePcs
     FROM dbo.VistaQDailyProduction d

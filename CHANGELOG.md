@@ -8,6 +8,31 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-10-06 — Phase L: watcher and morning brief
+
+The home screen now opens with the factory's state before anyone asks: the watcher runs the agents' watch rules every
+hour (16 signals in ~36 s, no model call) and the brief shows the viewer's factories only. Eval data + both (20 cases,
+2 new, `eval/results/20261006T0846.json`): 100% on every metric. Leak suite 34 cases, 0 leaks. 493 tests.
+
+**Upgrading:** rebuild the image and start the new compose service (`docker compose up -d watch`). New settings with
+defaults in the example: `brief.enabled`, `brief.max_items`, `brief.stale_after_minutes`, `ui.utc_offset_hours`.
+`rag.vw_LineDailyOutput`'s `DefectPcs` is now `Defects` (plus `DefectivePcs`); `rag.vw_OrderShipment` leaves out
+quantity-0 orders. Run `private/rag_reader_grants.sql` as `sa` (generated for all 17 databases).
+
+- **Morning brief (Phase L)**: on the empty-conversation screen, a greeting in factory time, the factory health score
+  (100 × (1 − (red + 0.5 × amber) ÷ checks), with its calculation), totals such as orders behind schedule and orders
+  shipping in 30 days, a "Needs your attention" list whose "Ask" buttons send the item's question, a warning line for
+  stale data, and when the watcher last checked. Only the viewer's factories. No model call.
+- **Watcher**: `scripts/watch.py` (compose service `watch`, every 60 minutes) runs the agents' watch rules (`watch:` in
+  `config/agents/*.yaml`: one guarded SELECT over rag.* views per rule, provisional thresholds in config) and keeps every
+  run in `data/index/signals.db` (`src/ragbot/domain_agents/watch.py`, `signals.py`, `brief.py`).
+- **Quality agent**: `config/agents/quality.yaml` + charter; tools for lines by DHU on the latest production day (all,
+  by factory). `rag.vw_LineDailyOutput` gains `Defects` and `DefectivePcs` — the defect count was mislabelled as
+  defective pieces.
+- **Grant script** for all 17 databases rendered to `private/` (the owner runs it).
+- **Fixed**: `rag.vw_OrderShipment` counted quantity-0 placeholder orders (PO "TBA…") as behind schedule; they are left
+  out and counted in the data-quality report (new check, 15 in all).
+
 ## [1.11.0] — 2026-10-06 — Phase K: Stage-1 domain agents
 
 The first stage of the factory-intelligence design (`docs/AGENTS_DESIGN.md`): the Order, Finance/LC and Production

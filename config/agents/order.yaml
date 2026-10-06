@@ -7,3 +7,31 @@ catalogs: [BitopiSplint, Production]
 keywords: [order, orders, export order, eo, po, pcd, ppm, ship date, ex-factory, exfactory, shipment, shipments,
            behind schedule, late, overdue, delayed, buyer, buyers, style, styles, merchandiser, cancelled, file reference]
 charter: agents/order
+# Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the merchandising interviews set them.
+watch:
+  - name: behind_schedule
+    title: '{n} confirmed order(s) past their ship date with no export invoice (last 30 days)'
+    question: 'Which {factory} orders are behind schedule?'
+    database: BitopiSplint
+    sql: |
+      SELECT Factory, COUNT(*) AS n
+      FROM rag.vw_OrderShipment
+      WHERE ShipDate >= DATEADD(day, -30, CAST(GETDATE() AS date)) AND ShipDate < CAST(GETDATE() AS date)
+        AND InvoicedQty IS NULL
+      GROUP BY Factory
+    value: n
+    amber: 1
+    red: 50
+    weight: 3
+    metric: Behind schedule (30 days)
+  - name: shipping_next_30_days
+    title: '{n} confirmed order(s) ship in the next 30 days'
+    question: 'Which {factory} orders have a ship date in the next 30 days?'
+    database: BitopiSplint
+    sql: |
+      SELECT Factory, COUNT(*) AS n
+      FROM rag.vw_OrderShipment
+      WHERE ShipDate >= CAST(GETDATE() AS date) AND ShipDate < DATEADD(day, 30, CAST(GETDATE() AS date))
+      GROUP BY Factory
+    value: n
+    metric: Shipping in 30 days

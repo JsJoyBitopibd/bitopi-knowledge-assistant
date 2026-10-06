@@ -8,3 +8,20 @@ keywords: [lc, lcs, letter of credit, letters of credit, sales contract, back-to
            expire, expires, expiring, expired, amendment, amendments, maturity, receivable, receivables, payable,
            payables, realization, realisation]
 charter: agents/finance_lc
+# Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the commercial interviews set them.
+watch:
+  - name: export_lcs_expiring_14_days
+    title: '{n} open export LC(s) expire in the next 14 days'
+    question: 'Which LCs expire in the next 14 days?'
+    database: BitopiSplint
+    sql: |
+      SELECT Factory, COUNT(*) AS n
+      FROM rag.vw_ExportLC
+      WHERE LCClosed = 0 AND ExpiryDate >= CAST(GETDATE() AS date)
+        AND ExpiryDate < DATEADD(day, 14, CAST(GETDATE() AS date))
+      GROUP BY Factory
+    value: n
+    amber: 1
+    red: 3
+    weight: 2.5
+    metric: Export LCs expiring (14 days)
