@@ -9,6 +9,14 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **RHL's VistaQ server** as two catalogs, `VistaQ_Default_RHL` (QC inspections and defects, daily QC and defect
+  summaries, production and session plans, cutting, corrective actions) and `VistaQ_Logging_RHL` (application logs),
+  on their own connection line `SQLSERVER_CONN_VISTAQ`. Discovery, schema vectors, name hints for line, unit, buyer,
+  style and defect IDs, and rules that send totals to the summary tables.
+- A catalog can declare `factory:` (one factory's data only). The router then prefers it when a question names that
+  factory and keeps it out when the question names another one.
+- `scripts/set_db_connection.ps1` sets the connection lines in `.env` from a hidden password prompt. `-Variable` and
+  `-Database` write one extra line for a database on another server.
 - **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
   website widget). It holds the original export (HTML + PDF), one PNG per screen, each screen's unpacked markup
   (`source/*.html`, the exact values), and `DESIGN.md` (tokens, type, components, and which screen goes with which
