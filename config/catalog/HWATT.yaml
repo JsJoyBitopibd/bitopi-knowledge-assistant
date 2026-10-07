@@ -1,7 +1,3 @@
-# Switched off 2026-10-07: this database is not on the live server 172.16.7.14 (only on the dev server
-# 192.168.10.6). Set enabled: true again if it is restored or found on another live server.
-enabled: false
-
 # HWATT: no curated views yet — answered through schema RAG over the discovered tables
 # (config/catalog/discovered/HWATT.json: 98 tables, discovered 2026-10-04).
 # Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the

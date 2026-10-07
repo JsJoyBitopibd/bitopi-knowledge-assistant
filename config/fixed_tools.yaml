@@ -262,8 +262,8 @@
   example: 'Which TAL lines are below target?'
   follow_ups:
     - 'Which lines are below target?'
-  description: One factory's sewing lines whose output was below their day target on that factory's latest completed production day (before today; today's output is still coming in).
-  answer_list: '{n} {factory} line(s) below their day target on the latest completed production day (before today)'
+  description: One factory's sewing lines whose output was below their day target on that factory's latest production day in the data.
+  answer_list: '{n} {factory} line(s) below their day target on the latest production day in the data'
   match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(TAL|RHL|BGL)\b.*\blines?\b.*\b(?:below|under|behind|short\s+of|missed?)\b.*\btargets?\b'
   params:
     factory: { from_group: 1, upper: true }
@@ -273,7 +273,7 @@
       SUM(DayTarget) AS DayTarget, SUM(OutputPcs) AS OutputPcs, SUM(DayTarget) - SUM(OutputPcs) AS ShortPcs
     FROM rag.vw_LineDailyOutput
     WHERE Factory = @factory
-      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory AND ProductionDate < CAST(GETDATE() AS date))
+      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory)
     GROUP BY ProductionDate, Factory, Unit, LineNumber
     HAVING SUM(DayTarget) > 0 AND SUM(OutputPcs) < SUM(DayTarget)
     ORDER BY ShortPcs DESC
@@ -285,15 +285,15 @@
   follow_ups:
     - 'Which TAL lines are below target?'
     - 'Which RHL lines are below target?'
-  description: Sewing lines whose output was below their day target on the latest completed production day (before today, as today's output is still coming in; all factories in scope).
-  answer_list: '{n} line(s) below their day target on the latest completed production day (before today)'
+  description: Sewing lines whose output was below their day target on the latest production day in the data (all factories in scope).
+  answer_list: '{n} line(s) below their day target on the latest production day in the data'
   match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\blines?\b.*\b(?:below|under|behind|short\s+of|missed?)\b.*\btargets?\b'
   sql: |
     SELECT TOP (200)
       ProductionDate, Factory, Unit, LineNumber,
       SUM(DayTarget) AS DayTarget, SUM(OutputPcs) AS OutputPcs, SUM(DayTarget) - SUM(OutputPcs) AS ShortPcs
     FROM rag.vw_LineDailyOutput
-    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE ProductionDate < CAST(GETDATE() AS date))
+    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
     GROUP BY ProductionDate, Factory, Unit, LineNumber
     HAVING SUM(DayTarget) > 0 AND SUM(OutputPcs) < SUM(DayTarget)
     ORDER BY ShortPcs DESC
@@ -367,8 +367,8 @@
   follow_ups:
     - 'Which lines have the highest DHU?'
     - 'Which {factory} lines are below target?'
-  description: One factory's sewing lines by DHU on that factory's latest completed production day (before today; today's output is still coming in), highest first.
-  answer_list: '{factory} lines by DHU (defects per hundred pieces inspected) on the latest completed production day (before today), highest first ({n} lines)'
+  description: One factory's sewing lines by DHU on that factory's latest production day in the data, highest first.
+  answer_list: '{factory} lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first ({n} lines)'
   match: '(?i)\b(TAL|RHL|BGL)\b.*\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\b(TAL|RHL|BGL)\b.*\blines?\b'
   params:
     factory: { from_group: [1, 2], upper: true }
@@ -379,7 +379,7 @@
       CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS DHU
     FROM rag.vw_LineDailyOutput
     WHERE Factory = @factory
-      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory AND ProductionDate < CAST(GETDATE() AS date))
+      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory)
     GROUP BY ProductionDate, Factory, Unit, LineNumber
     HAVING SUM(InspectedPcs) > 0
     ORDER BY DHU DESC
@@ -391,8 +391,8 @@
   follow_ups:
     - 'Which TAL lines have the highest DHU?'
     - 'Which lines are below target?'
-  description: Sewing lines by DHU on the latest completed production day (before today, as today's output is still coming in; all factories in scope), highest first.
-  answer_list: 'Lines by DHU (defects per hundred pieces inspected) on the latest completed production day (before today), highest first ({n} lines)'
+  description: Sewing lines by DHU on the latest production day in the data (all factories in scope), highest first.
+  answer_list: 'Lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first ({n} lines)'
   match: '(?i)\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\blines?\b'
   sql: |
     SELECT TOP (200)
@@ -400,7 +400,7 @@
       SUM(InspectedPcs) AS InspectedPcs, SUM(Defects) AS Defects, SUM(DefectivePcs) AS DefectivePcs,
       CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS DHU
     FROM rag.vw_LineDailyOutput
-    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE ProductionDate < CAST(GETDATE() AS date))
+    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
     GROUP BY ProductionDate, Factory, Unit, LineNumber
     HAVING SUM(InspectedPcs) > 0
     ORDER BY DHU DESC

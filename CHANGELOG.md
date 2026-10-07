@@ -34,26 +34,6 @@ each phase is in `docs/ROADMAP.md`.
   `…-10`), and blank cells always go last. A templated answer's 25-row preview is drawn with all the rows its query returned
   (up to 200), so sorting covers every row. The sorting runs in the browser (`ui/sort_table.js`), with no query and no
   model call. The Sources rail now moves under the thread when the window is too narrow for both.
-- **Live SQL Server**: the app reads `172.16.7.14` (the live server); `192.168.10.6` was the dev server.
-  `scripts/set_db_connection.ps1` sets the two connection lines in `.env` from a hidden password prompt. A catalog
-  can be switched off with `enabled: false`; the four databases that are not on the live server, and Hrms5Misami
-  (no access yet), are switched off.
-- Line-target and DHU checks (watcher rules and fixed tools) use the **latest completed production day**: the live
-  data includes today, which is still in progress and made every line look below target.
-- `index_schema.py` keeps the vectors of tables whose document is unchanged, so a new discovery embeds only new
-  and changed tables (`--backfill` adds the per-table hashes to vector files built before).
-
-- **Gateway scripts** (`scripts/gen_gateway.py`): the DBA scripts for a read-only gateway on the dev server. A
-  linked server reads the live server, the rag views live in their own database over it, a narrow login is created on
-  live, a speed check runs through the gateway and directly, and rollbacks are included. The scripts are written to
-  `private/gateway/`; nothing connects.
-- `gen_reader_grants.py` output is safe on any server: each database only if it exists there, each DENY only if its
-  object or column exists (one DENY per column).
-
-### Known issue
-- On the live server, "Which <factory> orders are behind schedule?" and the brief's "Behind schedule" rule time
-  out (the order → file join is slow there; fine on dev). For the DBA: indexes or statistics on `dbo.FileRef`,
-  `dbo.ExportOrder` and the export invoice tables.
 
 ## [1.12.0] — 2026-10-06 — Phase L: watcher and morning brief
 

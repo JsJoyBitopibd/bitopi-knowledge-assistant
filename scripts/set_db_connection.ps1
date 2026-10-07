@@ -4,7 +4,7 @@ and login. Every other database's catalog reuses one of the two (connection_data
 is left as it is. The password is typed at a hidden prompt and written only to .env: run this yourself, nobody
 else needs to see it. Then check with:  docker compose run --rm --no-deps --entrypoint python app scripts/db_ping.py
 
-  pwsh -File scripts\set_db_connection.ps1 -Server 172.16.7.14 -User mis-joy
+  pwsh -File scripts\set_db_connection.ps1 -Server "192.168.10.6\MSSQLSERVER2019" -User rag_reader
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Server,     # host, or host\instance for a named instance

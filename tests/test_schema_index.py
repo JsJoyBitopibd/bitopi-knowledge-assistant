@@ -96,30 +96,3 @@ def test_table_name_matches_rank_above_column_matches():
     noisy = [_t(f"dbo.Order{i}", ["OrderID", "BuyerName", "BuyerCode"]) for i in range(12)]
     cat = Catalog("Demo3", "tsql", "E", [], [], tables=[*noisy, _t("dbo.tblBuyerMaster", ["BuyerMasterID", "Buyer"])])
     assert si.select_tables("list all buyers", cat, k=3)[0] == "dbo.tblBuyerMaster"
-
-
-def test_rebuild_reuses_vectors_of_unchanged_tables(monkeypatch, isolated):
-    calls = []
-    monkeypatch.setattr(embed, "get_embedder",
-                        lambda: NS(embed=lambda texts: calls.append(len(texts)) or [_hash_vec(t).tolist() for t in texts]))
-    first = si.build(_cat(), embed=True)
-    assert first.embedded == len(first.names) and calls == [len(first.names)]
-    # a new discovery: one table gains a column, one table is new, the rest are unchanged
-    changed = [t if t.name != "dbo.Buyer" else _t("dbo.Buyer", ["BuyerID", "BuyerName", "Region"], desc=t.description)
-               for t in TABLES] + [_t("dbo.Invoice", ["InvoiceID", "ExportOrderID"])]
-    isolated[0] = "sha-2"
-    second = si.build(Catalog("Demo", "tsql", "SQLSERVER_CONN_DEMO", [], [], tables=changed), embed=True)
-    assert second.embedded == 2 and calls[-1] == 2
-    keep = second.names.index("dbo.Supplier")
-    assert np.allclose(second.vectors[keep], first.vectors[first.names.index("dbo.Supplier")])
-
-
-def test_backfill_adds_hashes_only_for_the_same_discovery(isolated, tmp_path):
-    cat = _cat()
-    names = [t.name for t in cat.offered_tables]
-    vecs = np.stack([_hash_vec(n) for n in names])
-    np.savez_compressed(tmp_path / "Demo.npz", names=np.array(names), vectors=vecs, sha="sha-1", model=embed.EMBED_MODEL)
-    assert si.backfill_doc_sha(cat) == f"{len(names)} document hashes added"
-    assert si.backfill_doc_sha(cat) == "already has document hashes"
-    np.savez_compressed(tmp_path / "Demo.npz", names=np.array(names), vectors=vecs, sha="old", model=embed.EMBED_MODEL)
-    assert si.backfill_doc_sha(cat) == "built from another discovery: skipped"
