@@ -7,6 +7,8 @@ If nothing is found it says: **System doesn't have the data.**
 Built with Claude Code from the brief in `CLAUDE.md`. Plan and acceptance tests: `docs/PLAN.md`.
 Database rules and the semantic layer (including how this build runs without any DDL on the
 server): `docs/DATA_ACCESS.md`. Citation format: `docs/REFERENCE_FORMAT.md`.
+Look and feel of every surface (web app, Android app, website widget): `docs/design/DESIGN.md`. The web
+app follows its screens 1 and 2 (`src/ragbot/ui/`, theme in `.streamlit/config.toml`).
 
 ## Quick start (Windows)
 

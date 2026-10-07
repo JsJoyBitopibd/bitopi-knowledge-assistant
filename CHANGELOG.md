@@ -8,6 +8,28 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
+  website widget). It holds the original export (HTML + PDF), one PNG per screen, each screen's unpacked markup
+  (`source/*.html`, the exact values), and `DESIGN.md` (tokens, type, components, and which screen goes with which
+  surface). `scripts/unpack_design.py` unpacks a new export.
+
+### Changed
+- **Web app restyled to the desktop design** (screens 1 and 2). Dark green sidebar with New chat, Factory pills,
+  Search in, document categories, Recent (this session's conversations) and a Data status card. On an empty
+  conversation: the home briefing (date and status, greeting, data-age banner, KPI cards with a health ring,
+  "Needs your attention" with Critical/Watch badges, "Try asking"). Once a question is asked: a header with Export
+  (conversation and references as Markdown), the thread (dark question bubble, B avatar, a "Queried … · N rows"
+  progress line, tables inside the answer, Copy / CSV / Refresh / thumbs, follow-up pills) and a **Sources** rail
+  (one card per [D#]/[P#] reference with Show query or Open PDF, then Data freshness). IBM Plex fonts are served by
+  the app (`src/ragbot/static/fonts/`, SIL OFL), with no call to Google Fonts. Code: `src/ragbot/ui/`, theme in
+  `.streamlit/config.toml`.
+- The **Factory** pills narrow the user's scope in code (`ui/view.narrow_scope`; never wider than the user's own
+  scope), so document filters, SQL predicates, caches and the brief all follow the pick. The answer path, citation
+  checks and logging are unchanged.
+- Left out on purpose: **Share** (conversations are not stored) and on/off switches for **Search in** (the router
+  picks the source). See `docs/design/DESIGN.md`.
+
 ## [1.12.0] — 2026-10-06 — Phase L: watcher and morning brief
 
 The home screen now opens with the factory's state before anyone asks: the watcher runs the agents' watch rules every
