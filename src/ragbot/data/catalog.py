@@ -111,6 +111,9 @@ class Catalog:
     # The database to open on `connection_env`'s server when it is not the one in the connection string:
     # one read-only login serves the whole instance, so its catalogs share one env var (connectors.dsn).
     connection_database: str | None = None
+    # A database that holds one factory's data only (e.g. RHL's own VistaQ server): the router prefers it when a
+    # question names that factory and keeps it out when the question names another one (data/db_router.py).
+    factory: str | None = None
 
     def hints_for(self, table: str) -> list[Hint]:
         low = table.lower()
@@ -262,5 +265,6 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                                       views, d.get("examples", []), d.get("description", ""), d.get("keywords", []),
                                       tables=_load_discovered(folder, d["database"]),
                                       exclude_tables=d.get("exclude_tables", []), hints=hints,
-                                      connection_database=d.get("connection_database") or None)
+                                      connection_database=d.get("connection_database") or None,
+                                      factory=str(d["factory"]).strip().upper() if d.get("factory") else None)
     return cats

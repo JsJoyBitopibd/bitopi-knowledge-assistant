@@ -93,3 +93,21 @@ def test_no_vector_bonus_while_most_databases_lack_vectors(cats):
 def test_explain_is_one_readable_line(cats):
     line = explain("How many GRN this week?", cats)       # keyword 3 + the whole name of dbo.GRNMaster (2)
     assert line.startswith("Inventory 5.0 (kw 3, name 1.00)") and " > " in line
+
+
+def test_factory_catalog_wins_its_factory_and_stays_out_of_others(cats, monkeypatch):
+    import ragbot.data.db_router as dr
+    from ragbot.data.db_router import factory_points
+    codes = ["TAL", "RHL", "BGL"]
+    rhl = Catalog("VistaQ_RHL", "tsql", "X", [], [], keywords=["defects", "dhu"], tables=[_t("dbo.QCSummary")],
+                  factory="RHL")
+    assert factory_points("Top defects at RHL this week", rhl, codes) == 4.0
+    assert factory_points("Top defects at TAL this week", rhl, codes) == -4.0
+    assert factory_points("Top defects this week", rhl, codes) == 0.0
+    assert factory_points("RHL and TAL defects", rhl, codes) == 4.0          # it names RHL too
+    assert factory_points("RHL defects", cats["Inventory"], codes) == 0.0   # a catalog for every factory
+    monkeypatch.setattr(dr, "settings", lambda: {"scope.factory_codes": codes})
+    plan = Catalog("Planning", "tsql", "X", [], [], keywords=["defects", "dhu", "line"], tables=[_t("dbo.LineDaily")])
+    both = {"VistaQ_RHL": rhl, "Planning": plan}
+    assert evidence("Top defects at RHL", both)[0].database == "VistaQ_RHL"
+    assert evidence("Top defects at TAL", both)[0].database == "Planning"

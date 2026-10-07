@@ -55,6 +55,21 @@ def keyword_score(question: str, cat: Catalog) -> int:
     return kw + cols
 
 
+FACTORY_POINTS = 4.0
+
+
+def factory_points(question: str, cat: Catalog, codes: list[str]) -> float:
+    """For a catalog that holds one factory's data (`factory:`): +4 when the question names that factory, −4 when
+    it names only other factories, 0 otherwise — 'RHL defects' reaches RHL's own system, 'TAL defects' never does."""
+    if not cat.factory:
+        return 0.0
+    q = _padded(question)
+    named = {c.upper() for c in codes if c and _padded(c) in q}
+    if cat.factory in named:
+        return FACTORY_POINTS
+    return -FACTORY_POINTS if named else 0.0
+
+
 def evidence(question: str, cats: dict[str, Catalog], qvec: Optional[list[float]] = None) -> list[Evidence]:
     """Every catalog scored, best first."""
     from .schema_index import get_index   # lazy: numpy + the index build are not needed by the fixed-tool path
@@ -69,8 +84,10 @@ def evidence(question: str, cats: dict[str, Catalog], qvec: Optional[list[float]
     bonus: dict[str, float] = {}
     if len(with_vectors) * 2 >= len(out):
         bonus = {e.database: b for e, b in zip(with_vectors[:2], (2.0, 1.0))}
+    codes = [str(c) for c in settings().get("scope.factory_codes", []) or []]
     for e in out:
         e.score = e.keywords + 2 * e.name_share + bonus.get(e.database, 0.0) + (0.5 if cats[e.database].views else 0.0)
+        e.score += factory_points(question, cats[e.database], codes)
     out.sort(key=lambda e: (-e.score, e.database))
     return out
 

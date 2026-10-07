@@ -1,0 +1,118 @@
+# VistaQ_Default_RHL: no curated views yet — answered through schema RAG over the discovered tables
+# (config/catalog/discovered/VistaQ_Default_RHL.json: 91 tables, discovered 2026-10-07).
+# Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
+# words staff use for this data — the router scores them to pick the database for a question
+# (src/ragbot/data/db_router.py). The last 11 were derived from table names.
+# `connection_database:` opens this database through the login of `connection_env` (docs/DATA_ACCESS.md §1).
+database: VistaQ_Default_RHL
+description: 'RHL factory quality and production in VistaQ: end-of-line QC inspections and defects (DHU), daily
+  QC and defect summaries by line, style and buyer, sewing production plans and line session plans, cutting output
+  and bundles, manpower changes, corrective actions (CAPA) and root causes.'
+factory: RHL          # this server holds RHL data only (data/db_router.py: preferred for RHL questions, not for other factories)
+dialect: tsql
+connection_env: SQLSERVER_CONN_VISTAQ
+connection_database: VistaQ_Default_RHL
+keywords:
+- dhu
+- defects
+- qc
+- quality inspection
+- quality inspections
+- inspections
+- rhl vistaq
+- vistaq rhl
+- rhl quality
+- rhl qc
+- rhl defects
+- rhl dhu
+- rhl inspection
+- rhl inspections
+- qc summary
+- defect summary
+- end line
+- endline
+- end-line inspection
+- corrective action
+- corrective actions
+- capa
+- root cause
+- root causes
+- session plan
+- line session
+- cutting bundle
+- cutting bundles
+- manpower amendment
+- style change
+- aql
+- reject
+- rejects
+- rejection
+- rhl production plan
+- rhl cutting
+- defect
+- corrective
+- cutting
+- inspection
+hints:
+  - column: WorkspaceLineId
+    target: dbo.Workspace.Id
+    note: "the sewing line; its name is dbo.Workspace.WorkspaceName"
+    tables: [dbo.QCSummary, dbo.DefectSummary, dbo.QualityInspection, dbo.ProductionPlan]
+  - column: WorkspaceUnitId
+    target: dbo.Workspace.Id
+    note: "the unit; its name is dbo.Workspace.WorkspaceName"
+    tables: [dbo.QCSummary, dbo.DefectSummary, dbo.QualityInspection, dbo.ProductionPlan]
+  - column: BuyerId
+    target: dbo.Buyer.Id
+    note: "the buyer; its name is dbo.Buyer.BuyerName"
+    tables: [dbo.QCSummary, dbo.DefectSummary, dbo.ProductionPlan, dbo.Style]
+  - column: StyleId
+    target: dbo.Style.Id
+    note: "the style; dbo.Style.StyleNumber and StyleName"
+    tables: [dbo.QCSummary, dbo.DefectSummary, dbo.ProductionPlan]
+  - column: DefectId
+    target: dbo.Defect.Id
+    note: "the defect; its name is dbo.Defect.DefectName"
+    tables: [dbo.DefectSummary, dbo.QualityInspectionDefect]
+exclude_tables:
+- '*back'
+- '*back_*'
+- '*backup*'
+- '*_bak*'
+- '*bak_*'
+- '*$'
+- '*$'''
+- '*$_*'
+- '*_old*'
+- '*.tmp*'
+- '*.temp_*'
+- '*_temp'
+- '*_test*'
+- '*.test_*'
+- '*daytest'
+- '*delete*'
+- '*_mail_on_*'
+- '*_before_*'
+- '*_till*'
+- '*_[0-9]_*'
+- '*_[0-9][0-9]_*'
+- '*_[0-9][0-9][0-9][0-9]*'
+- '*.backfill_*'
+- '*.shadow_*'
+- '*.baseline_*'
+- '*._linechange_*'
+rules:
+- Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
+- Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
+  Monday.
+- 'This database has no rag.* views: query the tables listed for the question as schema.name and name the columns
+  you need (never SELECT *).'
+- Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
+- Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
+  doesn't have the data."
+- 'Every row here is RHL factory data (VistaQ at RHL). For QC quantities per day, line, style or buyer use
+  dbo.QCSummary (QCQty, InspectionDate, IsEndlinePassed); for defects use dbo.DefectSummary (DefectQty, CheckQty,
+  InspectionDefectDate, DefectId). They are already totalled per day and line.'
+- 'dbo.QualityInspection (88 million rows) and dbo.QualityInspectionDefect (6 million rows): only with a filter on one
+  day or a few days (InspectionDateOnly / InspectionDefectDateOnly), never over all dates.'
+views: []
