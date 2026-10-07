@@ -43,13 +43,18 @@ def test_grants_script_shape():
     for perm, _ in SERVER_PERMISSIONS:
         assert any(g.startswith(f"GRANT {perm}") and "TO [rag_reader]" in g for g in grants), perm
     assert not any(w in g for g in grants for w in ("CONTROL", "ALTER", "INSERT", "UPDATE", "DELETE", "IMPERSONATE"))
-    # one user per T-SQL database, DENYs sorted by object name, a database without discovery gets a warning
+    # one user per T-SQL database, DENYs sorted by object name, a database without discovery gets a warning;
+    # each database only if it exists on the server, each DENY only if its object/column exists, one per column
     assert sql.count("CREATE USER [rag_reader] FOR LOGIN [rag_reader]") == 2
-    prod = sql.split("USE [Production];")[1].split("\nGO\n")[0]
-    assert prod.count("DENY SELECT") == 2
+    assert "USE [Production]" not in sql
+    prod = sql.split("-- Production:")[1].split("\nGO\n")[0]
+    assert "IF DB_ID(N'Production') IS NULL" in prod and "EXEC [Production].[sys].[sp_executesql]" in prod
+    assert prod.count("DENY SELECT") == 3
+    assert "IF COL_LENGTH(N''[dbo].[Contact_Master]'', N''Phone'') IS NOT NULL" in prod
+    assert "IF OBJECT_ID(N''[HR].[Salary]'') IS NOT NULL DENY SELECT ON OBJECT::[HR].[Salary]" in prod
     assert prod.index("[dbo].[Contact_Master]") < prod.index("[HR].[Salary]")
     assert "2 sensitive columns" in prod and "1 sensitive objects" in prod
-    bsp = sql.split("USE [BitopiSplint];")[1].split("\nGO\n")[0]
+    bsp = sql.split("-- BitopiSplint:")[1].split("\nGO\n")[0]
     assert "DENY SELECT" not in bsp and "discover_schema.py --json BitopiSplint" in bsp
 
 
@@ -66,3 +71,16 @@ def test_rollback_drops_users_before_the_login_and_revokes_every_permission():
     for perm, _ in SERVER_PERMISSIONS:
         assert f"REVOKE {perm} FROM [rag_reader];" in sql
     assert PASSWORD_VAR not in sql
+
+
+def test_guarded_denies_and_database_wrapper():
+    from ragbot.data.grants import guarded_denies, in_database
+    assert guarded_denies(ORDERS, "rag_reader") == []
+    assert guarded_denies(CONTACT, "rag_link") == [
+        "IF COL_LENGTH(N'[dbo].[Contact_Master]', N'Phone') IS NOT NULL "
+        "DENY SELECT ON OBJECT::[dbo].[Contact_Master] ([Phone]) TO [rag_link];",
+        "IF COL_LENGTH(N'[dbo].[Contact_Master]', N'Email') IS NOT NULL "
+        "DENY SELECT ON OBJECT::[dbo].[Contact_Master] ([Email]) TO [rag_link];"]
+    block = "\n".join(in_database("Odd'Db", ["SELECT N'x';"]))
+    assert "IF DB_ID(N'Odd''Db') IS NULL" in block and "EXEC [Odd'Db].[sys].[sp_executesql]" in block
+    assert "SELECT N''x'';" in block and block.rstrip().endswith("GO")

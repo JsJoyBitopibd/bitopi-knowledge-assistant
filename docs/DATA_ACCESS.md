@@ -73,6 +73,18 @@ The live schema matches the dev one plus newer tables and columns. The discovere
 `config/catalog/discovered/` is still the dev server's, because the repo is public and the live schema was not
 written into it. Every curated view and fixed tool runs on the live server; one is slow there (PROGRESS.md S1).
 
+**Gateway on the dev server (prepared 2026-10-07, not set up).** The rag views can live on the dev server instead, in a
+database of their own (`RAG_LIVE`), and read the live server's tables through a linked server (`BITOPI_LIVE`).
+The assistant would then sign in to the dev server with `rag_reader`, which can read only the `rag` schema there, and
+nothing is created on the live server except `rag_link`. That login has SELECT on exactly the tables the views read,
+with their sensitive columns denied, and the linked server maps only `rag_reader` (and the DBA, for testing) to it.
+`python scripts/gen_gateway.py --live <host>` writes the scripts and the DBA request to the git-ignored
+`private/gateway/`. It never connects: `00` (live login), `01` (linked server), `02` (database and views), `03` (speed
+check: each fixed tool's query timed through the gateway and directly on live), and the rollbacks. A query across a
+linked server can pull whole tables over the network before filtering, so the speed check decides whether the
+assistant is pointed at the gateway. Pointing it there is a later code change: real views instead of `definition:`
+expansion, and a decision on raw-table questions.
+
 **One connection string per server, not per database (Phase J).** `rag_reader` reads every database
 on `192.168.10.6\MSSQLSERVER2019`, so a catalog for another database on that server reuses an existing
 variable and names its database: `connection_env: SQLSERVER_CONN_PRODUCTION` +

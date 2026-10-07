@@ -49,6 +49,37 @@ def deny_statements(table: Table, login: str) -> list[str]:
             f"TO {quote(login)};"]
 
 
+def nstr(text: str) -> str:
+    """A T-SQL N'…' literal, ' doubled."""
+    return "N'" + text.replace("'", "''") + "'"
+
+
+def guarded_denies(table: Table, login: str) -> list[str]:
+    """deny_statements(), but each one only if its object (and column) exists on the server it runs on — a
+    discovery from one server may name objects another server lacks — and one DENY per column, so a missing
+    column cannot cancel the DENY of the others."""
+    obj = qualified(table.name)
+    if table.sensitive:
+        return [f"IF OBJECT_ID({nstr(obj)}) IS NOT NULL DENY SELECT ON OBJECT::{obj} TO {quote(login)};"]
+    return [f"IF COL_LENGTH({nstr(obj)}, {nstr(c['name'])}) IS NOT NULL "
+            f"DENY SELECT ON OBJECT::{obj} ({quote(c['name'])}) TO {quote(login)};"
+            for c in table.columns if c.get("sensitive")]
+
+
+def in_database(database: str, statements: list[str]) -> list[str]:
+    """Run `statements` inside `database` only if it exists on this server; otherwise say it was skipped.
+    `USE [missing]` would not stop the statements after it from running in the previous database."""
+    body = "\n".join(statements)
+    return [
+        f"IF DB_ID({nstr(database)}) IS NULL",
+        f"    PRINT {nstr(database + ': not on this server, skipped')};",
+        "ELSE",
+        f"    EXEC {quote(database)}.[sys].[sp_executesql] {nstr(chr(10) + body + chr(10))};",
+        "GO",
+        "",
+    ]
+
+
 def sensitive_counts(cat: Catalog) -> tuple[int, int]:
     """(tables denied whole, sensitive columns denied inside other objects)."""
     whole = sum(1 for t in cat.tables if t.sensitive)
@@ -78,28 +109,30 @@ def render_grants(login: str, catalogs: dict[str, Catalog], *, now: Optional[dat
         "GO",
         "",
     ]
+    lines += [
+        "-- Each database below is changed only if it exists on this server, and each DENY only if its object",
+        "-- (and column) exists there: safe on any server that holds some of these databases.",
+        "",
+    ]
     for name, cat in catalogs.items():
         if cat.dialect != "tsql":
             continue
-        lines += [
-            f"USE {quote(name)};",
-            f"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'{login}')",
-            f"    CREATE USER {L} FOR LOGIN {L};   -- the principal the DENYs below attach to",
-        ]
+        stmts = [f"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = {nstr(login)})",
+                 f"    CREATE USER {L} FOR LOGIN {L};"]
         if not cat.tables:
             lines += [
-                f"-- No discovery for {name} (config/catalog/discovered/{name}.json missing), so no DENYs yet.",
+                f"-- {name}: no discovery (config/catalog/discovered/{name}.json missing), so no DENYs yet.",
                 f"-- Run `python scripts/discover_schema.py --json {name}` and regenerate before the first use.",
             ]
         else:
             whole, cols = sensitive_counts(cat)
             lines += [
-                f"-- {whole} sensitive objects denied whole; {cols} sensitive columns denied inside other objects",
-                f"-- (data/sensitive.py patterns, from config/catalog/discovered/{name}.json).",
+                f"-- {name}: {whole} sensitive objects denied whole; {cols} sensitive columns denied inside other",
+                f"-- objects (data/sensitive.py patterns, from config/catalog/discovered/{name}.json).",
             ]
             for t in sorted(cat.tables, key=lambda t: t.name.lower()):
-                lines += deny_statements(t, login)
-        lines += ["GO", ""]
+                stmts += guarded_denies(t, login)
+        lines += in_database(name, stmts)
     return "\n".join(lines) + "\n"
 
 
@@ -114,13 +147,8 @@ def render_rollback(login: str, catalogs: dict[str, Catalog]) -> str:
     for name, cat in catalogs.items():
         if cat.dialect != "tsql":
             continue
-        lines += [
-            f"USE {quote(name)};",
-            f"IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'{login}')",
-            f"    DROP USER {L};",
-            "GO",
-            "",
-        ]
+        lines += in_database(name, [f"IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = {nstr(login)})",
+                                    f"    DROP USER {L};"])
     lines += ["USE [master];"]
     lines += [f"REVOKE {p} FROM {L};" for p, _ in SERVER_PERMISSIONS]
     lines += [

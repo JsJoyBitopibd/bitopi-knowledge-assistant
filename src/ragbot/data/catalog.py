@@ -211,15 +211,17 @@ def catalog_stamp(folder: Path | None = None) -> tuple:
     return stamp
 
 
-def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
-    """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded, and not those with `enabled: false`.
+def load_catalogs(folder: Path | None = None, include_disabled: bool = False) -> dict[str, Catalog]:
+    """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded, and not those with `enabled: false`
+    unless `include_disabled` (scripts/gen_reader_grants.py: its DENYs must cover every known database).
     Definitions are validated.
 
     Cached on the folder's file mtimes: parsing the YAML and re-validating every definition with
     sqlglot used to run on every data question. Editing a catalog file invalidates the cache.
     """
     folder = folder or settings().path("catalog_dir")
-    return dict(_load_catalogs(folder, catalog_stamp(folder)))   # copy: callers must not mutate the cached mapping
+    # copy: callers must not mutate the cached mapping
+    return dict(_load_catalogs(folder, catalog_stamp(folder), include_disabled))
 
 
 def _load_discovered(folder: Path, database: str) -> list[Table]:
@@ -233,14 +235,14 @@ def _load_discovered(folder: Path, database: str) -> list[Table]:
 
 
 @lru_cache(maxsize=4)
-def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
+def _load_catalogs(folder: Path, _stamp: tuple, include_disabled: bool = False) -> dict[str, Catalog]:
     from .virtual import validate_definition  # lazy: avoids a cycle at import time
     cats: dict[str, Catalog] = {}
     for f in sorted(folder.glob("*.yaml")):
         if f.name.endswith(".example.yaml"):
             continue
         d: dict[str, Any] = yaml.safe_load(f.read_text(encoding="utf-8"))
-        if d.get("enabled", True) is False:
+        if d.get("enabled", True) is False and not include_disabled:
             continue        # kept for later, but not offered: e.g. the database is not on the server in use
         views: list[View] = []
         for v in d.get("views", []):

@@ -43,6 +43,13 @@ each phase is in `docs/ROADMAP.md`.
 - `index_schema.py` keeps the vectors of tables whose document is unchanged, so a new discovery embeds only new
   and changed tables (`--backfill` adds the per-table hashes to vector files built before).
 
+- **Gateway scripts** (`scripts/gen_gateway.py`): the DBA scripts for a read-only gateway on the dev server. A
+  linked server reads the live server, the rag views live in their own database over it, a narrow login is created on
+  live, a speed check runs through the gateway and directly, and rollbacks are included. The scripts are written to
+  `private/gateway/`; nothing connects.
+- `gen_reader_grants.py` output is safe on any server: each database only if it exists there, each DENY only if its
+  object or column exists (one DENY per column).
+
 ### Known issue
 - On the live server, "Which <factory> orders are behind schedule?" and the brief's "Behind schedule" rule time
   out (the order → file join is slow there; fine on dev). For the DBA: indexes or statistics on `dbo.FileRef`,

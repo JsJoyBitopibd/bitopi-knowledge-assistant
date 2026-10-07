@@ -22,7 +22,8 @@ def main() -> None:
     ap.add_argument("--login", default="rag_reader")
     ap.add_argument("--out", default="private", help="folder for the .sql files (git-ignored by default)")
     a = ap.parse_args()
-    cats = {name: cat for name, cat in load_catalogs().items() if cat.dialect == "tsql"}
+    # switched-off catalogs too: the DENYs protect a database wherever it exists (the script skips absent ones)
+    cats = {name: cat for name, cat in load_catalogs(include_disabled=True).items() if cat.dialect == "tsql"}
     if not cats:
         print("no T-SQL catalogs loaded under config/catalog/*.yaml"); raise SystemExit(1)
     out_dir = ROOT / a.out
