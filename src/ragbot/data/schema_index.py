@@ -121,6 +121,7 @@ class SchemaIndex:
     keyword: KeywordIndex
     vectors: Optional[np.ndarray] = None     # rows aligned with names, unit length
     name_words: list[list[str]] = field(default_factory=list)   # words of each name, for _name_scores
+    embedded: int = 0                        # build(embed=True): tables embedded this time (the rest reused)
 
     def __post_init__(self) -> None:
         if not self.name_words:
@@ -149,20 +150,58 @@ class SchemaIndex:
         return scored[0][0] if scored else 0.0
 
 
+def doc_sha(doc: str) -> str:
+    return hashlib.sha1(doc.encode("utf-8")).hexdigest()
+
+
 def build(cat: Catalog, embed: bool = True) -> SchemaIndex:
-    """Build the in-memory index; with embed=True also compute and save the vectors (slow: minutes)."""
+    """Build the in-memory index; with embed=True also compute and save the vectors. A table whose document is
+    unchanged since the saved vectors (same name, same text, same model; `doc_sha` in the file) keeps its vector,
+    so a new discovery re-embeds only new and changed tables instead of every table (minutes per database).
+    `idx.embedded` tells how many were embedded this time."""
     tables = cat.offered_tables
     names = [t.name for t in tables]
     docs = [table_document(t) for t in tables]
     idx = SchemaIndex(names, KeywordIndex(names, [_with_singulars(d) for d in docs]))
     if embed and docs:
         from ..embed import EMBED_MODEL, get_embedder
-        vecs = np.asarray(get_embedder().embed(docs), dtype=np.float32)
+        shas = [doc_sha(d) for d in docs]
         p = vectors_path(cat.database)
+        old: dict[tuple[str, str], np.ndarray] = {}
+        if p.exists():
+            z = np.load(p, allow_pickle=False)
+            if str(z["model"]) == EMBED_MODEL and "doc_sha" in z.files:
+                old = {(str(n), str(s)): v for n, s, v in zip(z["names"], z["doc_sha"], z["vectors"])}
+        todo = [i for i, key in enumerate(zip(names, shas)) if key not in old]
+        fresh = np.asarray(get_embedder().embed([docs[i] for i in todo]), dtype=np.float32) if todo else None
+        got = dict(zip(todo, fresh)) if fresh is not None else {}
+        vecs = np.stack([got[i] if i in got else old[(names[i], shas[i])] for i in range(len(docs))]).astype(np.float32)
         p.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(p, names=np.array(names), vectors=vecs, sha=json_sha(cat), model=EMBED_MODEL)
+        np.savez_compressed(p, names=np.array(names), vectors=vecs, sha=json_sha(cat), model=EMBED_MODEL,
+                            doc_sha=np.array(shas))
         idx.vectors = vecs
+        idx.embedded = len(todo)
     return idx
+
+
+def backfill_doc_sha(cat: Catalog) -> str:
+    """Add the per-table document hashes to a vector file saved before build() stored them, so the next build
+    reuses its vectors. Only for a file built from this exact discovered JSON and table list (otherwise the
+    hashes could not be trusted to describe the saved vectors)."""
+    p = vectors_path(cat.database)
+    if not p.exists():
+        return "no vector file"
+    z = np.load(p, allow_pickle=False)
+    if "doc_sha" in z.files:
+        return "already has document hashes"
+    if str(z["sha"]) != json_sha(cat):
+        return "built from another discovery: skipped"
+    tables = cat.offered_tables
+    if [str(n) for n in z["names"]] != [t.name for t in tables]:
+        return "table list differs: skipped"
+    shas = np.array([doc_sha(table_document(t)) for t in tables])
+    np.savez_compressed(p, names=z["names"], vectors=z["vectors"], sha=z["sha"], model=z["model"], doc_sha=shas)
+    return f"{len(shas)} document hashes added"
 
 
 _CACHE: dict[str, tuple[tuple, SchemaIndex]] = {}

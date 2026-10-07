@@ -212,7 +212,8 @@ def catalog_stamp(folder: Path | None = None) -> tuple:
 
 
 def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
-    """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded. Definitions are validated.
+    """{database name: Catalog}. Only *.yaml (not *.example.yaml) are loaded, and not those with `enabled: false`.
+    Definitions are validated.
 
     Cached on the folder's file mtimes: parsing the YAML and re-validating every definition with
     sqlglot used to run on every data question. Editing a catalog file invalidates the cache.
@@ -239,6 +240,8 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
         if f.name.endswith(".example.yaml"):
             continue
         d: dict[str, Any] = yaml.safe_load(f.read_text(encoding="utf-8"))
+        if d.get("enabled", True) is False:
+            continue        # kept for later, but not offered: e.g. the database is not on the server in use
         views: list[View] = []
         for v in d.get("views", []):
             defn = v.get("definition")

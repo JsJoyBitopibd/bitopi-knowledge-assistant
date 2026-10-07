@@ -3,7 +3,12 @@ discovered tier (config/catalog/discovered/<db>.json from scripts/discover_schem
 Embeds one short document per offered table with bge-m3 — minutes on CPU, once per discovery run.
 Without this file schema search still works, keyword-only.
 
+Tables whose document is unchanged keep their saved vectors, so after a new discovery only new and changed tables
+are embedded. A vector file saved before the per-table hashes existed gets them with --backfill (run it while the
+discovered JSON is still the one the vectors were built from).
+
 Usage: python scripts/index_schema.py [database ...]
+       python scripts/index_schema.py --backfill [database ...]   (add per-table hashes to existing vector files)
        python scripts/index_schema.py --try "how many suppliers do we have?"   (show the selection)
        python scripts/index_schema.py --check     (recall on tests/schema_cases.jsonl, hybrid vs keyword)
 """
@@ -20,9 +25,14 @@ def main() -> None:
     ap.add_argument("--try", dest="question", help="print the tables selected for this question and exit")
     ap.add_argument("--check", action="store_true", help="recall of the labelled cases in tests/schema_cases.jsonl")
     ap.add_argument("-k", type=int, default=6)
+    ap.add_argument("--backfill", action="store_true", help="add per-table hashes to existing vector files, no embedding")
     a = ap.parse_args()
     cats = load_catalogs()
     names = a.databases or [n for n, c in cats.items() if c.tables]
+    if a.backfill:
+        for n in names:
+            print(f"{n}: {si.backfill_doc_sha(cats[n])}")
+        return
     if a.check:
         check(cats, a.k)
         return
@@ -43,7 +53,8 @@ def main() -> None:
         cat = cats[n]
         t0 = time.perf_counter()
         idx = si.build(cat, embed=True)
-        print(f"{n}: {len(idx.names)} tables embedded in {time.perf_counter() - t0:.0f} s -> {si.vectors_path(n)}")
+        print(f"{n}: {len(idx.names)} tables, {idx.embedded} embedded and {len(idx.names) - idx.embedded} reused, "
+              f"in {time.perf_counter() - t0:.0f} s -> {si.vectors_path(n)}")
 
 
 def check(cats, k: int) -> None:

@@ -20,7 +20,7 @@ watch:
       SELECT Factory, MAX(ProductionDate) AS day, SUM(InspectedPcs) AS inspected, SUM(Defects) AS defects,
              CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS dhu
       FROM rag.vw_LineDailyOutput
-      WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+      WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE ProductionDate < CAST(GETDATE() AS date))
       GROUP BY Factory
       HAVING SUM(InspectedPcs) > 0
     value: dhu

@@ -22,7 +22,7 @@ watch:
       FROM (
         SELECT Factory, LineNumber, ProductionDate, SUM(DayTarget) AS t, SUM(OutputPcs) AS o
         FROM rag.vw_LineDailyOutput
-        WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+        WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE ProductionDate < CAST(GETDATE() AS date))
         GROUP BY Factory, LineNumber, ProductionDate
         HAVING SUM(DayTarget) > 0
       ) AS x

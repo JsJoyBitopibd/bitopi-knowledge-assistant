@@ -62,6 +62,17 @@ GRANT SELECT ON rag.* TO 'rag_reader'@'%';
 Connection strings go in `.env` (`SQLSERVER_CONN_<DB>`, `MYSQL_CONN`). Connections are opened with
 a 10-second command timeout and read-uncommitted / read-committed-snapshot isolation.
 
+**Live server (since 2026-10-07): `172.16.7.14`.** `192.168.10.6\MSSQLSERVER2019`, used until then, is the
+dev server. The owner sets the two connection lines (`SQLSERVER_CONN_BITOPISPLINT`, `SQLSERVER_CONN_PRODUCTION`)
+with `pwsh -File scripts/set_db_connection.ps1 -Server <host> -User <login>`, which asks for the password at a
+hidden prompt. The login in use is `mis-joy`. It is a personal account, not a dedicated read-only login, so
+creating `rag_reader` on the live server (`private/rag_reader_grants.sql`) is still open. Of the 17 catalogued
+databases, BIMOB_MVC_TAL, DiskManager, HWATT and erp are not on the live server, and `mis-joy` may not open
+Hrms5Misami. Those five catalogs have `enabled: false` (the file stays; set `true` to offer the database again).
+The live schema matches the dev one plus newer tables and columns. The discovered JSON in
+`config/catalog/discovered/` is still the dev server's, because the repo is public and the live schema was not
+written into it. Every curated view and fixed tool runs on the live server; one is slow there (PROGRESS.md S1).
+
 **One connection string per server, not per database (Phase J).** `rag_reader` reads every database
 on `192.168.10.6\MSSQLSERVER2019`, so a catalog for another database on that server reuses an existing
 variable and names its database: `connection_env: SQLSERVER_CONN_PRODUCTION` +
@@ -167,7 +178,7 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
 
 ## 6. Virtual views (this build, until a DBA runs the DDL above)
 
-No DDL has been run against `192.168.10.6\MSSQLSERVER2019` — writes to the server are strictly
+No DDL has been run against `192.168.10.6\MSSQLSERVER2019` (dev) or `172.16.7.14` (live) — writes to the server are strictly
 prohibited for this build. `config/catalog/bitopisplint.yaml` and `config/catalog/production.yaml`
 therefore give every view an extra `definition:` field: a plain T-SQL `SELECT` over the real tables
 (`dbo.ExportOrder`, `dbo.FileRef`, `PPM.PPMMeetings`, …) that the model never sees — only the

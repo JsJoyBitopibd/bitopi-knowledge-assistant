@@ -1,3 +1,7 @@
+# Switched off 2026-10-07: the database is on the live server 172.16.7.14, but the app's login (mis-joy) is not
+# allowed to open it. Set enabled: true once the DBA grants read access.
+enabled: false
+
 # Hrms5Misami: no curated views yet — answered through schema RAG over the discovered tables
 # (config/catalog/discovered/Hrms5Misami.json: 739 tables, discovered 2026-10-04).
 # Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
