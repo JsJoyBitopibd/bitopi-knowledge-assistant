@@ -33,7 +33,8 @@ def offline(cats) -> int:
     for tool in tools:
         # a pattern that fails to compile breaks match_fixed_tool() for every question, not just
         # this tool's — re.search() is called unconditionally down the tool list.
-        for key, pats in (("match", [tool.get("match")]), ("requires", tool.get("requires", []))):
+        for key, pats in (("match", [tool.get("match")]), ("requires", tool.get("requires", [])),
+                          ("unless", [tool.get("unless")])):
             for pat in pats:
                 if not pat:
                     continue
@@ -77,9 +78,11 @@ def live(cats) -> int:
     problems = 0
     for name, cat in cats.items():
         for v in cat.views:
-            sql = f"SELECT TOP (1) * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q" \
+            # `WHERE 1 = 0`: the server compiles the view and returns its columns without reading a row. TOP (1) alone
+            # made an aggregating view total every row first (VistaQ: 88 million inspections) on a live server.
+            sql = f"SELECT TOP (1) * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q WHERE 1 = 0" \
                 if cat.dialect == "tsql" else \
-                f"SELECT * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q LIMIT 1"
+                f"SELECT * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q WHERE 1 = 0 LIMIT 1"
             try:
                 cols, rows = run(cat.engine, sql, {}, conn_env=cat.connection_env, tool="check_catalog",
                                  database=cat.connection_database)

@@ -11,10 +11,28 @@ each phase is in `docs/ROADMAP.md`.
 ### Added
 - **RHL's VistaQ server** as two catalogs, `VistaQ_Default_RHL` (QC inspections and defects, daily QC and defect
   summaries, production and session plans, cutting, corrective actions) and `VistaQ_Logging_RHL` (application logs),
-  on their own connection line `SQLSERVER_CONN_VISTAQ`. Discovery, schema vectors, name hints for line, unit, buyer,
-  style and defect IDs, and rules that send totals to the summary tables.
+  on their own connection line `SQLSERVER_CONN_VISTAQ`. Discovery, schema vectors, and name hints for line, unit,
+  buyer, style and defect IDs. The server holds all three factories, so neither catalog declares `factory:`.
 - A catalog can declare `factory:` (one factory's data only). The router then prefers it when a question names that
-  factory and keeps it out when the question names another one.
+  factory and keeps it out when the question names another one. No catalog uses it today.
+- **Live line quality from VistaQ, answered in under a second.** Six views over the raw inspection tables
+  (`rag.vw_LineDayQuality`, `vw_QCDefect`, `vw_QCStageDay`, `vw_CorrectiveAction`, `vw_CuttingDaily`, `vw_QCTarget`;
+  the factory comes from the line → unit → factory tree) and 15 fixed tools for the questions QC and production staff
+  ask: QC summary, DHU, defect summary, lines above the DHU target, lines by DHU or end-line output, rejects, defects
+  by buyer or style, results by QC stage, corrective actions, cutting output. Each takes a period (today by default,
+  yesterday, this or last week or month, last N days) and an optional factory. Measured live on 7 Oct 2026: 0.05–0.55 s
+  for a day or a week, about 3 s for a month, the same for a user limited to one factory. DHU matches the value
+  VistaQ stores on its corrective actions. The list is in `docs/vistaq_questions.md`. `dbo.DefectSummary` and
+  `dbo.QCSummary` are left out: the job that fills them runs days behind.
+- **Not-found replies say something useful.** After "System doesn't have the data." comes one plain sentence for
+  staff (`agent/not_found.py`): what was checked and for which period when a query came back empty ("I checked VistaQ
+  for today and found no matching records…"), else where that kind of information lives (each agent's `where:` in
+  `config/agents/*.yaml`), never a view or table name. Under it, "Questions I can answer": the same question over a
+  wider period when a period was empty, then example questions close to the question, none naming another factory
+  or one particular record. The model's own not-found sentence follows the same rule (prompts v11).
+- Quality watch rules on VistaQ: DHU today and reject rate today per factory (amber at VistaQ's own targets, 3.85
+  and 1 %), replacing the DHU of the stale daily line record.
+- Golden cases 70–79 (VistaQ questions, the "toady" typo, an AQL question that must be not-found).
 - `scripts/set_db_connection.ps1` sets the connection lines in `.env` from a hidden password prompt. `-Variable` and
   `-Database` write one extra line for a database on another server.
 - **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
@@ -42,6 +60,23 @@ each phase is in `docs/ROADMAP.md`.
   `…-10`), and blank cells always go last. A templated answer's 25-row preview is drawn with all the rows its query returned
   (up to 200), so sorting covers every row. The sorting runs in the browser (`ui/sort_table.js`), with no query and no
   model call. The Sources rail now moves under the thread when the window is too narrow for both.
+- `dhu_by_line` and `dhu_by_line_by_factory` read VistaQ (live, today by default) instead of the daily line record
+  that stopped on 20 Sep; golden cases 68–69 follow. The Quality agent reads VistaQ first, the Production agent
+  gains VistaQ's end-line and cutting output, and both charters say how VistaQ counts (prompts v11).
+- Date periods: "last week", "last month", and the typo "toady" (read as today, shown as "today").
+- **Faster SQL generation**: `llm.max_tokens_sql` 1536 → 4096. Gemini spends hidden thinking tokens before it writes
+  the SQL; at 1536, a third of the calls stopped at the limit and were retried, costing about 3 s each.
+- **No slow first question after a restart**: the warm-up runs the embedder and reranker once and creates the model
+  clients. The embedder's first run had cost the first model-written question about 12 s (its data step went from
+  18.5 s to 6.5 s). The admin timings now show `data.embed` and `data.schema`.
+- Fixed tools can declare `unless:`; the VistaQ tools use it so a question naming a QC stage, line, unit, PO, style
+  or a buyer goes to model-written SQL that applies the filter, instead of a fixed answer that ignores it ("…at Waist
+  QC yesterday" had been answered over every stage).
+- `scripts/check_catalog.py --live` checks a view with `WHERE 1 = 0`, so it no longer totals an aggregating view's
+  88 million rows on a live server.
+- Wording: "Found N matching rows" instead of "N row(s) found"; the not-found note under an answer points to the
+  suggested questions; the home "Try asking" list, the input placeholder and the greeting reply mention line
+  quality.
 
 ## [1.12.0] — 2026-10-06 — Phase L: watcher and morning brief
 

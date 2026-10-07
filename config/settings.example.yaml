@@ -70,7 +70,7 @@ llm:
   max_tokens_answer: 2048      # Gemini counts thinking tokens against this budget
   max_tokens_rewrite: 256
   max_tokens_route: 64
-  max_tokens_sql: 1536
+  max_tokens_sql: 4096         # Gemini thinks before writing SQL; at 1536 a third of the calls hit the limit and retried (+3 s)
   max_chunks_to_llm: 8
 
 answer:
@@ -84,9 +84,10 @@ answer:
 ui:
   title: "Bitopi Knowledge Assistant · pilot"
   suggestions:
-    - "What is the PCD approval SOP?"
+    - "Show me the QC summary today"
+    - "Which lines are above the DHU target today?"
     - "Which export orders ship this month?"
-    - "How many Kaspersky licences does the Group have?"
+    - "What is the PCD approval SOP?"
     - "What is the password change policy?"
   utc_offset_hours: 6             # factory time for the greeting (Bangladesh, no daylight saving)
 

@@ -114,6 +114,11 @@ class Catalog:
     # A database that holds one factory's data only (e.g. RHL's own VistaQ server): the router prefers it when a
     # question names that factory and keeps it out when the question names another one (data/db_router.py).
     factory: str | None = None
+    label: str = ""                  # the name users know the system by ("VistaQ"), for plain-language replies
+
+    @property
+    def display_name(self) -> str:
+        return self.label or self.database
 
     def hints_for(self, table: str) -> list[Hint]:
         low = table.lower()
@@ -266,5 +271,6 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                                       tables=_load_discovered(folder, d["database"]),
                                       exclude_tables=d.get("exclude_tables", []), hints=hints,
                                       connection_database=d.get("connection_database") or None,
-                                      factory=str(d["factory"]).strip().upper() if d.get("factory") else None)
+                                      factory=str(d["factory"]).strip().upper() if d.get("factory") else None,
+                                      label=str(d.get("label") or "").strip())
     return cats

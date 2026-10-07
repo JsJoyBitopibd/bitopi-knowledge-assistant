@@ -63,12 +63,17 @@ def _date_window(text: str) -> tuple[date, date]:
         return today - timedelta(days=1), today
     if "tomorrow" in t:
         return today + timedelta(days=1), today + timedelta(days=2)
-    if "today" in t:
+    if "today" in t or "toady" in t:          # a typo staff really type ("defect summary toady")
         return today, today + timedelta(days=1)
     if "this week" in t:
         return monday, monday + timedelta(days=7)
     if "next week" in t:
         return monday + timedelta(days=7), monday + timedelta(days=14)
+    if "last week" in t:
+        return monday - timedelta(days=7), monday
+    if "last month" in t:
+        start = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        return start, today.replace(day=1)
     if "this month" in t:
         start = today.replace(day=1)
         nxt = (start.replace(month=start.month + 1) if start.month < 12 else start.replace(year=start.year + 1, month=1))
@@ -96,6 +101,8 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             continue
         if any(not re.search(r, question) for r in tool.get("requires", [])):
             continue
+        if tool.get("unless") and re.search(tool["unless"], question):
+            continue      # a qualifier the tool's SQL cannot apply (a stage, a line, a PO …): the model writes it
         params: dict[str, Any] = {}
         for name, spec in tool.get("params", {}).items():
             groups = spec.get("from_group", [])
@@ -107,7 +114,8 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
                 break
             if spec.get("type") == "date_window":
                 params["from"], params["to"] = _date_window(raw)
-                params[name] = raw.lower()   # the phrase ("next week"), for templated answers; not in the SQL
+                # the phrase ("next week"), for templated answers; not in the SQL
+                params[name] = re.sub(r"\btoady\b", "today", raw.lower())
                 continue
             if spec.get("type") == "int":
                 raw = int(raw)
@@ -304,7 +312,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
         for name, c in cats.items())
     from .schema_index import join_hints
     # raw tables are not offered to a user limited to some factories (see _guard_for)
-    selected = _schema_selection(question, cats, qvec) if scope.all_factories else {}
+    with trace.span("data.schema"):
+        selected = _schema_selection(question, cats, qvec) if scope.all_factories else {}
     from .schema_usage import log_selection
     for name, sel in selected.items():
         log_selection(name, sel, question, user)       # which tables to sample (G2)
@@ -396,7 +405,8 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
                 result.agent = a.name if a else ""
                 return [result]
         agent = pick_agent(question)
-        qvec = _query_vector(question)
+        with trace.span("data.embed"):
+            qvec = _query_vector(question)
         with trace.span("data.pick"):
             picked = pick_catalogs(question, cats, qvec)
             if agent is not None:

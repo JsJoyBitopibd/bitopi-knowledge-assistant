@@ -38,7 +38,7 @@ _SIGN_IN_ERRORS = {
     "locked": "Too many failed attempts. Wait a few minutes and try again.",
     "unavailable": "The sign-in service cannot be reached. Try again, or tell IT.",
 }
-_PLACEHOLDER = "Ask about export orders, PCDs, PPM meetings, SOPs, IT policies…"
+_PLACEHOLDER = "Ask about export orders, PCDs, line quality and DHU, SOPs, IT policies…"
 
 
 def _sign_in_form() -> None:
@@ -77,10 +77,19 @@ def _warm() -> bool:
     from ragbot.retrieve.keyword import get_keyword_index
     from ragbot.store import get_store
     from ragbot.data.catalog import load_catalogs
-    get_embedder()
-    get_reranker()
+    # one tiny run each: a model's first inference also allocates its buffers and thread pools, which would
+    # otherwise land on the first user's question after a restart
+    get_embedder().embed(["warm up"])
+    rr = get_reranker()
+    if rr is not None:
+        rr.score("warm up", ["warm up"])
     get_keyword_index()
     get_store()
+    try:
+        from ragbot.llm import get_chat, get_small_chat
+        get_small_chat(); get_chat()          # the provider SDK's import cost ~1 s on the first routed question
+    except Exception:
+        pass  # a missing key surfaces as a friendly error on the first question, as before
     try:
         from ragbot.data.schema_index import get_index
         for cat in load_catalogs().values():
@@ -418,7 +427,9 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
     refs, results = t.get("refs") or [], t.get("results") or []
     ui.result_tables(refs, results, t["text"])
     if t.get("not_found"):
-        st.caption("No source in the system covers this question.")
+        st.caption("Try one of the questions below, or add an order number, factory or date to your question."
+                   if t.get("follow_ups") else
+                   "Adding an order number, factory or date to your question, or asking it another way, often helps.")
     with st.container(horizontal=True, key=f"actions_{cid}_{i}", vertical_alignment="center"):
         with st.popover("Copy", type="tertiary", icon=":material/content_copy:"):
             st.code(t["text"], language=None, wrap_lines=True)
@@ -443,7 +454,8 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
                    + (f" · request {a.request_id}" if a.request_id else "")
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
     if latest:
-        ui.follow_ups(t.get("follow_ups") or [], f"{cid}_{i}", ask)
+        ui.follow_ups(t.get("follow_ups") or [], f"{cid}_{i}", ask,
+                      label="Questions I can answer" if t.get("not_found") else "Follow up")
 
 
 def conversation_head(head) -> None:

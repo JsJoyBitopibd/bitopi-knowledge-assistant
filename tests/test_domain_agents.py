@@ -80,6 +80,16 @@ def test_single_day_windows():
     assert tools._date_window("today") == (today, today + timedelta(days=1))
     assert tools._date_window("yesterday") == (today - timedelta(days=1), today)
     assert tools._date_window("tomorrow") == (today + timedelta(days=1), today + timedelta(days=2))
+    assert tools._date_window("toady") == (today, today + timedelta(days=1))      # the typo staff type
+
+
+def test_last_week_and_last_month():
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    assert tools._date_window("last week") == (monday - timedelta(days=7), monday)
+    first = today.replace(day=1)
+    start, end = tools._date_window("last month")
+    assert end == first and start.day == 1 and start < end and (end - start).days in (28, 29, 30, 31)
 
 
 def test_default_window_and_today_param():

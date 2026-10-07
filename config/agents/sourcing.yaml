@@ -7,6 +7,8 @@ catalogs: [BitopiSplint, Inventory]
 keywords: [fabric, fabrics, trims, accessories, supplier, suppliers, purchase order, purchase orders, grn,
            goods receipt, goods received, in-house, inhouse, material, materials, yarn]
 charter: agents/sourcing
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'Sourcing data I can read is the ERP''s purchase orders and goods receipts, and the receipts on this server are not current; the store or the sourcing team has today''s position.'
 status: >-
   Stage-1 tools wait for current receipt data: goods receipts (GRN) on this server stop on 22 Aug 2026, and the
   order files carry planned in-house dates only. "What fabric has not arrived?" cannot be answered correctly yet.

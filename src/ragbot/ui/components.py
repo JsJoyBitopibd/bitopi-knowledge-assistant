@@ -173,11 +173,12 @@ def csv_buttons(refs: Sequence[Any], results: Sequence[Any], key: str) -> None:
                                type="tertiary")
 
 
-def follow_ups(suggestions: Sequence[str], key: str, ask: Callable[[str], None]) -> None:
-    """G3: next questions under the latest fixed-tool answer; a click asks it like a suggestion."""
+def follow_ups(suggestions: Sequence[str], key: str, ask: Callable[[str], None], label: str = "Follow up") -> None:
+    """G3: next questions under the latest fixed-tool answer (or, under a not-found reply, questions that do
+    answer: agent/not_found.py); a click asks it like a suggestion."""
     if not suggestions:
         return
-    st.html('<div class="ka-followup-label">Follow up</div>')
+    st.html(f'<div class="ka-followup-label">{view.esc(label)}</div>')
     with st.container(horizontal=True, key=f"fu_{key}"):
         for j, sug in enumerate(suggestions):
             st.button(sug, key=f"fub_{key}_{j}", on_click=ask, args=(sug,))

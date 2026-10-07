@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Iterator, Optional
 
 from .. import trace
+from . import not_found
 from ..auth.models import Scope
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
@@ -172,9 +173,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             chunks = retrieve(q, where=where, scope=scope)[:top]
 
     if not chunks and not any(x.rows for x in results):
+        # one plain sentence after the fixed line (agent/not_found.py): what was checked, or where else to look
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
-                               else "No document or database view in the system covers this question.")
+                               else not_found.empty(results) or not_found.general(q))
         out.not_found = True
+        if not denied:
+            out.follow_ups = not_found.suggestions(q, results)
         yield Final(_log(out, user, scope)); return
 
     # A single data result is written from a template, no model call: fixed tools (C7) and, unless
@@ -207,8 +211,10 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             out = retry
 
     if out.not_found and not out.text:
-        out.text = nf + " The retrieved sources did not support a verifiable answer."
+        out.text = nf + " " + not_found.unverified()
         _log_verify_failure(question, q, out.warnings)
+    if out.not_found and not out.follow_ups and not out.error_kind:
+        out.follow_ups = not_found.suggestions(q, results)
     # Cache only verified documents answers: database rows go stale in minutes (they have their own
     # short cache in data/cache.py) and a not-found may become answerable after the next ingest.
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:

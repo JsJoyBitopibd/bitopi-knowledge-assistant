@@ -5,7 +5,7 @@ Writing that as prose costs an LLM call and invites the model to get it wrong â€
 "System doesn't have the data." to a count of 0 and to a 200-row list (docs/PROGRESS.md). Instead:
 - scalar  -> the tool's `answer:` template from config/fixed_tools.yaml (e.g. "{factory} has {value}
              PPM meeting(s) {window}"), or "<Column>: <value>", then [D1];
-- rows    -> the tool's `answer_list:` lead (or "N row(s) found") + [D1] + a Markdown table of the
+- rows    -> the tool's `answer_list:` lead (or "Found N matching rows") + [D1] + a Markdown table of the
              first `answer.template_rows` rows.
 The result still goes through citations.verify() like any model answer; if it fails, the caller
 falls back to the model. Only the first-row count and values that are in the rows (or the query's
@@ -86,7 +86,8 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
     n = len(r.rows)
     shown = int(settings().get("answer.template_rows", 25))
     lead = _fill(tool["answer_list"], r, n=n) if tool.get("answer_list") else None
-    head = f"{lead or f'{n} row(s) found'} [D1]:"
+    found = f"Found {n} matching row" + ("" if n == 1 else "s")
+    head = f"{lead or found} [D1]:"
     table = ["| " + " | ".join(r.columns) + " |", "|" + "---|" * len(r.columns)]
     table += ["| " + " | ".join(fmt(v) for v in row) + " |" for row in r.rows[:shown]]
     tail = f"\n\nOnly the first rows are shown here; the query returned {n} in total." if n > shown else ""

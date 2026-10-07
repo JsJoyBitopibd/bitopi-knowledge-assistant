@@ -5,9 +5,9 @@
 # (src/ragbot/data/db_router.py). The last 6 were derived from table names.
 # `connection_database:` opens this database through the login of `connection_env` (docs/DATA_ACCESS.md §1).
 database: VistaQ_Logging_RHL
-description: 'Technical logs of the RHL VistaQ application: background job runs, user access log and audit trail,
+label: VistaQ logs
+description: 'Technical logs of the VistaQ application (RHL, TAL, BGL): background job runs, user access log and audit trail,
   error log.'
-factory: RHL          # this server holds RHL data only (data/db_router.py: preferred for RHL questions, not for other factories)
 dialect: tsql
 connection_env: SQLSERVER_CONN_VISTAQ
 connection_database: VistaQ_Logging_RHL

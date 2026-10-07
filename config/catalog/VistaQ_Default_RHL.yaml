@@ -1,66 +1,68 @@
-# VistaQ_Default_RHL: no curated views yet — answered through schema RAG over the discovered tables
-# (config/catalog/discovered/VistaQ_Default_RHL.json: 91 tables, discovered 2026-10-07).
-# Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
-# words staff use for this data — the router scores them to pick the database for a question
-# (src/ragbot/data/db_router.py). The last 11 were derived from table names.
-# `connection_database:` opens this database through the login of `connection_env` (docs/DATA_ACCESS.md §1).
+# VistaQ_Default_RHL: the VistaQ quality and production system on 192.168.10.59 (server VISTAQ). Despite its name it
+# holds all three factories (RHL, TAL, BGL): factory = line -> unit (ParentId) -> factory (ParentId) in dbo.Workspace.
+# Discovered 2026-10-07 (config/catalog/discovered/VistaQ_Default_RHL.json: 91 tables). The rag.* views below are
+# virtual (`definition:`, data/virtual.py), checked on live data on 2026-10-07: every one answers a one-day question
+# in under a second because the date filter reaches the date-only indexes (InspectionDateOnly,
+# InspectionDefectDateOnly). Meaning of the codes, verified against VistaQ's own figures:
+#   InspectionType 1 = passed first time, 2 = defective (sent for repair; every defect row hangs on one),
+#   3 = re-check after repair, 4 = rejected (matches dbo.QualityInspectionReject).
+#   DHU = defects / pieces checked first time (types 1, 2, 4, all QC stages) x 100 — reproduces the DHU VistaQ stores
+#   on dbo.CorrectiveAction (e.g. 81 / 2,666 = 3.04).
+#   QC stages: Front/Back QC, Waist QC, Station-03, Output QC (end of line); end-line output = IsEndlinePassed.
+# dbo.DefectSummary / dbo.QCSummary are filled by a job that runs behind (29 Sep / 5 Oct on 7 Oct 2026): not used.
+# Factory is computed after the joins on purpose (MAX(...) after GROUP BY line, or CASE WHEN l.Id = <line id>):
+# a plain f.ShortName lets SQL Server push "Factory = 'TAL'" (a fixed tool, a user's scope, model-written SQL) into
+# dbo.Workspace and read every inspection of that factory's lines before the date filter. Measured 7 Oct 2026, one
+# factory for today: 4-6 s -> 0.2-0.3 s (line quality), 1.4-2 s -> 0.2 s (defects), same totals.
 database: VistaQ_Default_RHL
-description: 'RHL factory quality and production in VistaQ: end-of-line QC inspections and defects (DHU), daily
-  QC and defect summaries by line, style and buyer, sewing production plans and line session plans, cutting output
-  and bundles, manpower changes, corrective actions (CAPA) and root causes.'
-factory: RHL          # this server holds RHL data only (data/db_router.py: preferred for RHL questions, not for other factories)
+label: VistaQ
+description: 'VistaQ quality and production for RHL, TAL and BGL, live: pieces checked, passed, defective and
+  rejected per sewing line and QC stage, every defect found (type, stage, buyer, style, PO), DHU, reject % and
+  first-pass %, end-line output, corrective actions (CAPA) and daily cutting output.'
 dialect: tsql
 connection_env: SQLSERVER_CONN_VISTAQ
 connection_database: VistaQ_Default_RHL
 keywords:
+- vistaq
+- vista q
 - dhu
 - defects
+- defect summary
+- defect type
+- defect types
+- top defects
 - qc
+- qc summary
+- quality summary
 - quality inspection
 - quality inspections
 - inspections
-- rhl vistaq
-- vistaq rhl
-- rhl quality
-- rhl qc
-- rhl defects
-- rhl dhu
-- rhl inspection
-- rhl inspections
-- qc summary
-- defect summary
 - end line
 - endline
-- end-line inspection
+- end-line
+- end line output
+- line output
+- first pass
+- ftp
+- reject
+- rejects
+- rejection
+- reject rate
+- alter
+- alteration
+- repair
 - corrective action
 - corrective actions
 - capa
 - root cause
-- root causes
-- session plan
-- line session
-- cutting bundle
-- cutting bundles
-- manpower amendment
-- style change
-- aql
-- reject
-- rejects
-- rejection
-- rhl production plan
-- rhl cutting
+- cutting output
+- cut quantity
 - defect
-- corrective
-- cutting
 - inspection
 hints:
   - column: WorkspaceLineId
     target: dbo.Workspace.Id
-    note: "the sewing line; its name is dbo.Workspace.WorkspaceName"
-    tables: [dbo.QCSummary, dbo.DefectSummary, dbo.QualityInspection, dbo.ProductionPlan]
-  - column: WorkspaceUnitId
-    target: dbo.Workspace.Id
-    note: "the unit; its name is dbo.Workspace.WorkspaceName"
+    note: "the sewing line; its name is dbo.Workspace.WorkspaceName (unit = its ParentId, factory = the unit's ParentId)"
     tables: [dbo.QCSummary, dbo.DefectSummary, dbo.QualityInspection, dbo.ProductionPlan]
   - column: BuyerId
     target: dbo.Buyer.Id
@@ -101,20 +103,254 @@ exclude_tables:
 - '*.shadow_*'
 - '*.baseline_*'
 - '*._linechange_*'
+- 'dbo.QCSummary'
+- 'dbo.DefectSummary'
 rules:
 - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
-- Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
-  Monday.
-- 'This database has no rag.* views: query the tables listed for the question as schema.name and name the columns
-  you need (never SELECT *).'
+- Today is {today}. "This week" = Monday of this week to next Monday; "last week" = the Monday before to this Monday.
+- 'Use the rag views: rag.vw_LineDayQuality (per factory, line and day: Checked, Passed, DefectivePcs, Rejected,
+  Defects, DHU, RejectPct, FirstPassPct, EndlineOutput), rag.vw_QCDefect (one row per defect found),
+  rag.vw_QCStageDay (per QC stage), rag.vw_CorrectiveAction, rag.vw_CuttingDaily, rag.vw_QCTarget. Always filter on
+  the view''s date column.'
+- 'Over several lines or days, recompute ratios from the sums: DHU = 100.0 * SUM(Defects) / SUM(Checked);
+  RejectPct = 100.0 * SUM(Rejected) / SUM(Checked); FirstPassPct = 100.0 * SUM(Passed) / SUM(Checked). Never average
+  the DHU column.'
+- A line is named by Factory and Line together (line numbers are per factory).
 - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
 - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
   doesn't have the data."
-- Every row here is RHL factory data (VistaQ at RHL).
-- 'Defects, up to date: dbo.QualityInspectionDefect has one row per defect found (InspectionDefectDateOnly; DefectId ->
-  dbo.Defect.DefectName; QualityInspectionId -> dbo.QualityInspection.Id, whose WorkspaceLineId -> dbo.Workspace is the
-  line). Checked pieces: dbo.QualityInspection, SUM(Quantity) by InspectionDateOnly. Use these two for today, a day, a
-  week or a month, always filtered on that date column (they hold 6 and 88 million rows).'
-- 'dbo.DefectSummary and dbo.QCSummary are daily totals written by a job that runs behind (they can miss the last days
-  or weeks): never use them for today or recent days; only for periods longer than a month.'
-views: []
+views:
+  - name: rag.vw_LineDayQuality
+    scope_column: Factory
+    grain: one row per factory, sewing line and inspection day (all QC stages together)
+    description: >
+      Sewing-line quality per day from VistaQ, live: pieces checked first time (passed + defective + rejected),
+      passed first time, defective pieces, rejected pieces, defects found, end-line output, and DHU, reject % and
+      first-pass % for that line and day.
+    key_columns: [Factory, Line, InspectionDate]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      InspectionDate: inspection day
+      Checked: pieces checked the first time (passed + defective + rejected)
+      Passed: pieces passed the first time
+      DefectivePcs: pieces found defective and sent for repair
+      Rejected: pieces rejected
+      EndlineOutput: pieces passed at end-line (Output QC) — the line's output
+      Defects: defects found
+      DHU: defects per hundred pieces checked
+      RejectPct: rejected pieces per hundred checked
+      FirstPassPct: pieces passed first time per hundred checked
+    definition: |
+      SELECT
+        MAX(f.ShortName) AS Factory, MAX(u.WorkspaceName) AS Unit, MAX(l.WorkspaceName) AS Line, x.InspectionDate,
+        SUM(x.Checked) AS Checked, SUM(x.Passed) AS Passed, SUM(x.DefectivePcs) AS DefectivePcs,
+        SUM(x.Rejected) AS Rejected, SUM(x.Output) AS EndlineOutput, SUM(x.Defects) AS Defects,
+        CAST(100.0 * SUM(x.Defects) / NULLIF(SUM(x.Checked), 0) AS decimal(6,2)) AS DHU,
+        CAST(100.0 * SUM(x.Rejected) / NULLIF(SUM(x.Checked), 0) AS decimal(6,2)) AS RejectPct,
+        CAST(100.0 * SUM(x.Passed) / NULLIF(SUM(x.Checked), 0) AS decimal(6,2)) AS FirstPassPct
+      FROM (
+        SELECT qi.WorkspaceLineId, qi.InspectionDateOnly AS InspectionDate,
+          CASE WHEN qi.InspectionType IN (1, 2, 4) THEN qi.Quantity ELSE 0 END AS Checked,
+          CASE WHEN qi.InspectionType = 1 THEN qi.Quantity ELSE 0 END AS Passed,
+          CASE WHEN qi.InspectionType = 2 THEN qi.Quantity ELSE 0 END AS DefectivePcs,
+          CASE WHEN qi.InspectionType = 4 THEN qi.Quantity ELSE 0 END AS Rejected,
+          CASE WHEN qi.IsEndlinePassed = 1 THEN qi.Quantity ELSE 0 END AS Output,
+          0 AS Defects
+        FROM dbo.QualityInspection qi
+        UNION ALL
+        SELECT qi.WorkspaceLineId, d.InspectionDefectDateOnly, 0, 0, 0, 0, 0, 1
+        FROM dbo.QualityInspectionDefect d
+        JOIN dbo.QualityInspection qi ON qi.Id = d.QualityInspectionId
+      ) AS x
+      LEFT JOIN dbo.Workspace l ON l.Id = x.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+      GROUP BY x.WorkspaceLineId, x.InspectionDate
+
+  - name: rag.vw_QCDefect
+    scope_column: Factory
+    grain: one row per defect found at a QC point
+    description: >
+      Every defect VistaQ recorded, live: the day, factory, unit, line, QC stage, buyer, style, PO, colour, defect
+      type, its category (Critical / Major / Minor) and the sewing process it came from. COUNT(*) = number of defects.
+    key_columns: [Factory, Line, DefectDate, Defect]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      DefectDate: day the defect was found
+      Stage: QC point (Front/ Back QC, Waist QC, Station-03, Output QC)
+      Buyer: buyer name
+      Style: style number
+      PO: buyer's purchase order number
+      Color: garment colour
+      Defect: defect type, e.g. Skip Stitch, Pleat
+      DefectCategory: Critical, Major or Minor
+      Process: sewing process where the defect was made
+    definition: |
+      SELECT
+        CASE WHEN l.Id = qi.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit, l.WorkspaceName AS Line, d.InspectionDefectDateOnly AS DefectDate,
+        st.StageName AS Stage, b.BuyerName AS Buyer, s.StyleNumber AS Style, pp.PO, pp.ColorName AS Color,
+        df.DefectName AS Defect, dc.DefectCategoryName AS DefectCategory, p.ProcessName AS Process
+      FROM dbo.QualityInspectionDefect d
+      JOIN dbo.QualityInspection qi ON qi.Id = d.QualityInspectionId
+      LEFT JOIN dbo.ProductionPlan pp ON pp.Id = qi.ProductionPlanId
+      LEFT JOIN dbo.Buyer b ON b.Id = pp.BuyerId
+      LEFT JOIN dbo.Style s ON s.Id = pp.StyleId
+      LEFT JOIN dbo.Defect df ON df.Id = d.DefectId
+      LEFT JOIN dbo.DefectCategory dc ON dc.Id = df.DefectCategoryId
+      LEFT JOIN dbo.Process p ON p.Id = d.ProcessId
+      LEFT JOIN dbo.SectionWorkflowStage st ON st.Id = qi.StageId
+      LEFT JOIN dbo.Workspace l ON l.Id = qi.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+
+  - name: rag.vw_QCStageDay
+    scope_column: Factory
+    grain: one row per factory, line, inspection day and QC stage
+    description: >
+      Pieces checked, passed, defective, rejected, re-checked after repair and passed at end-line, per QC stage, line
+      and day, live from VistaQ.
+    key_columns: [Factory, Line, InspectionDate, Stage]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      InspectionDate: inspection day
+      Stage: QC point (Front/ Back QC, Waist QC, Station-03, Output QC)
+      Checked: pieces checked the first time at this stage
+      Passed: pieces passed the first time
+      DefectivePcs: pieces found defective
+      Rejected: pieces rejected
+      RepairedPassed: repaired pieces passed on re-check
+      EndlinePassed: pieces passed at end-line (Output QC only)
+    definition: |
+      SELECT
+        CASE WHEN l.Id = q.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit, l.WorkspaceName AS Line, q.InspectionDate, st.StageName AS Stage,
+        q.Checked, q.Passed, q.DefectivePcs, q.Rejected, q.RepairedPassed, q.EndlinePassed
+      FROM (
+        SELECT WorkspaceLineId, InspectionDateOnly AS InspectionDate, StageId,
+          SUM(CASE WHEN InspectionType IN (1, 2, 4) THEN Quantity ELSE 0 END) AS Checked,
+          SUM(CASE WHEN InspectionType = 1 THEN Quantity ELSE 0 END) AS Passed,
+          SUM(CASE WHEN InspectionType = 2 THEN Quantity ELSE 0 END) AS DefectivePcs,
+          SUM(CASE WHEN InspectionType = 4 THEN Quantity ELSE 0 END) AS Rejected,
+          SUM(CASE WHEN InspectionType = 3 THEN Quantity ELSE 0 END) AS RepairedPassed,
+          SUM(CASE WHEN IsEndlinePassed = 1 THEN Quantity ELSE 0 END) AS EndlinePassed
+        FROM dbo.QualityInspection
+        GROUP BY WorkspaceLineId, InspectionDateOnly, StageId
+      ) AS q
+      LEFT JOIN dbo.SectionWorkflowStage st ON st.Id = q.StageId
+      LEFT JOIN dbo.Workspace l ON l.Id = q.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+
+  - name: rag.vw_CorrectiveAction
+    scope_column: Factory
+    grain: one row per corrective action (CAPA) raised in VistaQ
+    description: >
+      Corrective actions VistaQ raised for a line, style and defect: the day raised, deadline, buyer, style, defect,
+      the number of defects and the DHU that triggered it, the DHU reduction target and the status code as stored
+      (1 for almost all; the meaning of 2 and 3 is not documented in the data).
+    key_columns: [Factory, Line, CAPDate, Defect]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      CAPDate: day the corrective action was raised
+      Deadline: deadline
+      Buyer: buyer name
+      Style: style number
+      Defect: defect type it addresses
+      NumberOfDefect: defects of that type that triggered it
+      DHU: DHU that triggered it
+      DHUReductionTarget: DHU reduction target
+      Status: status code as stored (1, 2 or 3)
+    definition: |
+      SELECT
+        CASE WHEN l.Id = ca.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit, l.WorkspaceName AS Line, CAST(ca.CAPDate AS date) AS CAPDate,
+        CAST(ca.Deadline AS date) AS Deadline, b.BuyerName AS Buyer, s.StyleNumber AS Style, df.DefectName AS Defect,
+        ca.NumberOfDefect, ca.DHU, ca.DHUReductionTarget, ca.Status
+      FROM dbo.CorrectiveAction ca
+      LEFT JOIN dbo.Workspace l ON l.Id = ca.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+      LEFT JOIN dbo.Buyer b ON b.Id = ca.BuyerId
+      LEFT JOIN dbo.Style s ON s.Id = ca.StyleId
+      LEFT JOIN dbo.Defect df ON df.Id = ca.DefectId
+
+  - name: rag.vw_CuttingDaily
+    scope_column: Factory
+    grain: one row per factory, line, day, buyer, style and PO cut
+    description: >
+      Pieces cut per day from VistaQ, live, by the sewing line they are planned for, with buyer, style and PO.
+    key_columns: [Factory, Line, CuttingDate, Style, PO]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line the cut pieces are planned for
+      CuttingDate: cutting day
+      Buyer: buyer name
+      Style: style number
+      PO: buyer's purchase order number
+      CutQty: pieces cut
+    definition: |
+      SELECT
+        CASE WHEN l.Id = c.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit, l.WorkspaceName AS Line, c.CuttingDate,
+        b.BuyerName AS Buyer, s.StyleNumber AS Style, c.PO, c.CutQty
+      FROM (
+        SELECT pp.WorkspaceLineId, pp.BuyerId, pp.StyleId, pp.PO, CAST(co.CuttingDate AS date) AS CuttingDate,
+          SUM(co.Quantity) AS CutQty
+        FROM dbo.CuttingOutput co
+        JOIN dbo.ProductionPlan pp ON pp.Id = co.ProductionPlanId
+        GROUP BY pp.WorkspaceLineId, pp.BuyerId, pp.StyleId, pp.PO, CAST(co.CuttingDate AS date)
+      ) AS c
+      LEFT JOIN dbo.Buyer b ON b.Id = c.BuyerId
+      LEFT JOIN dbo.Style s ON s.Id = c.StyleId
+      LEFT JOIN dbo.Workspace l ON l.Id = c.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+
+  - name: rag.vw_QCTarget
+    scope_column: Factory
+    grain: one row per factory and target setting in VistaQ (the latest applies)
+    description: >
+      Quality targets set in VistaQ: the DHU target, the reject-rate target and the efficiency target, from the day
+      they apply. VistaQ keeps one setting for all factories; it is repeated per factory so every user sees it.
+    key_columns: [Factory, EffectiveFrom]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      EffectiveFrom: first day the targets apply
+      DHUTarget: DHU target (defects per hundred pieces checked)
+      RejectPctTarget: reject-rate target, percent
+      EfficiencyTarget: line efficiency target, percent
+    definition: |
+      SELECT f.ShortName AS Factory, CAST(t.EffectiveFrom AS date) AS EffectiveFrom, t.DHUThreshold AS DHUTarget,
+        t.RejectRateThreshold AS RejectPctTarget, t.EfficiencyThreshold AS EfficiencyTarget
+      FROM dbo.Threshold t
+      CROSS JOIN dbo.Workspace f
+      WHERE f.WorkspaceLevel = 1 AND f.ShortName IS NOT NULL
+examples:
+  - question: What was the DHU of each factory yesterday?
+    sql: |
+      SELECT TOP (10) Factory, SUM(Checked) AS Checked, SUM(Defects) AS Defects,
+        CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU
+      FROM rag.vw_LineDayQuality
+      WHERE InspectionDate >= '2026-10-06' AND InspectionDate < '2026-10-07'
+      GROUP BY Factory
+      ORDER BY DHU DESC
+  - question: Which styles had the most defects at RHL this week?
+    sql: |
+      SELECT TOP (20) Buyer, Style, COUNT(*) AS Defects
+      FROM rag.vw_QCDefect
+      WHERE Factory = 'RHL' AND DefectDate >= '2026-10-05' AND DefectDate < '2026-10-12'
+      GROUP BY Buyer, Style
+      ORDER BY Defects DESC
+  - question: Which critical defects were found today?
+    sql: |
+      SELECT TOP (50) Factory, Line, Defect, COUNT(*) AS Defects
+      FROM rag.vw_QCDefect
+      WHERE DefectCategory = 'Critical' AND DefectDate >= '2026-10-07' AND DefectDate < '2026-10-08'
+      GROUP BY Factory, Line, Defect
+      ORDER BY Defects DESC
