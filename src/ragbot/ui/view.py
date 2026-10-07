@@ -74,6 +74,108 @@ def style_markers(text: str) -> str:
     return _MARKER.sub(badge, text)
 
 
+# ── tables in an answer ───────────────────────────────────────────────────────────────────────────────────────
+
+_TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+_PIPE = re.compile(r"(?<!\\)\|")
+_NUM = re.compile(r"^-?(\d{1,3}(,\d{3})+|\d+)?(\.\d+)?%?$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$")
+
+
+def _cells(line: str) -> list[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.strip().replace("\\|", "|") for c in _PIPE.split(s)]
+
+
+def split_md_tables(text: str) -> list[tuple[str, Any]]:
+    """The answer as ("text", markdown) and ("table", (header, rows)) pieces, in order, so each Markdown table can
+    be drawn as a sortable table. A run of '|' lines counts as a table only when its second line is a separator."""
+    lines = (text or "").splitlines()
+    out: list[tuple[str, Any]] = []
+    buf: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].lstrip().startswith("|") and i + 1 < len(lines) and _TABLE_SEP.match(lines[i + 1]):
+            j = i + 2
+            while j < len(lines) and lines[j].lstrip().startswith("|"):
+                j += 1
+            if buf:
+                out.append(("text", "\n".join(buf)))
+                buf = []
+            header = _cells(lines[i])
+            rows = [(_cells(ln) + [""] * len(header))[:len(header)] for ln in lines[i + 2:j]]
+            out.append(("table", (header, rows)))
+            i = j
+            continue
+        buf.append(lines[i])
+        i += 1
+    if buf:
+        out.append(("text", "\n".join(buf)))
+    return out
+
+
+PREVIEW_NOTE = re.compile(r"\s*Only the first rows are shown here; the query returned \d+ in total\.")
+
+
+def full_rows(header: Sequence[str], rows: Sequence[Sequence[str]],
+              results: Sequence[tuple[Sequence[str], Sequence[Sequence[str]]]]) -> Optional[list[list[str]]]:
+    """All rows of the result an answer's table previews (agent/templated.py writes the first 25), so sorting
+    covers every row the query returned: same columns, and the table's rows are the result's first rows, both as
+    the answer formats them. None when the table is not such a preview (e.g. a table the model wrote)."""
+    want = [[_plain(c) for c in r] for r in rows]
+    for columns, formatted in results:
+        if list(columns) == [_plain(h) for h in header] and len(formatted) > len(rows) \
+                and [list(r) for r in formatted[:len(rows)]] == want:
+            return [list(r) for r in formatted]
+    return None
+
+
+def column_kinds(rows: Sequence[Sequence[str]], ncols: int) -> list[str]:
+    """num | date | text per column, from the non-blank cells ('—' is the templated answers' empty value)."""
+    kinds = []
+    for c in range(ncols):
+        vals = [_plain(r[c]) for r in rows if c < len(r) and _plain(r[c]) not in ("", "—")]
+        if vals and all(_NUM.match(v) and any(ch.isdigit() for ch in v) for v in vals):
+            kinds.append("num")
+        elif vals and all(_DATE.match(v) for v in vals):
+            kinds.append("date")
+        else:
+            kinds.append("text")
+    return kinds
+
+
+def _plain(cell: Any) -> str:
+    """Cell text without Markdown emphasis or code marks."""
+    s = "" if cell is None else str(cell).strip()
+    for mark in ("**", "__", "`"):
+        if s.startswith(mark) and s.endswith(mark) and len(s) > 2 * len(mark):
+            s = s[len(mark):-len(mark)].strip()
+    return s
+
+
+def sortable_table_html(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+    """A table whose column names are sort buttons (ui/sort_table.js does the sorting in the browser). Numbers sit
+    right-aligned; a 'Total' row keeps its place at the bottom; every cell is escaped."""
+    kinds = column_kinds(rows, len(header))
+    num = ' class="ka-num"'
+    head = "".join(
+        f'<th scope="col" data-kind="{k}"{num if k == "num" else ""}>'
+        f'<button type="button" class="ka-sort" title="Sort by {esc(_plain(h))}">{esc(_plain(h))}'
+        '<span class="ka-sort-ic" aria-hidden="true"></span></button></th>'
+        for h, k in zip(header, kinds))
+    body = []
+    for i, r in enumerate(rows):
+        total = ' class="ka-total"' if r and _plain(r[0]).lower() == "total" else ""
+        cells = "".join(f'<td{num if k == "num" else ""}>{esc(_plain(v))}</td>' for v, k in zip(r, kinds))
+        body.append(f'<tr data-i="{i}"{total}>{cells}</tr>')
+    return (f'<div class="ka-table-wrap"><table class="ka-sortable"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table></div>')
+
+
 def read_list(refs: Sequence[Any]) -> list[str]:
     """What an answer was built from, one line per source: 'BitopiSplint · rag.vw_X · 432 rows', 'File.pdf p. 12'."""
     out = []

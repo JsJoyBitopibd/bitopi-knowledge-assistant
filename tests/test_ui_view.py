@@ -169,3 +169,67 @@ def test_banner_for_data_age():
 
 def test_badges():
     assert "Critical" in view.badge_html("red") and "Watch" in view.badge_html("amber")
+
+
+# ── sortable answer tables ────────────────────────────────────────────────────────────────────────────────────
+
+TEMPLATED = """TAL confirmed orders past their ship date (200 shown) [D1]:
+
+| ExportOrderID | ExportPONo | OrderQty | ShipDate | Merchandiser |
+|---|---|---|---|---|
+| TAL-26-1741-2 | 1267310 | 495 | 2026-09-07 | 09152 |
+| TAL-26-1741-10 | 1267310 | 2,500 | 2026-09-08 | — |
+
+Line data is old."""
+
+
+def test_split_md_tables_keeps_text_around_the_table():
+    parts = view.split_md_tables(TEMPLATED)
+    assert [k for k, _ in parts] == ["text", "table", "text"]
+    header, rows = parts[1][1]
+    assert header == ["ExportOrderID", "ExportPONo", "OrderQty", "ShipDate", "Merchandiser"]
+    assert rows[1] == ["TAL-26-1741-10", "1267310", "2,500", "2026-09-08", "—"]
+    assert parts[0][1].strip().endswith("[D1]:") and parts[2][1].strip() == "Line data is old."
+
+
+def test_split_md_tables_needs_a_separator_and_pads_short_rows():
+    assert view.split_md_tables("| not | a table |\nplain") == [("text", "| not | a table |\nplain")]
+    (_, (header, rows)), = view.split_md_tables("| a | b \\| c |\n|:--|--:|\n| 1 |")
+    assert header == ["a", "b | c"] and rows == [["1", ""]]
+
+
+def test_column_kinds():
+    _, (header, rows) = view.split_md_tables(TEMPLATED)[1]
+    # ExportPONo and Merchandiser are digit codes: numbers to sort by; "—" (no value) does not count
+    assert view.column_kinds(rows, len(header)) == ["text", "num", "num", "date", "num"]
+    assert view.column_kinds([["**Total**"], ["12.5%"]], 1) == ["text"]
+    assert view.column_kinds([[""], ["—"]], 1) == ["text"]
+
+
+def test_sortable_table_html():
+    html = view.sortable_table_html(["Buyer", "Orders"], [["H&M", "12"], ["**Total**", "12"]])
+    assert '<button type="button" class="ka-sort" title="Sort by Buyer">Buyer' in html
+    assert '<th scope="col" data-kind="num" class="ka-num">' in html and '<td class="ka-num">12</td>' in html
+    assert '<tr data-i="1" class="ka-total"><td>Total</td>' in html          # emphasis stripped, kept last
+    assert "H&amp;M" in html
+    evil = view.sortable_table_html([EVIL], [[EVIL]])
+    assert "<script>" not in evil and "<img src=x" not in evil and "&lt;script&gt;" in evil
+
+
+def test_sort_script_has_no_tag_like_text():
+    # the frontend sanitizer drops a <script>/<style> whose text holds '<' followed by a letter or '/'
+    import re
+    from pathlib import Path
+    js = (Path(view.__file__).with_name("sort_table.js")).read_text(encoding="utf-8")
+    assert not re.search(r"<[/\w]", js)
+
+
+def test_full_rows_replaces_a_preview_only():
+    cols = ["ExportOrderID", "OrderQty"]
+    result = [["TAL-1", "495"], ["TAL-2", "2500"], ["TAL-3", "10"]]
+    assert view.full_rows(cols, result[:2], [(cols, result)]) == result               # the preview → every row
+    assert view.full_rows(cols, [["TAL-1", "495"], ["TAL-9", "1"]], [(cols, result)]) is None   # other rows
+    assert view.full_rows(["Buyer", "OrderQty"], result[:2], [(cols, result)]) is None       # other columns
+    assert view.full_rows(cols, result, [(cols, result)]) is None                     # already complete
+    note = "Line.\n\nOnly the first rows are shown here; the query returned 200 in total."
+    assert view.PREVIEW_NOTE.sub("", note) == "Line."

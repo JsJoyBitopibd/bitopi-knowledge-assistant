@@ -162,6 +162,13 @@
 .ka-head span { font-size: 13px; color: var(--muted); }
 .st-key-convo_head button { min-height: 40px; border-color: var(--line-strong); }
 
+/* thread + Sources rail: side by side while both fit (thread 400 px, rail 280 px), else the rail drops below */
+.st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+.st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+  flex: 2.6 1 0 !important; width: auto !important; min-width: min(400px, 100%); }
+.st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+  flex: 1 1 0 !important; width: auto !important; min-width: min(280px, 100%); }
+
 .ka-user { display: flex; justify-content: flex-end; }
 .ka-user-bubble { max-width: 560px; padding: 14px 18px; border-radius: 14px 14px 4px 14px; background: var(--side);
   color: #F2F5F3; font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -178,17 +185,27 @@
 [data-testid="stChatMessage"] [data-testid="stExpander"] summary p { font-size: 13px; }
 .ka-read { font-size: 13px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
 
-/* answer tables: the dataframe, and the Markdown table a templated answer carries (scrolls inside its card) */
-[data-testid="stChatMessage"] [data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 10px;
-  overflow: hidden; background: #fff; }
-[data-testid="stChatMessageContent"] [data-testid="stMarkdownContainer"] table { display: block; max-width: 100%;
-  max-height: 480px; overflow: auto; border-collapse: collapse; background: #fff; border: 1px solid var(--line);
-  border-radius: 10px; font-size: 14px; }
-[data-testid="stChatMessageContent"] [data-testid="stMarkdownContainer"] th { position: sticky; top: 0;
-  background: var(--page); color: var(--ink-2); font-size: 12px; font-weight: 600; text-align: left; padding: 10px 14px;
-  border: 0; white-space: nowrap; }
-[data-testid="stChatMessageContent"] [data-testid="stMarkdownContainer"] td { padding: 9px 14px; border: 0;
-  border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* answer tables (view.sortable_table_html): a white card that scrolls inside itself, column names sort it */
+.ka-table-wrap { max-width: 100%; max-height: 480px; overflow: auto; background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; }
+.ka-sortable { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ka-sortable th { position: sticky; top: 0; z-index: 1; background: var(--page); text-align: left; padding: 0; border: 0;
+  white-space: nowrap; }
+.ka-sortable th.ka-num { text-align: right; }
+.ka-sort { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; width: 100%;
+  padding: 10px 14px; cursor: pointer; font: 600 12px 'IBM Plex Sans', system-ui, sans-serif; color: var(--ink-2); }
+.ka-num .ka-sort { justify-content: flex-end; }
+.ka-sort:hover { color: var(--ink); background: var(--rule); }
+.ka-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ka-sort-ic::after { content: "\2195"; font-size: 12px; color: var(--line-strong); }
+.ka-sort:hover .ka-sort-ic::after { color: var(--muted); }
+th[aria-sort="ascending"] .ka-sort-ic::after { content: "\2191"; color: var(--accent); }
+th[aria-sort="descending"] .ka-sort-ic::after { content: "\2193"; color: var(--accent); }
+th[aria-sort] .ka-sort { color: var(--ink); }
+.ka-sortable td { padding: 9px 14px; border-top: 1px solid var(--rule); white-space: nowrap; color: var(--ink); }
+.ka-sortable td.ka-num { text-align: right; }
+.ka-sortable tr.ka-total td { font-weight: 600; border-top: 1px solid var(--line-strong); }
+.ka-sortable tbody tr:hover td { background: #FAFBF9; }
 
 /* action row under an answer */
 [class*="st-key-actions_"] { gap: 4px; align-items: center; }

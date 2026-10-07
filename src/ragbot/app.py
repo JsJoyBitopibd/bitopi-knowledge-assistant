@@ -414,7 +414,7 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
     if t.get("error_kind"):
         st.warning(t["text"])   # a friendly quota/timeout/auth message, not a normal answer
         return
-    st.markdown(view.style_markers(t["text"]))
+    ui.answer_text(t["text"], t.get("results") or [])    # tables in the answer become sortable tables
     refs, results = t.get("refs") or [], t.get("results") or []
     ui.result_tables(refs, results, t["text"])
     if t.get("not_found"):
@@ -463,7 +463,8 @@ def conversation_head(head) -> None:
 def conversation(q: str | None, refresh: bool) -> None:
     hist_all = st.session_state.history
     head = st.container(key="convo_head")
-    thread_col, rail_col = st.columns([2.6, 1], gap="large")
+    with st.container(key="convo_body"):         # keyed so style.css can let the rail wrap under a narrow thread
+        thread_col, rail_col = st.columns([2.6, 1], gap="large")
     with thread_col:
         thread = st.container(key="thread")
         ui.composer("Ask a follow-up…", scope_label, _take_typed)

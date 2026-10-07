@@ -13,6 +13,7 @@ from ..data import present
 from . import view
 
 _CSS = Path(__file__).with_name("style.css")
+_SORT_JS = Path(__file__).with_name("sort_table.js")
 STATIC = Path(__file__).resolve().parents[1] / "static"
 AVATAR = str(STATIC / "avatar-b.svg")
 DISCLAIMER = ("Answers come only from the connected databases and the indexed documents. "
@@ -24,6 +25,32 @@ def inject_css() -> None:
     followed by a letter (as a comment easily does), and the comments are not needed in the browser."""
     css = re.sub(r"/\*.*?\*/", "", _CSS.read_text(encoding="utf-8"), flags=re.S)
     st.html(f"<style>{css}</style>")       # style only: Streamlit puts it where it takes no space
+
+
+def sortable_table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
+    """A table whose column names sort it (view.sortable_table_html + sort_table.js, which binds once per page).
+    The cells are escaped; the only script is the repo's own sort_table.js."""
+    st.html(view.sortable_table_html(header, rows) + f"<script>{_SORT_JS.read_text(encoding='utf-8')}</script>",
+            unsafe_allow_javascript=True)
+
+
+def answer_text(text: str, results: Sequence[Any] = ()) -> None:
+    """The answer's Markdown, with each Markdown table drawn as a sortable table in its place. A templated answer's
+    table previews its result's first rows; it is drawn with all of them, so sorting covers every row returned, and
+    the "only the first rows are shown" note is left out of the display (Copy, Export and the logs keep the text)."""
+    from ..agent.templated import fmt
+    formatted = [(r.columns, [[fmt(v) for v in row] for row in r.rows]) for r in results or [] if r.rows]
+    parts = view.split_md_tables(text)
+    full = [view.full_rows(*part, formatted) if kind == "table" else None for kind, part in parts]
+    expanded = any(f is not None for f in full)
+    for (kind, part), rows in zip(parts, full):
+        if kind == "table":
+            sortable_table(part[0], rows or part[1])
+            continue
+        if expanded:
+            part = view.PREVIEW_NOTE.sub("", part)
+        if part.strip():
+            st.markdown(view.style_markers(part))
 
 
 def label(text: str, main: bool = False) -> None:
@@ -111,15 +138,12 @@ def replay_progress(refs: Sequence[Any], seconds: Optional[float]) -> None:
     progress_done(st.status(view.done_label(refs, seconds), state="complete", expanded=False), refs, seconds)
 
 
-def _has_table(text: str) -> bool:
-    return any(line.lstrip().startswith("|") for line in (text or "").splitlines())
-
-
-def result_tables(refs: Sequence[Any], results: Sequence[Any], answer_text: str = "") -> None:
-    """C8: the rows behind each [D#] reference, in the answer: sortable table, and a bar chart for label → number.
-    A templated answer already carries the rows as a table in its text; the sortable copy then waits in a
-    collapsed section instead of repeating them."""
-    in_text = _has_table(answer_text)
+def result_tables(refs: Sequence[Any], results: Sequence[Any], text: str = "") -> None:
+    """C8: the rows behind each [D#] reference, in the answer: a sortable table, and a bar chart for label → number.
+    A templated answer already carries the rows as a table in its text (drawn sortable by answer_text); the rows
+    are then not repeated."""
+    from ..agent.templated import fmt
+    in_text = any(kind == "table" for kind, _ in view.split_md_tables(text))
     for r in refs or []:
         if r.kind == "pdf":
             continue
@@ -127,15 +151,12 @@ def result_tables(refs: Sequence[Any], results: Sequence[Any], answer_text: str 
         if not (0 <= k < len(results)) or not results[k].rows:
             continue
         res = results[k]
-        df = present.frame(res)
         chart = present.chart_columns(res)
         if chart:
+            df = present.frame(res)
             st.bar_chart(df.set_index(chart[0])[chart[1]], color="#0E5E50")
-        if in_text:
-            with st.expander(f"Sortable table · {len(res.rows):,} row{'s' if len(res.rows) != 1 else ''}"):
-                st.dataframe(df, hide_index=True, width="stretch")
-        else:
-            st.dataframe(df, hide_index=True, width="stretch")
+        if not in_text:
+            sortable_table(res.columns, [[fmt(v) for v in row] for row in res.rows])
         st.caption(present.caption(res))
 
 

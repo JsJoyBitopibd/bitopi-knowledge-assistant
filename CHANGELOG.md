@@ -29,6 +29,11 @@ each phase is in `docs/ROADMAP.md`.
   checks and logging are unchanged.
 - Left out on purpose: **Share** (conversations are not stored) and on/off switches for **Search in** (the router
   picks the source). See `docs/design/DESIGN.md`.
+- **Sortable answer tables**: every table in an answer has a sort button beside each column name (ascending →
+  descending → the answer's order). Numbers and dates sort by value, codes naturally (`TAL-26-1741-2` before
+  `…-10`), and blank cells always go last. A templated answer's 25-row preview is drawn with all the rows its query returned
+  (up to 200), so sorting covers every row. The sorting runs in the browser (`ui/sort_table.js`), with no query and no
+  model call. The Sources rail now moves under the thread when the window is too narrow for both.
 
 ## [1.12.0] — 2026-10-06 — Phase L: watcher and morning brief
 
