@@ -110,9 +110,11 @@ rules:
 - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
 - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
   doesn't have the data."
-- 'Every row here is RHL factory data (VistaQ at RHL). For QC quantities per day, line, style or buyer use
-  dbo.QCSummary (QCQty, InspectionDate, IsEndlinePassed); for defects use dbo.DefectSummary (DefectQty, CheckQty,
-  InspectionDefectDate, DefectId). They are already totalled per day and line.'
-- 'dbo.QualityInspection (88 million rows) and dbo.QualityInspectionDefect (6 million rows): only with a filter on one
-  day or a few days (InspectionDateOnly / InspectionDefectDateOnly), never over all dates.'
+- Every row here is RHL factory data (VistaQ at RHL).
+- 'Defects, up to date: dbo.QualityInspectionDefect has one row per defect found (InspectionDefectDateOnly; DefectId ->
+  dbo.Defect.DefectName; QualityInspectionId -> dbo.QualityInspection.Id, whose WorkspaceLineId -> dbo.Workspace is the
+  line). Checked pieces: dbo.QualityInspection, SUM(Quantity) by InspectionDateOnly. Use these two for today, a day, a
+  week or a month, always filtered on that date column (they hold 6 and 88 million rows).'
+- 'dbo.DefectSummary and dbo.QCSummary are daily totals written by a job that runs behind (they can miss the last days
+  or weeks): never use them for today or recent days; only for periods longer than a month.'
 views: []
