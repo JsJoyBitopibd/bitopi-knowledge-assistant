@@ -18,11 +18,10 @@ $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try { $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
 finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 if (-not $password) { throw "No password given; .env not changed." }
-if ($password.Contains('$')) {
-    Write-Warning "The password contains '$'. docker compose may read it as a variable; if the check fails, change the password or ask for help."
-}
 # ODBC: a value holding ';' or braces goes inside {…}, with '}' doubled
 if ($password -match '[;{}]') { $password = '{' + $password.Replace('}', '}}') + '}' }
+# docker compose reads `$name` in .env as a variable; `$$` is a literal `$`
+$password = $password.Replace('$', '$$')
 
 $lines = @()
 if (Test-Path $envFile) { $lines = @([IO.File]::ReadAllLines($envFile)) }
