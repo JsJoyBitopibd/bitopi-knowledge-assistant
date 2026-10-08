@@ -15,12 +15,19 @@ too, so a suggestion never leads a user outside their scope.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Optional, Sequence
 
 from ..config import prompt
 from ..models import QueryResult
 
-_PERIOD = re.compile(r"\b(?:today|toady|yesterday|this week|last week|this month|last month|last \d+ days)\b", re.I)
+
+@lru_cache(maxsize=1)
+def _period_re() -> re.Pattern:
+    from ..data.tools import PERIOD     # lazy: the data tools pull in the DB and SQL libraries
+    return re.compile(rf"\b(?:{PERIOD})\b", re.I)
+
+
 _WIDER = {
     "today": ("yesterday", "this week"),
     "yesterday": ("this week",),
@@ -42,8 +49,11 @@ def _words(text: str) -> set[str]:
 
 
 def _period(window: str) -> str:
-    """'last 7 days' -> 'the last 7 days'; 'today', 'this week' … unchanged."""
-    return f"the {window}" if re.match(r"(?:last|next) \d+ days$", window) else window
+    """The window label as it follows "I checked VistaQ": 'for today', 'for the last 7 days', 'on 6 Oct 2026',
+    'in October 2026', 'from 1 Oct 2026 to 5 Oct 2026'."""
+    if re.match(r"(?:on|in|from) ", window):
+        return window
+    return f"for the {window}" if re.match(r"(?:last|next) \d+ days$", window) else f"for {window}"
 
 
 def _label(database: str) -> str:
@@ -81,8 +91,8 @@ def unverified() -> str:
 def _wider(question: str, window: str) -> list[str]:
     out = []
     for w in _WIDER.get(window, ()):
-        if _PERIOD.search(question):
-            out.append(_PERIOD.sub(w, question, count=1))
+        if _period_re().search(question):
+            out.append(_period_re().sub(w, question, count=1))
         else:
             q = question.rstrip()
             out.append(f"{q[:-1].rstrip()} {w}?" if q.endswith("?") else f"{q} {w}")

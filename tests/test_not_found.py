@@ -140,12 +140,13 @@ def test_a_qualifier_the_tool_cannot_apply_goes_to_the_model():
               "Show the defect summary for H&M this week",
               "How many pieces were rejected at Output QC today?",
               "Show me the QC summary for PO 594520-9192",
-              "QC summary for Monday"]:
+              "QC summary day wise this week", "Daily DHU this month", "Show me the defect summary per day"]:
         hit = tools.match_fixed_tool(q, ts)
         assert hit is None or hit[0]["name"] not in vistaq, (q, hit and hit[0]["name"])
-    # factories, periods and grouping words are not qualifiers
+    # factories, periods (months and weekdays too) and grouping words are not qualifiers
     for q in ["What is the reject rate of RHL this week?", "Which styles had the most defects in TAL today?",
-              "QC summary for Today", "stage wise QC for BGL yesterday", "Show the QC results by stage today"]:
+              "QC summary for Today", "stage wise QC for BGL yesterday", "Show the QC results by stage today",
+              "QC summary for Monday", "QC summary for October"]:
         hit = tools.match_fixed_tool(q, ts)
         assert hit is not None and hit[0]["name"] in vistaq, q
 
@@ -154,3 +155,101 @@ def test_older_line_questions_still_reach_their_tools():
     ts = tools.load_fixed_tools()
     assert tools.match_fixed_tool("Which lines missed their target?", ts)[0]["name"] == "lines_below_target"
     assert tools.match_fixed_tool("Which RHL lines are below target?", ts)[0]["name"] == "lines_below_target_by_factory"
+
+
+# ---------------------------------------------------------------- written dates (owner's screenshots, 8 Oct 2026)
+_THU = date(2026, 10, 8)       # a Thursday
+
+
+@pytest.mark.parametrize("text, start, end, label", [
+    ("6-10-2026", date(2026, 10, 6), date(2026, 10, 7), "on 6 Oct 2026"),          # day first, as in Bangladesh
+    ("on 06/10/2026", date(2026, 10, 6), date(2026, 10, 7), "on 6 Oct 2026"),
+    ("2026-10-06", date(2026, 10, 6), date(2026, 10, 7), "on 6 Oct 2026"),
+    ("06.10.26", date(2026, 10, 6), date(2026, 10, 7), "on 6 Oct 2026"),
+    ("7th october", date(2026, 10, 7), date(2026, 10, 8), "on 7 Oct 2026"),
+    ("7 of oct, 2026", date(2026, 10, 7), date(2026, 10, 8), "on 7 Oct 2026"),
+    ("october 7", date(2026, 10, 7), date(2026, 10, 8), "on 7 Oct 2026"),
+    ("25 december", date(2025, 12, 25), date(2025, 12, 26), "on 25 Dec 2025"),     # no year: the latest past one
+    ("from 1 oct to 5 oct", date(2026, 10, 1), date(2026, 10, 6), "from 1 Oct 2026 to 5 Oct 2026"),
+    ("between 28 sep and 2 oct 2026", date(2026, 9, 28), date(2026, 10, 3), "from 28 Sep 2026 to 2 Oct 2026"),
+    ("1-10-2026 to 5-10-2026", date(2026, 10, 1), date(2026, 10, 6), "from 1 Oct 2026 to 5 Oct 2026"),
+    ("in september", date(2026, 9, 1), date(2026, 10, 1), "in September 2026"),
+    ("for october", date(2026, 10, 1), date(2026, 11, 1), "in October 2026"),
+    ("in december", date(2025, 12, 1), date(2026, 1, 1), "in December 2025"),
+    ("september 2026", date(2026, 9, 1), date(2026, 10, 1), "in September 2026"),
+    ("monday", date(2026, 10, 5), date(2026, 10, 6), "on 5 Oct 2026"),
+    ("thursday", date(2026, 10, 8), date(2026, 10, 9), "on 8 Oct 2026"),
+    ("last thursday", date(2026, 10, 1), date(2026, 10, 2), "on 1 Oct 2026"),
+])
+def test_written_periods(text, start, end, label):
+    assert tools._explicit_window(text, _THU) == (start, end, label)
+
+
+def test_relative_words_are_not_written_periods_and_bad_dates_raise():
+    for t in ("today", "this week", "last 7 days", "last month"):
+        assert tools._explicit_window(t, _THU) is None
+    for t in ("31-02-2026", "from 5 oct to 1 oct"):
+        with pytest.raises(ValueError):
+            tools._explicit_window(t, _THU)
+
+
+def test_period_grammar_finds_the_date_inside_a_question():
+    import re
+    rx = re.compile(rf"\b({tools.PERIOD})\b", re.I)
+    assert rx.search("show me line & factory wise DHU of 6-10-2026")[1] == "6-10-2026"
+    assert rx.search("show me line & factory wise DHU of 7th october.")[1] == "7th october"
+    assert rx.search("QC summary for october 7")[1] == "october 7"             # not the whole month
+    assert rx.search("DHU from 1 Oct to 5 Oct please")[1] == "from 1 Oct to 5 Oct"
+    assert rx.search("May I see the QC summary?") is None                       # "May" is not a month here
+
+
+def _expect_day(month: int, day: int) -> date:
+    today = date.today()
+    d = date(today.year, month, day)
+    return d if d <= today else date(today.year - 1, month, day)
+
+
+def test_the_screenshot_questions_use_their_dates():
+    ts = tools.load_fixed_tools()
+    tool, p = tools.match_fixed_tool("show me line & factory wise DHU of 6-10-2026", ts)
+    assert tool["name"] == "dhu_by_line" and p["from"] == date(2026, 10, 6) and p["window"] == "on 6 Oct 2026"
+    tool, p = tools.match_fixed_tool("show me line & factory wise DHU of 7th october.", ts)
+    assert tool["name"] == "dhu_by_line" and p["from"] == _expect_day(10, 7)
+    tool, p = tools.match_fixed_tool("Show me the defect summary for today broken down by line.", ts)
+    assert tool["name"] == "defects_by_line_window" and p["window"] == "today"
+    tool, _ = tools.match_fixed_tool("Show date beside the data for factory and line-wise DHU today", ts)
+    assert tool["name"] == "dhu_by_line"
+    assert tools.match_fixed_tool("Which RHL lines had the most defects today?", ts)[0]["name"] == "dhu_by_line_by_factory"
+
+
+def test_a_date_we_cannot_read_goes_to_the_model():
+    assert tools.match_fixed_tool("QC summary on 31-02-2026", tools.load_fixed_tools()) is None
+
+
+def test_follow_ups_with_a_date_label_reach_their_tool_for_the_same_day():
+    from ragbot.agent.templated import follow_ups
+    ts = tools.load_fixed_tools()
+    tool, p = tools.match_fixed_tool("Show me the defect summary on 6-10-2026", ts)
+    assert tool["name"] == "defect_summary_window"
+    r = QueryResult(database=tool["database"], engine="sqlserver", views=[], sql="", params=p, tool=tool["name"],
+                    columns=["Defect"], rows=[["x"]])
+    for q in follow_ups(r, tool):
+        hit = tools.match_fixed_tool(q, ts)
+        assert hit is not None and hit[1]["from"] == date(2026, 10, 6), q
+    assert tools.match_fixed_tool("Show me the defect summary on 6 Oct 2026 line wise", ts)[0]["name"] \
+        == "defects_by_line_window"
+    _, p = tools.match_fixed_tool("Show me the QC summary in October 2026", ts)
+    assert (p["from"], p["to"], p["window"]) == (date(2026, 10, 1), date(2026, 11, 1), "in October 2026")
+
+
+def test_every_grouped_vistaq_answer_shows_its_date():
+    for t in tools.load_fixed_tools():
+        if t["database"] == "VistaQ_Default_RHL" and t["name"] != "corrective_actions_window":
+            assert "AS [Date]" in t["sql"] and t["sql"].index("AS [Date]") < t["sql"].index("FROM"), t["name"]
+        if t["database"] == "VistaQ_Default_RHL":
+            assert " for {window}" not in t.get("answer_list", ""), t["name"]
+
+
+def test_empty_sentence_for_a_written_date():
+    assert not_found.empty([_empty(window="on 6 Oct 2026")]).startswith(
+        "I checked VistaQ on 6 Oct 2026 and found no matching records")

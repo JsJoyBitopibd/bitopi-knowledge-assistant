@@ -33,6 +33,15 @@ each phase is in `docs/ROADMAP.md`.
 - Quality watch rules on VistaQ: DHU today and reject rate today per factory (amber at VistaQ's own targets, 3.85
   and 1 %), replacing the DHU of the stale daily line record.
 - Golden cases 70–79 (VistaQ questions, the "toady" typo, an AQL question that must be not-found).
+- **Written dates in VistaQ questions** (owner's screenshots, 8 Oct): one period grammar (`tools.PERIOD`, written
+  `{period}` in a tool's `match:`) adds dates written day first (`6-10-2026`, `06/10/2026`, `2026-10-06`,
+  `7th october`, `October 7`), ranges (`from 1 Oct to 5 Oct`), months (`in September`, `for October`) and weekdays
+  (`last thursday`). Answer headings name the period ("on 6 Oct 2026", "in October 2026"), and follow-ups keep it. A
+  date that cannot be read goes to model-written SQL. Before, "DHU of 6-10-2026" was answered for today.
+- A **Date** column first in every grouped VistaQ answer: the day the rows cover, or "first to last day".
+- `defects_by_line_window`: "defect summary line wise / by line / broken down by line" gives defects, defective and
+  checked pieces and DHU per line. It had repeated the by-type table.
+- Golden cases 80–83 (the two dated DHU questions from the screenshots, line-wise defects, day-wise QC).
 - `scripts/set_db_connection.ps1` sets the connection lines in `.env` from a hidden password prompt. `-Variable` and
   `-Database` write one extra line for a database on another server.
 - **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
@@ -72,6 +81,10 @@ each phase is in `docs/ROADMAP.md`.
 - Fixed tools can declare `unless:`; the VistaQ tools use it so a question naming a QC stage, line, unit, PO, style
   or a buyer goes to model-written SQL that applies the filter, instead of a fixed answer that ignores it ("…at Waist
   QC yesterday" had been answered over every stage).
+- **Dhaka time**: the image sets `TZ=Asia/Dhaka`. On UTC, "today" was the day before between 00:00 and 06:00 in
+  Dhaka, and "as of" times and the Data status card ran 6 hours behind. Log timestamps are Dhaka time from 8 Oct
+  2026 09:45; earlier rows are UTC.
+- VistaQ questions that ask "day wise", "daily" or "per day" go to model-written SQL, which can group by day.
 - `scripts/check_catalog.py --live` checks a view with `WHERE 1 = 0`, so it no longer totals an aggregating view's
   88 million rows on a live server.
 - Wording: "Found N matching rows" instead of "N row(s) found"; the not-found note under an answer points to the

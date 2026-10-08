@@ -1,1 +1,1 @@
-I checked {source} for {period} and found no matching records; they may not have been entered yet, so try a wider period.
+I checked {source} {period} and found no matching records; they may not have been entered yet, so try a wider period.

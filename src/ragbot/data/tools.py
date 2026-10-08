@@ -29,6 +29,99 @@ from .guard import GuardError, guard
 from .virtual import rewrite_virtual
 
 
+# ---------------------------------------------------------------- periods
+# The period a question names, shared by every fixed tool whose `match:` contains `{period}` (expanded on load)
+# and by agent/not_found.py. Besides the relative words: dates written day first as in Bangladesh (6-10-2026,
+# 06/10/2026, 2026-10-06, 7th october, Oct 7 2026), ranges (from 1 Oct to 5 Oct), months (in September,
+# September 2026) and weekdays (monday, last monday). No capturing groups: a tool's group numbers stay as written.
+# A bare month needs in / for / of / during or a year, so "May I see …" is not May.
+_MON = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?"
+        r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_DATE = (r"(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+         rf"|\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{_MON})\.?(?:,?\s+\d{{4}})?"
+         rf"|(?:{_MON})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?)")
+PERIOD = (rf"(?:from\s+|between\s+)?{_DATE}\s*(?:to|till|until|and|-|–)\s*{_DATE}"   # ranges first: longest wins
+          rf"|(?:on\s+)?{_DATE}"
+          rf"|(?:on\s+|last\s+)?(?:{'|'.join(_WEEKDAYS)})"
+          rf"|(?:in|for|of|during)\s+(?:{_MON})(?:\s+\d{{4}})?(?!\.?\s*\d)|(?:{_MON})\s+\d{{4}}"   # not "for october 7"
+          r"|today|toady|yesterday|this week|last week|this month|last month|last \d+ days")
+_MONTH_NUM = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
+                                          "nov", "dec"), start=1)}
+
+
+def _show(d: date) -> str:
+    return f"{d.day} {d:%b %Y}"           # CLAUDE.md: dates display as 12 Oct 2026
+
+
+def _one_date(s: str, today: date) -> date:
+    """One written date, day first. Without a year: the latest such day that is not in the future."""
+    s = re.sub(r"^(?:on|from|between)\s+", "", s.strip().lower()).rstrip(".")
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        return date(int(m[1]), int(m[2]), int(m[3]))
+    m = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})", s)
+    if m:
+        year = int(m[3]) + (2000 if len(m[3]) == 2 else 0)
+        return date(year, int(m[2]), int(m[1]))
+    m = re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]+)\.?(?:,?\s+(\d{4}))?", s)
+    day, mon, year = (m[1], m[2], m[3]) if m else (None, None, None)
+    if m is None:
+        m = re.fullmatch(r"([a-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?", s)
+        if m is None:
+            raise ValueError(f"not a date: {s!r}")
+        mon, day, year = m[1], m[2], m[3]
+    month = _MONTH_NUM.get(mon[:3])
+    if month is None:
+        raise ValueError(f"not a month: {mon!r}")
+    if year:
+        return date(int(year), month, int(day))
+    d = date(today.year, month, int(day))
+    return d if d <= today else date(today.year - 1, month, int(day))
+
+
+def _next_month(d: date) -> date:
+    return d.replace(year=d.year + 1, month=1) if d.month == 12 else d.replace(month=d.month + 1)
+
+
+def _explicit_window(t: str, today: date) -> Optional[tuple[date, date, str]]:
+    """(from, to, label) for a written date, range, month or weekday; None for anything else (the relative
+    words). Raises ValueError for one that cannot be a real day (31-02-2026) or a range that runs backwards."""
+    m = re.fullmatch(rf"(?:from\s+|between\s+)?({_DATE})\s*(?:to|till|until|and|-|–)\s*({_DATE})", t)
+    if m:
+        a, b = _one_date(m[1], today), _one_date(m[2], today)
+        if b < a:
+            raise ValueError(f"range ends before it starts: {t!r}")
+        return a, b + timedelta(days=1), f"from {_show(a)} to {_show(b)}"
+    m = re.fullmatch(rf"(?:on\s+)?({_DATE})", t)
+    if m:
+        d = _one_date(m[1], today)
+        return d, d + timedelta(days=1), f"on {_show(d)}"
+    m = re.fullmatch(rf"(?:on\s+|(last)\s+)?({'|'.join(_WEEKDAYS)})", t)
+    if m:
+        back = (today.weekday() - _WEEKDAYS.index(m[2])) % 7 or (7 if m[1] else 0)
+        d = today - timedelta(days=back)
+        return d, d + timedelta(days=1), f"on {_show(d)}"
+    m = re.fullmatch(rf"(?:(?:in|for|of|during)\s+)?({_MON})\.?(?:\s+(\d{{4}}))?", t)
+    if m:
+        start = date(int(m[2]) if m[2] else today.year, _MONTH_NUM[m[1][:3]], 1)
+        if not m[2] and start > today:
+            start = start.replace(year=start.year - 1)
+        return start, _next_month(start), f"in {start:%B %Y}"
+    return None
+
+
+def _window(text: str) -> tuple[date, date, str]:
+    """(from, to, label) for a period phrase. The label reads after a heading and at the end of a follow-up
+    question ("today", "this week", "on 6 Oct 2026", "in October 2026") and parses back to the same period."""
+    t = text.strip().lower().rstrip(".")
+    found = _explicit_window(t, date.today())
+    if found:
+        return found
+    start, end = _date_window(t)
+    return start, end, re.sub(r"\btoady\b", "today", t)
+
+
 # ---------------------------------------------------------------- fixed tools
 def load_fixed_tools(path: Path | None = None) -> list[dict[str, Any]]:
     """Cached on the file's mtime — this is read on every data question (and now on every route)."""
@@ -40,7 +133,11 @@ def load_fixed_tools(path: Path | None = None) -> list[dict[str, Any]]:
 
 @lru_cache(maxsize=2)
 def _load_fixed_tools(path: Path, _mtime: int) -> list[dict[str, Any]]:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or []
+    tools = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+    for t in tools:
+        if isinstance(t, dict) and isinstance(t.get("match"), str):
+            t["match"] = t["match"].replace("{period}", PERIOD)
+    return tools
 
 
 def needs_clarification(question: str) -> Optional[str]:
@@ -113,9 +210,11 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             if raw is None:
                 break
             if spec.get("type") == "date_window":
-                params["from"], params["to"] = _date_window(raw)
-                # the phrase ("next week"), for templated answers; not in the SQL
-                params[name] = re.sub(r"\btoady\b", "today", raw.lower())
+                try:
+                    # the label ("next week", "on 6 Oct 2026") is for templated answers; not in the SQL
+                    params["from"], params["to"], params[name] = _window(raw)
+                except ValueError:
+                    return None    # a date we cannot read (31-02-2026): the model answers, no tool assumes a day
                 continue
             if spec.get("type") == "int":
                 raw = int(raw)

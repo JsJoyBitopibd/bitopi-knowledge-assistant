@@ -32,10 +32,13 @@ COPY config/ ./config/
 COPY pytest.ini ./
 COPY .streamlit/ ./.streamlit/
 
+# TZ: the factories' clock. "today" in a question, the "as of" time on an answer and the log timestamps are Dhaka
+# time; on UTC, "today" was yesterday between 00:00 and 06:00 (the base image already ships the zone files).
 ENV HF_HOME=/models \
     PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
-    TOKENIZERS_PARALLELISM=false
+    TOKENIZERS_PARALLELISM=false \
+    TZ=Asia/Dhaka
 
 EXPOSE 8501
 
