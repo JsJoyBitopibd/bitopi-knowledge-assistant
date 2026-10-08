@@ -122,6 +122,105 @@ def _window(text: str) -> tuple[date, date, str]:
     return start, end, re.sub(r"\btoady\b", "today", t)
 
 
+# ---------------------------------------------------------------- groupings and figures named in the question
+# Owner's rule (8 Oct 2026): show what was asked, nothing else. "Unit, Line and Buyer wise DHU of TAL" is answered
+# with exactly those columns, so the groupings (`type: group_by`) and the figures (`type: measures`) of a tool are
+# parameters read from the question. Each maps to a column or expression the tool's YAML lists (a whitelist): no
+# word of the question ever reaches the SQL as text.
+_GROUP_MARK = re.compile(r"\bwise\b|\b(?:by|per|each|every)\b|\bbroken\s+down\b|\bbreak\s*-?\s*down\b", re.I)
+_DIM_WORDS = (                          # word -> dimension key; PO/EO/order mean the file (VistaQ has no PO or EO)
+    (r"factor(?:y|ies)", "factory"), (r"units?|blocks?", "unit"), (r"lines?", "line"),
+    (r"buyers?|customers?|brands?", "buyer"), (r"styles?", "style"), (r"colou?rs?", "color"),
+    (r"file\s+refs?|files?", "file"),
+    (r"purchase\s+orders?|export\s+orders?|pos?|eos?|orders?", "po_eo"),
+)
+_DIM_RE = re.compile(r"\b(?:" + "|".join(f"(?P<d{i}>{p})" for i, (p, _) in enumerate(_DIM_WORDS)) + r")\b", re.I)
+_DIM_NAMES = {"factory": "factory", "unit": "unit", "line": "line", "buyer": "buyer", "style": "style",
+              "color": "colour", "file": "file"}
+_PCT = r"\s*(?:rate|%|percent(?:age)?)"
+_QTY = r"\s*(?:qty|quantity|pcs|pieces)"
+_MEASURE_WORDS = (                      # tried in this order; a span already taken is not read twice
+    (rf"\b(?:ftp|first[\s-]?pass){_QTY}\b", "ftp_qty"),
+    (rf"\b(?:ftp|first[\s-]?pass)(?:{_PCT})?", "ftp_pct"),
+    (rf"\bdefective{_PCT}", "defective_pct"),
+    (rf"\bdefective(?:{_QTY})?\b", "defective"),
+    (rf"\brectif(?:ied|ication){_PCT}", "rectified_pct"),
+    (r"\brectif(?:ied|ication)\b", "rectified"),
+    (rf"\breject(?:ion)?{_PCT}", "reject_pct"),
+    (r"\breject(?:s|ed|ions?)?\b", "rejected"),
+    (r"\bdhu\b", "dhu"),
+    (r"\bdefects?\b", "defects"),
+    (r"\b(?:checked|inspected)\b", "checked"),
+    (r"\b(?:output|production)\b", "output"),
+)
+
+
+def _group_by(question: str, spec: dict[str, Any], factory: str) -> tuple[list[str], dict[str, str]]:
+    """The dimension columns the question groups by, in its order, and the heading params ({by}, {note}).
+    Empty when there is no grouping marker or no dimension word: the tool does not match then."""
+    if not _GROUP_MARK.search(question):
+        return [], {}
+    allowed: dict[str, str] = spec.get("columns", {})
+    keys: list[str] = []
+    po_eo = False
+    for m in _DIM_RE.finditer(question):
+        key = next(_DIM_WORDS[i][1] for i in range(len(_DIM_WORDS)) if m.group(f"d{i}"))
+        if key == "po_eo":
+            key, po_eo = "file", True
+        if key in allowed and key not in keys:
+            keys.append(key)
+    if not keys:
+        return [], {}
+    cols = [allowed[k] for k in keys]
+    if not factory and "factory" in allowed and allowed["factory"] not in cols:
+        cols.insert(0, allowed["factory"])      # unit names repeat across factories: say which, unless one is asked
+    names = [_DIM_NAMES.get(k, k) for k in keys]
+    by = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    return cols, {"by": by, "note": spec.get("po_eo_note", "") if po_eo else ""}
+
+
+def _measures(question: str, spec: dict[str, Any]) -> list[str]:
+    """The figures the question names (keys of the tool's `columns:`), in its order; the tool's default if none."""
+    allowed: dict[str, str] = spec.get("columns", {})
+    taken: list[tuple[int, int]] = []
+    found: list[tuple[int, str]] = []
+    for pat, key in _MEASURE_WORDS:
+        for m in re.finditer(pat, question, re.I):
+            if key in allowed and not any(m.start() < e and s < m.end() for s, e in taken):
+                taken.append((m.start(), m.end()))
+                found.append((m.start(), key))
+    keys: list[str] = []
+    for _, key in sorted(found):
+        if key not in keys:
+            keys.append(key)
+    return keys or [k for k in spec.get("default", []) if k in allowed]
+
+
+def tool_sql(tool: dict[str, Any], params: Optional[dict[str, Any]] = None) -> str:
+    """The tool's SQL with its `{name}` placeholders for group_by / measures params filled from the whitelist in
+    its YAML. Without params (check_catalog, view detection) the defaults are used."""
+    sql = tool.get("sql", "")
+    params = params or {}
+    for name, spec in (tool.get("params") or {}).items():
+        kind = spec.get("type")
+        if kind == "group_by":
+            cols = params.get(name) or [spec.get("columns", {}).get(k) for k in spec.get("default", ["factory"])]
+            allowed = set(spec.get("columns", {}).values())
+            cols = [c for c in cols if c in allowed]
+            sql = sql.replace("{" + name + "}", ", ".join(cols))
+        elif kind == "measures":
+            keys = params.get(name) or spec.get("default", [])
+            exprs = [spec["columns"][k] for k in keys if k in spec.get("columns", {})]
+            sql = sql.replace("{" + name + "}", ", ".join(exprs))
+    return sql
+
+
+def _expand_list(sql: str, name: str, values: list[Any]) -> tuple[str, dict[str, Any]]:
+    """`IN (@files)` -> `IN (@files_0, @files_1, …)` with one bind parameter per value (never SQL text)."""
+    names = [f"{name}_{i}" for i in range(len(values))]
+    return re.sub(rf"@{name}\b", ", ".join("@" + n for n in names), sql), dict(zip(names, values))
+
+
 # ---------------------------------------------------------------- fixed tools
 def load_fixed_tools(path: Path | None = None) -> list[dict[str, Any]]:
     """Cached on the file's mtime — this is read on every data question (and now on every route)."""
@@ -192,6 +291,8 @@ def _date_window(text: str) -> tuple[date, date]:
 
 
 def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
+    # a pasted card list or table header arrives on many lines; `.` in the patterns does not cross a newline
+    question = re.sub(r"\s+", " ", question).strip()
     for tool in tools:
         m = re.search(tool["match"], question)
         if not m:
@@ -202,9 +303,20 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             continue      # a qualifier the tool's SQL cannot apply (a stage, a line, a PO …): the model writes it
         params: dict[str, Any] = {}
         for name, spec in tool.get("params", {}).items():
+            if spec.get("type") == "group_by":
+                cols, heading = _group_by(question, spec, str(params.get("factory") or ""))
+                if not cols:
+                    break                            # nothing to group by: not this tool
+                params[name] = cols
+                params.update(heading)
+                continue
+            if spec.get("type") == "measures":
+                params[name] = _measures(question, spec)
+                continue
             groups = spec.get("from_group", [])
             groups = groups if isinstance(groups, list) else [groups]
-            raw = next((m.group(g) for g in groups if g <= (m.lastindex or 0) and m.group(g)), None)
+            # m.re.groups, not m.lastindex: with nested groups ("(FR-(\d{2}-\d+))") lastindex is the outer one
+            raw = next((m.group(g) for g in groups if g <= m.re.groups and m.group(g)), None)
             if raw is None:
                 raw = spec.get("default")      # e.g. window: { default: 'last 30 days' } for an optional phrase
             if raw is None:
@@ -268,7 +380,7 @@ def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, 
 def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog], user: str = "",
                    refresh: bool = False, *, scope: Scope) -> QueryResult:
     cat = cats[tool["database"]]
-    sql = tool["sql"].strip()
+    sql = tool_sql(tool, params).strip()
     factory = params.get("factory")
     if factory and not scope.allows_factory(str(factory)):
         # Say so instead of running it: the view filter would return nothing, and the templated answer
@@ -296,6 +408,34 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
 
 
 # ---------------------------------------------------------------- generated SQL
+def companion_tool(tool: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The tool-shaped spec of a tool's `companion:` (its own database, SQL and answer_list), or None."""
+    comp = tool.get("companion")
+    if not comp:
+        return None
+    return {**comp, "name": f"{tool['name']}:companion", "agent": comp.get("agent", tool.get("agent", ""))}
+
+
+def run_companion(tool: dict[str, Any], result: QueryResult, cats: dict[str, Catalog], user: str = "",
+                  refresh: bool = False, *, scope: Scope) -> Optional[QueryResult]:
+    """A second result from another database for the rows just read, e.g. each VistaQ file's export orders and POs
+    from the ERP (VistaQ records QC per file, not per PO or EO). Runs only when the main result has the companion's
+    `column`; its distinct values (at most 200, as many as a result has rows) are bound as parameters. The answer cites it as [D2] with its own
+    database, SQL and as-of time."""
+    comp = companion_tool(tool)
+    if comp is None or result.error or not result.rows or comp.get("column") not in result.columns \
+            or comp.get("database") not in cats:
+        return None
+    i = result.columns.index(comp["column"])
+    values = sorted({str(r[i]) for r in result.rows if r[i] not in (None, "")})[:200]
+    if not values:
+        return None
+    sql, params = _expand_list(comp["sql"], comp.get("param", "values"), values)
+    out = run_fixed_tool({**comp, "sql": sql}, params, cats, user, refresh, scope=scope)
+    out.agent = comp["agent"]
+    return out
+
+
 def _views_in(sql: str, cat: Catalog) -> list[str]:
     """Curated views and discovered tables the statement reads (for the [D#] reference)."""
     try:
@@ -502,7 +642,8 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
                 result = run_fixed_tool(tool, params, cats, user, refresh, scope=scope)
                 a = pick_agent(question, tool)
                 result.agent = a.name if a else ""
-                return [result]
+                extra = run_companion(tool, result, cats, user, refresh, scope=scope)
+                return [result] + ([extra] if extra is not None else [])
         agent = pick_agent(question)
         with trace.span("data.embed"):
             qvec = _query_vector(question)

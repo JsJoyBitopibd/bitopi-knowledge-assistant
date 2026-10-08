@@ -183,8 +183,10 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
 
     # A single data result is written from a template, no model call: fixed tools (C7) and, unless
     # answer.templated_generated is off, model-written SQL too (J3) — the rows are the answer.
-    if r == "data" and not chunks and len(results) == 1 and s.get("answer.templated", True):
-        if _templated_answer(out, results[0], nf, allow_generated=bool(s.get("answer.templated_generated", True))):
+    # A fixed tool's companion (e.g. each VistaQ file's export orders from the ERP) is written the same way: [D2].
+    companion = len(results) == 2 and results[1].tool.endswith(":companion")
+    if r == "data" and not chunks and (len(results) == 1 or companion) and s.get("answer.templated", True):
+        if _templated_answer(out, results, nf, allow_generated=bool(s.get("answer.templated_generated", True))):
             yield Final(_log(out, user, scope)); return
 
     yield _writing(chunks, results)
@@ -238,23 +240,30 @@ def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) ->
     return Stage("writing", "Writing the answer…", sources=names[:limit])
 
 
-def _templated_answer(out: Answer, result: QueryResult, nf: str, allow_generated: bool = False) -> bool:
-    """Fill `out` from agent/templated.py when the result qualifies and the text verifies."""
-    from ..data.tools import load_fixed_tools
+def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_generated: bool = False) -> bool:
+    """Fill `out` from agent/templated.py when the results qualify and the text verifies: one result, or a fixed
+    tool's result [D1] followed by its companion [D2] (an empty companion is left out)."""
+    from ..data.tools import companion_tool, load_fixed_tools
     from .templated import try_template
-    tool = next((t for t in load_fixed_tools() if t.get("name") == result.tool), None)
-    text = try_template(result, tool, allow_generated)
+    tool = next((t for t in load_fixed_tools() if t.get("name") == results[0].tool), None)
+    text = try_template(results[0], tool, allow_generated)
     if not text:
         return False
-    block, refs = sources_block([], [result])
-    ok, problems = verify(text, [], [result], nf)
+    used = [results[0]]
+    if len(results) > 1 and tool is not None and not results[1].error and results[1].rows:
+        more = try_template(results[1], companion_tool(tool), marker="D2")
+        if more:
+            text += "\n\n" + more
+            used.append(results[1])
+    block, refs = sources_block([], used)
+    ok, problems = verify(text, [], used, nf)
     if not ok:
         out.warnings.append(f"template failed verification, using the model: {problems}")
         return False
     out.text, out.sources_text, out.not_found = text, block, False
-    out.results = [result]
+    out.results = used
     out.references = [x for x in refs if x.marker in set(_MARK.findall(text))]
-    out.follow_ups = _suggest([result], out.question)
+    out.follow_ups = _suggest(used, out.question)
     out.warnings.append("templated answer (no model call)")
     return True
 

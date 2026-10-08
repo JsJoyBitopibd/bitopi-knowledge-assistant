@@ -58,7 +58,8 @@ def follow_ups(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "", 
     return out[:limit]
 
 
-def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False) -> Optional[str]:
+def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False,
+                 marker: str = "D1") -> Optional[str]:
     """The answer text for one data result, or None when it should be left to the model.
 
     Fixed tools always qualify (their shape is known). With `allow_generated` (setting
@@ -80,14 +81,14 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
         lead = _fill(tool["answer"], r, value=value) if tool.get("answer") else None
         # a model-written `SELECT COUNT(*) FROM …` without an alias comes back with an empty column name
         label = r.columns[0].strip() or ("Count" if re.search(r"\bcount\s*\(", r.sql or "", re.I) else "Value")
-        return f"{lead or f'{label}: {fmt(value)}'} [D1]."
+        return f"{lead or f'{label}: {fmt(value)}'} [{marker}]."
     if r.tool == "generated" and len(r.rows) == 1 and len(r.columns) <= 8:
-        return " · ".join(f"{c}: {fmt(v)}" for c, v in zip(r.columns, r.rows[0])) + " [D1]."
+        return " · ".join(f"{c}: {fmt(v)}" for c, v in zip(r.columns, r.rows[0])) + f" [{marker}]."
     n = len(r.rows)
     shown = int(settings().get("answer.template_rows", 25))
     lead = _fill(tool["answer_list"], r, n=n) if tool.get("answer_list") else None
     found = f"Found {n} matching row" + ("" if n == 1 else "s")
-    head = f"{lead or found} [D1]:"
+    head = f"{lead or found} [{marker}]:"
     table = ["| " + " | ".join(r.columns) + " |", "|" + "---|" * len(r.columns)]
     table += ["| " + " | ".join(fmt(v) for v in row) + " |" for row in r.rows[:shown]]
     tail = f"\n\nOnly the first rows are shown here; the query returned {n} in total." if n > shown else ""

@@ -137,6 +137,7 @@ views:
       Passed: pieces passed the first time
       DefectivePcs: pieces found defective and sent for repair
       Rejected: pieces rejected
+      Rectified: defective pieces repaired and passed on re-check
       EndlineOutput: pieces passed at end-line (Output QC) — the line's output
       Defects: defects found
       DHU: defects per hundred pieces checked
@@ -146,7 +147,7 @@ views:
       SELECT
         MAX(f.ShortName) AS Factory, MAX(u.WorkspaceName) AS Unit, MAX(l.WorkspaceName) AS Line, x.InspectionDate,
         SUM(x.Checked) AS Checked, SUM(x.Passed) AS Passed, SUM(x.DefectivePcs) AS DefectivePcs,
-        SUM(x.Rejected) AS Rejected, SUM(x.Output) AS EndlineOutput, SUM(x.Defects) AS Defects,
+        SUM(x.Rejected) AS Rejected, SUM(x.Rectified) AS Rectified, SUM(x.Output) AS EndlineOutput, SUM(x.Defects) AS Defects,
         CAST(100.0 * SUM(x.Defects) / NULLIF(SUM(x.Checked), 0) AS decimal(6,2)) AS DHU,
         CAST(100.0 * SUM(x.Rejected) / NULLIF(SUM(x.Checked), 0) AS decimal(6,2)) AS RejectPct,
         CAST(100.0 * SUM(x.Passed) / NULLIF(SUM(x.Checked), 0) AS decimal(6,2)) AS FirstPassPct
@@ -156,11 +157,12 @@ views:
           CASE WHEN qi.InspectionType = 1 THEN qi.Quantity ELSE 0 END AS Passed,
           CASE WHEN qi.InspectionType = 2 THEN qi.Quantity ELSE 0 END AS DefectivePcs,
           CASE WHEN qi.InspectionType = 4 THEN qi.Quantity ELSE 0 END AS Rejected,
+          CASE WHEN qi.InspectionType = 3 THEN qi.Quantity ELSE 0 END AS Rectified,
           CASE WHEN qi.IsEndlinePassed = 1 THEN qi.Quantity ELSE 0 END AS Output,
           0 AS Defects
         FROM dbo.QualityInspection qi
         UNION ALL
-        SELECT qi.WorkspaceLineId, d.InspectionDefectDateOnly, 0, 0, 0, 0, 0, 1
+        SELECT qi.WorkspaceLineId, d.InspectionDefectDateOnly, 0, 0, 0, 0, 0, 0, 1
         FROM dbo.QualityInspectionDefect d
         JOIN dbo.QualityInspection qi ON qi.Id = d.QualityInspectionId
       ) AS x
@@ -331,6 +333,232 @@ views:
       FROM dbo.Threshold t
       CROSS JOIN dbo.Workspace f
       WHERE f.WorkspaceLevel = 1 AND f.ShortName IS NOT NULL
+  # ---- production (VistaQ's dashboard: planned, output, man hours, SAH, efficiency, WIP) ----
+  - name: rag.vw_PlanDay
+    scope_column: Factory
+    grain: one row per production plan and plan day (a line's style for that day)
+    description: >
+      VistaQ's daily production plans per line and style: SMV, planned manpower (operators + helpers + ironmen),
+      planned working hours, day target and plan efficiency. A plan with PlanHours 0 is a style no longer running that
+      day (its DayTarget is 0); planned production is SUM(DayTarget).
+    key_columns: [Factory, Line, PlanDate, Style]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      PlanDate: day the plan is for
+      Buyer: buyer name
+      Style: style number
+      SMV: standard minutes per piece
+      Manpower: planned operators + helpers + ironmen
+      PlanHours: planned working hours (0 = the style is not running that day)
+      DayTarget: planned pieces for the day
+      PlanEfficiency: planned efficiency, percent
+      Combination: VistaQ's plan combination code (one style/PO/colour on one line, kept across days)
+    definition: |
+      SELECT
+        CASE WHEN l.Id = p.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit,
+        l.WorkspaceName AS Line, CAST(p.PlanDate AS date) AS PlanDate, b.BuyerName AS Buyer, s.StyleNumber AS Style,
+        p.SMV, ISNULL(p.Operator, 0) + ISNULL(p.Helper, 0) + ISNULL(p.IronMan, 0) AS Manpower,
+        ISNULL(p.WorkingHours, 0) AS PlanHours, ISNULL(p.DayTarget, 0) AS DayTarget, p.PlanEfficiency,
+        p.PlanCombinationKey AS Combination
+      FROM dbo.ProductionPlan p
+      LEFT JOIN dbo.Buyer b ON b.Id = p.BuyerId
+      LEFT JOIN dbo.Style s ON s.Id = p.StyleId
+      LEFT JOIN dbo.Workspace l ON l.Id = p.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+      WHERE p.IsActive = 1
+
+  - name: rag.vw_PlanOutputDay
+    scope_column: Factory
+    grain: one row per line, production plan and day with end-line output
+    description: >
+      End-line output (pieces passed at Output QC, first time or after repair) per line, plan and day, live from
+      VistaQ, with the plan's SMV and the standard allowed hours earned (SAH = OutputPcs x SMV / 60).
+    key_columns: [Factory, Line, OutputDate, Style]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      OutputDate: day of the output
+      Style: style number
+      SMV: standard minutes per piece (from the plan)
+      OutputPcs: pieces passed at end-line
+      SAH: standard allowed hours earned (OutputPcs x SMV / 60)
+      Combination: VistaQ's plan combination code
+    definition: |
+      SELECT
+        CASE WHEN l.Id = o.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit,
+        l.WorkspaceName AS Line, o.OutputDate, s.StyleNumber AS Style, p.SMV, o.Output AS OutputPcs,
+        CAST(o.Output * ISNULL(p.SMV, 0) / 60.0 AS decimal(12,2)) AS SAH, p.PlanCombinationKey AS Combination
+      FROM (
+        SELECT qi.InspectionDateOnly AS OutputDate, qi.WorkspaceLineId, qi.ProductionPlanId, SUM(qi.Quantity) AS Output
+        FROM dbo.QualityInspection qi
+        WHERE qi.IsEndlinePassed = 1
+        GROUP BY qi.InspectionDateOnly, qi.WorkspaceLineId, qi.ProductionPlanId
+      ) AS o
+      LEFT JOIN dbo.ProductionPlan p ON p.Id = o.ProductionPlanId
+      LEFT JOIN dbo.Style s ON s.Id = p.StyleId
+      LEFT JOIN dbo.Workspace l ON l.Id = o.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+
+  - name: rag.vw_LineDayManHours
+    scope_column: Factory
+    grain: one row per line and working day
+    description: >
+      Each line's working day from VistaQ's session plan: working hours (breaks excluded), hours worked so far (the
+      whole day for a past day) and man hours, counting the manpower in place in each working slot (VistaQ's
+      manpower amendments, else the plan's operators + helpers + ironmen).
+    key_columns: [Factory, Line, WorkDate]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      WorkDate: working day
+      SessionHours: working hours in the day's session plan (breaks excluded)
+      WorkedHours: working hours elapsed so far (equals SessionHours for a past day)
+      ManHours: man hours worked so far (manpower in place x hours, per working slot)
+      PlanManpower: planned operators + helpers + ironmen
+    definition: |
+      SELECT
+        MAX(CASE WHEN l.Id = x.WorkspaceLineId THEN f.ShortName END) AS Factory, MAX(u.WorkspaceName) AS Unit,
+        MAX(l.WorkspaceName) AS Line, x.WorkDate,
+        CAST(SUM(x.Hours) AS decimal(6,2)) AS SessionHours, CAST(SUM(x.Elapsed) AS decimal(6,2)) AS WorkedHours,
+        CAST(SUM(x.Elapsed * x.Manpower) AS decimal(12,2)) AS ManHours, MAX(x.PlanManpower) AS PlanManpower
+      FROM (
+        SELECT s.WorkspaceLineId, CAST(s.ProductionPlanDate AS date) AS WorkDate,
+          DATEDIFF(minute, d.StartTime, d.EndTime) / 60.0 AS Hours,
+          CASE WHEN CAST(s.ProductionPlanDate AS date) < CAST(GETDATE() AS date)
+                 THEN DATEDIFF(minute, d.StartTime, d.EndTime) / 60.0
+               WHEN CAST(s.ProductionPlanDate AS date) > CAST(GETDATE() AS date) OR CAST(GETDATE() AS time) <= d.StartTime
+                 THEN 0
+               WHEN CAST(GETDATE() AS time) >= d.EndTime THEN DATEDIFF(minute, d.StartTime, d.EndTime) / 60.0
+               ELSE DATEDIFF(minute, d.StartTime, CAST(GETDATE() AS time)) / 60.0 END AS Elapsed,
+          COALESCE(a.Manpower, pm.Manpower, 0) AS Manpower, pm.Manpower AS PlanManpower
+        FROM dbo.LineWiseSessionPlan s
+        JOIN dbo.LineWiseSessionPlanDetail d ON d.LineWiseSessionPlanId = s.Id AND d.SessionType IN (1, 4, 5)
+        LEFT JOIN (
+          SELECT WorkspaceLineId, CAST(PlanDate AS date) AS PlanDate,
+            MAX(ISNULL(Operator, 0) + ISNULL(Helper, 0) + ISNULL(IronMan, 0)) AS Manpower
+          FROM dbo.ProductionPlan
+          WHERE IsActive = 1 AND WorkingHours > 0
+          GROUP BY WorkspaceLineId, CAST(PlanDate AS date)
+        ) AS pm ON pm.WorkspaceLineId = s.WorkspaceLineId AND pm.PlanDate = CAST(s.ProductionPlanDate AS date)
+        LEFT JOIN (
+          SELECT d2.Id AS DetailId, CAST(s2.ProductionPlanDate AS date) AS WorkDate,
+            ISNULL(m.Operator, 0) + ISNULL(m.Helper, 0) + ISNULL(m.IronMan, 0) AS Manpower,
+            ROW_NUMBER() OVER (PARTITION BY CAST(s2.ProductionPlanDate AS date), d2.Id
+                               ORDER BY m.AmendmentTime DESC, m.Id DESC) AS rn
+          FROM dbo.LineWiseSessionPlanDetail d2
+          JOIN dbo.LineWiseSessionPlan s2 ON s2.Id = d2.LineWiseSessionPlanId
+          JOIN dbo.ManpowerAmendment m ON m.WorkspaceLineId = s2.WorkspaceLineId
+            AND m.AmendmentDate = s2.ProductionPlanDate AND m.IsActive = 1 AND m.AmendmentTime <= d2.StartTime
+        ) AS a ON a.DetailId = d.Id AND a.WorkDate = CAST(s.ProductionPlanDate AS date) AND a.rn = 1
+      ) AS x
+      LEFT JOIN dbo.Workspace l ON l.Id = x.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+      GROUP BY x.WorkspaceLineId, x.WorkDate
+
+  - name: rag.vw_CombinationFlowDay
+    scope_column: Factory
+    grain: one row per plan combination, flow and day (cutting input or end-line output)
+    description: >
+      Pieces flowing through each plan combination (one style/PO/colour on one line) per day: cut pieces sent to
+      the line (input) and pieces passed at end-line (output). WIP of a combination up to a day = SUM(CutQty) -
+      SUM(OutputQty) over all its days up to then.
+    key_columns: [Factory, Line, Combination, FlowDate]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Line: sewing line number
+      Combination: VistaQ's plan combination code
+      FlowDate: day of the flow
+      CutQty: cut pieces sent to the line that day
+      OutputQty: pieces passed at end-line that day
+    definition: |
+      SELECT
+        CASE WHEN l.Id = x.WorkspaceLineId THEN f.ShortName END AS Factory, l.WorkspaceName AS Line,
+        x.Combination, x.FlowDate, x.CutQty, x.OutputQty
+      FROM (
+        SELECT p.WorkspaceLineId, c.Combination, c.FlowDate, c.CutQty, 0 AS OutputQty
+        FROM (
+          SELECT co.ProductionPlanId, co.PlanCombinationKey AS Combination, CAST(co.CuttingDate AS date) AS FlowDate,
+            SUM(co.Quantity) AS CutQty
+          FROM dbo.CuttingOutput co
+          GROUP BY co.ProductionPlanId, co.PlanCombinationKey, CAST(co.CuttingDate AS date)
+        ) AS c
+        JOIN dbo.ProductionPlan p ON p.Id = c.ProductionPlanId
+        UNION ALL
+        SELECT qi.WorkspaceLineId, qi.PlanCombinationKey, qi.InspectionDateOnly, 0, SUM(qi.Quantity)
+        FROM dbo.QualityInspection qi
+        WHERE qi.IsEndlinePassed = 1
+        GROUP BY qi.WorkspaceLineId, qi.PlanCombinationKey, qi.InspectionDateOnly
+      ) AS x
+      LEFT JOIN dbo.Workspace l ON l.Id = x.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+
+  - name: rag.vw_PlanQualityDay
+    scope_column: Factory
+    grain: one row per factory, sewing line, inspection day and production plan (buyer, style, colour, file)
+    description: >
+      Sewing-line quality per day and production plan from VistaQ, live: the same counts as rag.vw_LineDayQuality
+      split by the plan's buyer, style, colour and file (FR number = the ERP's FileRefID). VistaQ records QC per file,
+      style and colour, not per PO or export order (EO): its PO is "TBA"; a file holds many EOs and POs.
+    key_columns: [Factory, Line, InspectionDate, Buyer, Style, Color, FileNo]
+    columns:
+      Factory: factory short name (RHL, TAL, BGL)
+      Unit: unit or block of the line
+      Line: sewing line number
+      InspectionDate: inspection day
+      Buyer: buyer name
+      Style: style number
+      Color: colour name
+      FileNo: order file (FR number, e.g. FR-26-1985) = the ERP's FileRefID; its export orders and POs are in the ERP
+      Checked: pieces checked the first time (passed + defective + rejected)
+      Passed: pieces passed the first time (FTP)
+      DefectivePcs: pieces found defective and sent for repair
+      Rectified: defective pieces repaired and passed on re-check
+      Rejected: pieces rejected
+      EndlineOutput: pieces passed at end-line (Output QC)
+      Defects: defects found
+    definition: |
+      SELECT
+        CASE WHEN l.Id = x.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit,
+        l.WorkspaceName AS Line, x.InspectionDate, b.BuyerName AS Buyer, s.StyleNumber AS Style,
+        p.ColorName AS Color, p.FileId AS FileNo,
+        x.Checked, x.Passed, x.DefectivePcs, x.Rectified, x.Rejected, x.EndlineOutput, x.Defects
+      FROM (
+        SELECT y.WorkspaceLineId, y.InspectionDate, y.ProductionPlanId,
+          SUM(y.Checked) AS Checked, SUM(y.Passed) AS Passed, SUM(y.DefectivePcs) AS DefectivePcs,
+          SUM(y.Rectified) AS Rectified, SUM(y.Rejected) AS Rejected, SUM(y.Pcs) AS EndlineOutput,
+          SUM(y.Defects) AS Defects
+        FROM (
+          SELECT qi.WorkspaceLineId, qi.InspectionDateOnly AS InspectionDate, qi.ProductionPlanId,
+            CASE WHEN qi.InspectionType IN (1, 2, 4) THEN qi.Quantity ELSE 0 END AS Checked,
+            CASE WHEN qi.InspectionType = 1 THEN qi.Quantity ELSE 0 END AS Passed,
+            CASE WHEN qi.InspectionType = 2 THEN qi.Quantity ELSE 0 END AS DefectivePcs,
+            CASE WHEN qi.InspectionType = 3 THEN qi.Quantity ELSE 0 END AS Rectified,
+            CASE WHEN qi.InspectionType = 4 THEN qi.Quantity ELSE 0 END AS Rejected,
+            CASE WHEN qi.IsEndlinePassed = 1 THEN qi.Quantity ELSE 0 END AS Pcs,
+            0 AS Defects
+          FROM dbo.QualityInspection qi
+          UNION ALL
+          SELECT qi.WorkspaceLineId, d.InspectionDefectDateOnly, qi.ProductionPlanId, 0, 0, 0, 0, 0, 0, 1
+          FROM dbo.QualityInspectionDefect d
+          JOIN dbo.QualityInspection qi ON qi.Id = d.QualityInspectionId
+        ) AS y
+        GROUP BY y.WorkspaceLineId, y.InspectionDate, y.ProductionPlanId
+      ) AS x
+      LEFT JOIN dbo.ProductionPlan p ON p.Id = x.ProductionPlanId
+      LEFT JOIN dbo.Buyer b ON b.Id = p.BuyerId
+      LEFT JOIN dbo.Style s ON s.Id = p.StyleId
+      LEFT JOIN dbo.Workspace l ON l.Id = x.WorkspaceLineId
+      LEFT JOIN dbo.Workspace u ON u.Id = l.ParentId
+      LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
+
 examples:
   - question: What was the DHU of each factory yesterday?
     sql: |

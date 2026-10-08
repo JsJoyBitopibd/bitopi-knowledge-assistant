@@ -211,14 +211,17 @@ def _expect_day(month: int, day: int) -> date:
 
 def test_the_screenshot_questions_use_their_dates():
     ts = tools.load_fixed_tools()
+    # grouped questions get exactly the columns they name (quality_by_group_window, owner's rule of 8 Oct)
     tool, p = tools.match_fixed_tool("show me line & factory wise DHU of 6-10-2026", ts)
-    assert tool["name"] == "dhu_by_line" and p["from"] == date(2026, 10, 6) and p["window"] == "on 6 Oct 2026"
+    assert tool["name"] == "quality_by_group_window" and p["from"] == date(2026, 10, 6) and p["window"] == "on 6 Oct 2026"
+    assert (p["dims"], p["measures"]) == (["Line", "Factory"], ["dhu"])
     tool, p = tools.match_fixed_tool("show me line & factory wise DHU of 7th october.", ts)
-    assert tool["name"] == "dhu_by_line" and p["from"] == _expect_day(10, 7)
+    assert tool["name"] == "quality_by_group_window" and p["from"] == _expect_day(10, 7)
     tool, p = tools.match_fixed_tool("Show me the defect summary for today broken down by line.", ts)
-    assert tool["name"] == "defects_by_line_window" and p["window"] == "today"
-    tool, _ = tools.match_fixed_tool("Show date beside the data for factory and line-wise DHU today", ts)
-    assert tool["name"] == "dhu_by_line"
+    assert tool["name"] == "quality_by_group_window" and p["window"] == "today"
+    assert (p["dims"], p["measures"]) == (["Factory", "Line"], ["defects"])
+    tool, p = tools.match_fixed_tool("Show date beside the data for factory and line-wise DHU today", ts)
+    assert tool["name"] == "quality_by_group_window" and p["dims"] == ["Factory", "Line"]
     assert tools.match_fixed_tool("Which RHL lines had the most defects today?", ts)[0]["name"] == "dhu_by_line_by_factory"
 
 
@@ -236,8 +239,8 @@ def test_follow_ups_with_a_date_label_reach_their_tool_for_the_same_day():
     for q in follow_ups(r, tool):
         hit = tools.match_fixed_tool(q, ts)
         assert hit is not None and hit[1]["from"] == date(2026, 10, 6), q
-    assert tools.match_fixed_tool("Show me the defect summary on 6 Oct 2026 line wise", ts)[0]["name"] \
-        == "defects_by_line_window"
+    tool, p = tools.match_fixed_tool("Show me the defect summary on 6 Oct 2026 line wise", ts)
+    assert tool["name"] == "quality_by_group_window" and p["from"] == date(2026, 10, 6)
     _, p = tools.match_fixed_tool("Show me the QC summary in October 2026", ts)
     assert (p["from"], p["to"], p["window"]) == (date(2026, 10, 1), date(2026, 11, 1), "in October 2026")
 

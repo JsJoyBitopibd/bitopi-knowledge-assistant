@@ -42,6 +42,29 @@ each phase is in `docs/ROADMAP.md`.
 - `defects_by_line_window`: "defect summary line wise / by line / broken down by line" gives defects, defective and
   checked pieces and DHU per line. It had repeated the by-type table.
 - Golden cases 80–83 (the two dated DHU questions from the screenshots, line-wise defects, day-wise QC).
+- **VistaQ's production dashboard.** VistaQ's dashboard cards, pasted with "show me these data of yesterday", are
+  answered as one row per figure, columns BGL / RHL / TAL / All. The figures: working styles, lines, planned
+  production, RTT, sewing production, variance vs RTT, WIP, efficiency, average SMV, man hours and plan man hours,
+  SAH, FTP / defective / rectified / reject rate and qty, overall DHU, defects.
+  - New views `rag.vw_PlanDay`, `vw_PlanOutputDay`, `vw_LineDayManHours` (working-session slots, with VistaQ's
+    manpower changes) and `vw_CombinationFlowDay` (cut input and output, for WIP); `Rectified` on `vw_LineDayQuality`.
+  - Tools `production_dashboard_window` and `production_by_line_window` (any production figure, or "dashboard").
+  - Definitions are in `docs/vistaq_questions.md`.
+  - Before, this question got "System doesn't have the data." after 33 s; now about 4–6 s.
+- **Answers grouped exactly as asked** (owner's rule, 8 Oct): "Unit, Line and Buyer wise DHU of TAL" gives Date,
+  Unit, Line, Buyer, DHU and nothing else.
+  - Fixed tools can take `group_by` and `measures` params, read from the question and filled from a whitelist in
+    the tool's YAML.
+  - New view `rag.vw_PlanQualityDay` (QC by buyer, style, colour and file); tool `quality_by_group_window`.
+- **PO and EO questions answered per file.** VistaQ records QC per file (FR number = the ERP's FileRefID), not per PO
+  (always "TBA") or EO.
+  - A PO-, EO- or order-wise question gets QC per file, with a note saying so, and each file's export orders and POs
+    from the ERP as a second cited source ([D2]).
+  - This uses a new `companion:` option on fixed tools: a second query on another database, with bind parameters,
+    in a two-source templated answer.
+  - "DHU of EO TAL-26-1985-1" leads to its file (`quality_by_eo_window`); "Which export orders are in file
+    FR-26-1985?" lists them (`orders_by_file_id`).
+- Golden cases 84–88 (the pasted dashboard, per line, the screenshot grouping question, PO-wise, EO).
 - `scripts/set_db_connection.ps1` sets the connection lines in `.env` from a hidden password prompt. `-Variable` and
   `-Database` write one extra line for a database on another server.
 - **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
@@ -85,6 +108,10 @@ each phase is in `docs/ROADMAP.md`.
   Dhaka, and "as of" times and the Data status card ran 6 hours behind. Log timestamps are Dhaka time from 8 Oct
   2026 09:45; earlier rows are UTC.
 - VistaQ questions that ask "day wise", "daily" or "per day" go to model-written SQL, which can group by day.
+- `defects_by_line_window` is replaced by `quality_by_group_window` (golden case 82 now expects only the columns
+  asked). `match_fixed_tool` collapses whitespace, so a pasted multi-line question matches. It also reads regex
+  groups by the pattern's group count: `m.lastindex` hid nested groups, so `FR-(26-1985)` lost its inner group.
+  Quality and Production charters describe the new views and definitions (prompts v13).
 - `scripts/check_catalog.py --live` checks a view with `WHERE 1 = 0`, so it no longer totals an aggregating view's
   88 million rows on a live server.
 - Wording: "Found N matching rows" instead of "N row(s) found"; the not-found note under an answer points to the

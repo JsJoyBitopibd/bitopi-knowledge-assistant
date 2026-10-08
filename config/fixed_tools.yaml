@@ -376,6 +376,277 @@
 # Leads say "{window}" without "for": the label reads "today", "this week", "on 6 Oct 2026", "in October 2026".
 # `heavy: true` (30 s): the first question about a day the server has not read yet can be slow.
 
+# VistaQ's production dashboard (the cards: working styles / lines, planned production / RTT, sewing production /
+# variance vs RTT, WIP, efficiency / average SMV, man hours / plan, SAH, FTP, defective, rectified and reject rate,
+# overall DHU / defects). Definitions: docs/vistaq_questions.md. Every figure is computed here, in SQL.
+# These two come first: a pasted card list ("Line: … Overall DHU …") would otherwise reach dhu_by_line.
+
+- name: production_by_line_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Show the production dashboard yesterday line wise'
+  follow_ups:
+    - 'Show the production dashboard {window}'
+    - 'Show me the defect summary {window} line wise'
+  description: Each sewing line's production for a period from VistaQ — styles, planned production, RTT, sewing output, variance, WIP, efficiency, average SMV, man hours, SAH, FTP, defective, rectified and reject rates and DHU.
+  answer_list: 'Production by line {window}, live from VistaQ ({n} lines)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\b(?:dashboard|production|efficiency|smv|man[\s-]?hours?|sah|wip|rtt)\b)(?=.*\b(?:lines?[\s-]?wise|(?:by|per|for)\s+(?:each\s+|every\s+)?lines?|each\s+line|every\s+line|broken\s+down\s+by\s+lines?|line\s+by\s+line|lines)\b)'
+  unless: &vq_unless '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\blines?\s*(?:no\.?|number|#)?\s*-?\s*\d+\b|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d+\b|\b(?:po|style|order|eo)\s*(?:no\.?|number|#)?\s*[:#-]?\s*[a-z0-9][a-z0-9/-]*\d|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b)|\b(?i:for|of|from|at|in|by)\s+(?!(?i:the|a|an|all|each|every|today|toady|yesterday|this|last|next|rhl|tal|bgl|my|our|vistaq|qc|buyers?|styles?|lines?|stages?|defects?|factory|factories|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|working|planned|production|sewing|overall|average|avrg|total|man|plan|units?|blocks?|colou?rs?|files?|pos?|eos?|orders?|customers?|brands?)\b)[A-Z][\w&''.-]*'
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
+        ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
+      p.Factory, p.Unit, p.Line, p.Styles, p.Planned, CAST(ROUND(p.RTT, 0) AS int) AS RTT,
+      ISNULL(o.OutputPcs, 0) AS SewingOutput, ISNULL(o.OutputPcs, 0) - CAST(ROUND(p.RTT, 0) AS int) AS VarianceVsRTT,
+      w.WIP,
+      CAST(100.0 * o.SAH / NULLIF(mh.ManHours, 0) AS decimal(6,2)) AS EfficiencyPct,
+      CAST(60.0 * o.SAH / NULLIF(o.OutputPcs, 0) AS decimal(6,2)) AS AvgSMV,
+      mh.ManHours, p.PlanManHours, o.SAH,
+      CAST(100.0 * q.Passed / NULLIF(q.Checked, 0) AS decimal(6,2)) AS FTPPct,
+      CAST(100.0 * q.DefectivePcs / NULLIF(q.Checked, 0) AS decimal(6,2)) AS DefectivePct,
+      CAST(100.0 * q.Rectified / NULLIF(q.Checked, 0) AS decimal(6,2)) AS RectifiedPct,
+      CAST(100.0 * q.Rejected / NULLIF(q.Checked, 0) AS decimal(6,2)) AS RejectPct,
+      CAST(100.0 * q.Defects / NULLIF(q.Checked, 0) AS decimal(6,2)) AS DHU
+    FROM (
+      SELECT pd.Factory, MAX(pd.Unit) AS Unit, pd.Line,
+        COUNT(DISTINCT CASE WHEN pd.PlanHours > 0 THEN ISNULL(pd.Buyer, '') + '|' + ISNULL(pd.Style, '') END) AS Styles,
+        SUM(pd.DayTarget) AS Planned,
+        SUM(pd.DayTarget * ISNULL(lm.WorkedHours / NULLIF(lm.SessionHours, 0), 1)) AS RTT,
+        SUM(pd.Manpower * pd.PlanHours) AS PlanManHours
+      FROM rag.vw_PlanDay pd
+      LEFT JOIN rag.vw_LineDayManHours lm ON lm.Factory = pd.Factory AND lm.Line = pd.Line AND lm.WorkDate = pd.PlanDate
+      WHERE pd.Factory IS NOT NULL AND (@factory = '' OR pd.Factory = @factory) AND pd.PlanDate >= @from AND pd.PlanDate < @to
+      GROUP BY pd.Factory, pd.Line
+      HAVING SUM(pd.PlanHours) > 0
+    ) AS p
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(OutputPcs) AS OutputPcs, SUM(SAH) AS SAH
+      FROM rag.vw_PlanOutputDay
+      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND OutputDate >= @from AND OutputDate < @to
+      GROUP BY Factory, Line
+    ) AS o ON o.Factory = p.Factory AND o.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(ManHours) AS ManHours
+      FROM rag.vw_LineDayManHours
+      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND WorkDate >= @from AND WorkDate < @to
+      GROUP BY Factory, Line
+    ) AS mh ON mh.Factory = p.Factory AND mh.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+        SUM(Rectified) AS Rectified, SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
+      FROM rag.vw_LineDayQuality
+      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+      GROUP BY Factory, Line
+    ) AS q ON q.Factory = p.Factory AND q.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(CutQty) - SUM(OutputQty) AS WIP
+      FROM rag.vw_CombinationFlowDay
+      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND FlowDate < @to
+        AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
+      GROUP BY Factory, Line
+    ) AS w ON w.Factory = p.Factory AND w.Line = p.Line
+    ORDER BY p.Factory, p.Line
+
+- name: production_dashboard_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Show the production dashboard yesterday'
+  follow_ups:
+    - 'Show the production dashboard {window} line wise'
+    - 'Show me the QC summary {window}'
+    - 'Which lines are above the DHU target {window}?'
+  description: VistaQ's production dashboard for a period, per factory and in all — working styles, lines, planned production, RTT, sewing production, variance vs RTT, WIP, efficiency, average SMV, man hours (actual and plan), SAH, FTP, defective, rectified and reject rates with quantities, overall DHU and defects.
+  answer_list: 'Production dashboard {window}, live from VistaQ'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?!.*(?:\b(?:buyers?|styles?|colou?rs?|files?|pos?|eos?|orders?|units?)[\s-]*wise\b|\b(?:by|per|each|every)\s+(?:buyers?|styles?|colou?rs?|files?|pos?|eos?|orders?|units?)\b))(?:(?=.*\b(?:production|factory|sewing|line|floor)\s+(?:dashboard|kpis?|scorecard|summary|report|status)\b)|(?=.*\bdashboard\b)|(?=.*\b(?:efficiency|sah|smv|man[\s-]?hours?|wip|rtt|planned\s+production|sewing\s+production)\b))'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (30)
+      CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
+        ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
+      m.Metric,
+      MAX(CASE WHEN t.Factory = 'BGL' THEN m.Amount END) AS BGL,
+      MAX(CASE WHEN t.Factory = 'RHL' THEN m.Amount END) AS RHL,
+      MAX(CASE WHEN t.Factory = 'TAL' THEN m.Amount END) AS TAL,
+      MAX(CASE WHEN t.Factory = 'All' THEN m.Amount END) AS [All]
+    FROM (
+      SELECT p.Factory, p.Styles, p.Lines, p.Planned, ROUND(p.RTT, 0) AS RTT, p.PlanManHours,
+        ISNULL(o.OutputPcs, 0) AS OutputPcs, ISNULL(o.SAH, 0) AS SAH, mh.ManHours, w.WIP,
+        q.Checked, q.Passed, q.DefectivePcs, q.Rectified, q.Rejected, q.Defects
+      FROM (
+        SELECT CASE WHEN GROUPING(pd.Factory) = 1 THEN 'All' ELSE pd.Factory END AS Factory,
+          COUNT(DISTINCT CASE WHEN pd.PlanHours > 0 THEN pd.Factory + '|' + pd.Line END) AS Lines,
+          COUNT(DISTINCT CASE WHEN pd.PlanHours > 0 THEN ISNULL(pd.Buyer, '') + '|' + ISNULL(pd.Style, '') END) AS Styles,
+          SUM(pd.DayTarget) AS Planned,
+          SUM(pd.DayTarget * ISNULL(lm.WorkedHours / NULLIF(lm.SessionHours, 0), 1)) AS RTT,
+          SUM(pd.Manpower * pd.PlanHours) AS PlanManHours
+        FROM rag.vw_PlanDay pd
+        LEFT JOIN rag.vw_LineDayManHours lm ON lm.Factory = pd.Factory AND lm.Line = pd.Line AND lm.WorkDate = pd.PlanDate
+        WHERE pd.Factory IS NOT NULL AND (@factory = '' OR pd.Factory = @factory) AND pd.PlanDate >= @from AND pd.PlanDate < @to
+        GROUP BY ROLLUP(pd.Factory)
+      ) AS p
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory,
+          SUM(OutputPcs) AS OutputPcs, SUM(SAH) AS SAH
+        FROM rag.vw_PlanOutputDay
+        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND OutputDate >= @from AND OutputDate < @to
+        GROUP BY ROLLUP(Factory)
+      ) AS o ON o.Factory = p.Factory
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory, SUM(ManHours) AS ManHours
+        FROM rag.vw_LineDayManHours
+        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND WorkDate >= @from AND WorkDate < @to
+        GROUP BY ROLLUP(Factory)
+      ) AS mh ON mh.Factory = p.Factory
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory,
+          SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs, SUM(Rectified) AS Rectified,
+          SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
+        FROM rag.vw_LineDayQuality
+        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+        GROUP BY ROLLUP(Factory)
+      ) AS q ON q.Factory = p.Factory
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory, SUM(CutQty) - SUM(OutputQty) AS WIP
+        FROM rag.vw_CombinationFlowDay
+        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND FlowDate < @to
+          AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
+        GROUP BY ROLLUP(Factory)
+      ) AS w ON w.Factory = p.Factory
+    ) AS t
+    CROSS APPLY (VALUES
+      (1, 'Working styles', CAST(t.Styles AS decimal(14,2))),
+      (2, 'Lines', CAST(t.Lines AS decimal(14,2))),
+      (3, 'Planned production', CAST(t.Planned AS decimal(14,2))),
+      (4, 'RTT', CAST(t.RTT AS decimal(14,2))),
+      (5, 'Sewing production', CAST(t.OutputPcs AS decimal(14,2))),
+      (6, 'Variance vs RTT', CAST(t.OutputPcs - t.RTT AS decimal(14,2))),
+      (7, 'WIP', CAST(t.WIP AS decimal(14,2))),
+      (8, 'Efficiency %', CAST(100.0 * t.SAH / NULLIF(t.ManHours, 0) AS decimal(14,2))),
+      (9, 'Average SMV', CAST(60.0 * t.SAH / NULLIF(t.OutputPcs, 0) AS decimal(14,2))),
+      (10, 'Man hours', CAST(t.ManHours AS decimal(14,2))),
+      (11, 'Plan man hours', CAST(t.PlanManHours AS decimal(14,2))),
+      (12, 'SAH', CAST(t.SAH AS decimal(14,2))),
+      (13, 'FTP %', CAST(100.0 * t.Passed / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (14, 'FTP qty', CAST(t.Passed AS decimal(14,2))),
+      (15, 'Defective rate %', CAST(100.0 * t.DefectivePcs / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (16, 'Defective qty', CAST(t.DefectivePcs AS decimal(14,2))),
+      (17, 'Rectified rate %', CAST(100.0 * t.Rectified / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (18, 'Rectified qty', CAST(t.Rectified AS decimal(14,2))),
+      (19, 'Reject rate %', CAST(100.0 * t.Rejected / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (20, 'Reject qty', CAST(t.Rejected AS decimal(14,2))),
+      (21, 'Overall DHU', CAST(100.0 * t.Defects / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (22, 'Defects', CAST(t.Defects AS decimal(14,2)))
+    ) AS m(Ord, Metric, Amount)
+    GROUP BY m.Ord, m.Metric
+    ORDER BY m.Ord
+
+# Quality grouped the way the question asks, with only the figures it names (owner, 8 Oct 2026: "what the user wants
+# beside the line, that data is shown, not other data"). `dims` (type group_by) and `measures` (type measures) are
+# read from the question by tools.py and filled into {dims} / {measures} from the whitelists below. PO, EO and order
+# mean the file: VistaQ records QC per file (FR number = the ERP's FileRefID), its PO is "TBA"; the companion then
+# adds each file's export orders and POs from the ERP as [D2].
+
+- name: quality_by_eo_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show the DHU of EO TAL-26-1985-1 this week'
+  follow_ups:
+    - 'Which export orders are in file FR-{eo_file}?'
+    - 'Show me the defect summary {window}'
+  description: QC figures for the order file (FR number) that holds an export order or a named file. VistaQ records QC per file, not per export order or PO.
+  answer_list: 'QC {window} for file FR-{eo_file}, live from VistaQ. VistaQ records QC per file, not per export order or PO; the file''s export orders and POs follow'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*?\b(?:TAL|RHL|BGL|KTL|CKDL|FR)-(\d{2}-\d{1,6})(?:-\d{1,4})?\b)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected)\b)'
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    eo_file: { from_group: 2 }
+    measures: &vq_measures
+      type: measures
+      default: [checked, defects, dhu]
+      columns:
+        checked: 'SUM(Checked) AS Checked'
+        defects: 'SUM(Defects) AS Defects'
+        dhu: 'CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU'
+        ftp_pct: 'CAST(100.0 * SUM(Passed) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS FTPPct'
+        ftp_qty: 'SUM(Passed) AS FTPQty'
+        defective: 'SUM(DefectivePcs) AS DefectivePcs'
+        defective_pct: 'CAST(100.0 * SUM(DefectivePcs) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DefectivePct'
+        rectified: 'SUM(Rectified) AS Rectified'
+        rectified_pct: 'CAST(100.0 * SUM(Rectified) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RectifiedPct'
+        rejected: 'SUM(Rejected) AS Rejected'
+        reject_pct: 'CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct'
+        output: 'SUM(EndlineOutput) AS EndlineOutput'
+  heavy: true
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      FileNo, {measures}
+    FROM rag.vw_PlanQualityDay
+    WHERE FileNo = 'FR-' + @eo_file AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY FileNo
+    HAVING SUM(Checked) > 0
+  companion: &vq_file_orders
+    database: BitopiSplint
+    agent: order
+    column: FileNo
+    param: files
+    answer_list: 'Export orders and POs of each file, from the ERP'
+    sql: |
+      SELECT TOP (200)
+        e.FileRefID AS FileNo, MAX(e.Buyer) AS Buyer, COUNT(*) AS ExportOrders, COUNT(DISTINCT e.ExportPONo) AS POs,
+        MAX(CASE WHEN e.FirstNo = 1 THEN e.ExportOrderID END) AS FirstEO,
+        MAX(CASE WHEN e.LastNo = 1 THEN e.ExportOrderID END) AS LastEO, SUM(e.OrderQty) AS OrderQty
+      FROM (
+        SELECT ExportOrderID, ExportPONo, FileRefID, Buyer, OrderQty,
+          ROW_NUMBER() OVER (PARTITION BY FileRefID ORDER BY LEN(ExportOrderID), ExportOrderID) AS FirstNo,
+          ROW_NUMBER() OVER (PARTITION BY FileRefID ORDER BY LEN(ExportOrderID) DESC, ExportOrderID DESC) AS LastNo
+        FROM rag.vw_ExportOrder
+        WHERE FileRefID IN (@files)
+      ) AS e
+      GROUP BY e.FileRefID
+      ORDER BY e.FileRefID
+
+- name: quality_by_group_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'show me Unit, Line and Buyer wise DHU of TAL'
+  follow_ups:
+    - 'Show me the QC summary {window}'
+    - 'Which lines are above the DHU target {window}?'
+  description: QC figures from VistaQ grouped the way the question asks (factory, unit, line, buyer, style, colour or file; PO, EO and order mean the file) with only the figures it names (DHU, defects, checked, FTP, defective, rectified, reject, output).
+  answer_list: 'QC by {by} {window}, live from VistaQ ({n} rows){note}'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected|output|production)\b)(?=.*(?:\bwise\b|\b(?:by|per|each|every)\b|\bbroken\s+down\b|\bbreak\s*-?\s*down\b))'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+    dims:
+      type: group_by
+      default: [factory]
+      columns: { factory: Factory, unit: Unit, line: Line, buyer: Buyer, style: Style, color: Color, file: FileNo }
+      po_eo_note: '. VistaQ records QC per file (FR number), not per PO or export order; each file''s export orders and POs from the ERP follow'
+    measures: *vq_measures
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      {dims}, {measures}
+    FROM rag.vw_PlanQualityDay
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY {dims}
+    HAVING SUM(Checked) > 0
+    ORDER BY {dims}
+  companion: *vq_file_orders
+
 - name: qc_summary_by_factory_window
   agent: quality
   database: VistaQ_Default_RHL
@@ -387,7 +658,7 @@
   description: One factory's QC totals for a period from VistaQ — pieces checked, passed, defective, rejected, defects, DHU, reject %, first-pass % and end-line output.
   answer_list: '{factory} QC summary {window}, live from VistaQ'
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(TAL|RHL|BGL)\b)(?:(?=.*\b(?:qc|quality|dhu)\s+(?:summary|status|report|overview|position)\b)|(?!.*\b(?:lines?|target|limit|threshold|buyers?|styles?|stages?|capas?|corrective)\b)(?=.*\bdhu\b))'
-  unless: &vq_unless '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\blines?\s*(?:no\.?|number|#)?\s*-?\s*\d+\b|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d+\b|\b(?:po|style|order|eo)\s*(?:no\.?|number|#)?\s*[:#-]?\s*[a-z0-9][a-z0-9/-]*\d|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b)|\b(?i:for|of|from|at|in|by)\s+(?!(?i:the|a|an|all|each|every|today|toady|yesterday|this|last|next|rhl|tal|bgl|my|our|vistaq|qc|buyers?|styles?|lines?|stages?|defects?|factory|factories|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)[A-Z][\w&''.-]*'
+  unless: *vq_unless
   params:
     window: { from_group: 1, type: date_window, default: 'today' }
     factory: { from_group: 2, upper: true }
@@ -435,33 +706,6 @@
     WHERE InspectionDate >= @from AND InspectionDate < @to
     GROUP BY Factory
     ORDER BY Factory
-
-- name: defects_by_line_window
-  agent: quality
-  database: VistaQ_Default_RHL
-  example: 'Show me the defect summary for today broken down by line'
-  follow_ups:
-    - 'Show me the defect summary {window}'
-    - 'Which lines have the highest DHU {window}?'
-  description: Defects found per sewing line in a period, with defective and checked pieces and DHU, live from VistaQ, most defects first.
-  answer_list: 'Defects by line {window}, most first ({n} lines)'
-  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?!.*\bdhu\b)(?=.*\bdefect)(?=.*\b(?:lines?[\s-]?wise|(?:by|per|for)\s+(?:each\s+|every\s+)?lines?|each\s+line|every\s+line|broken\s+down\s+by\s+lines?|line\s+by\s+line)\b)'
-  unless: *vq_unless
-  params:
-    window: { from_group: 1, type: date_window, default: 'today' }
-    factory: { from_group: 2, upper: true, default: '' }
-  heavy: true
-  sql: |
-    SELECT TOP (200)
-      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
-        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
-      Factory, Unit, Line, SUM(Defects) AS Defects, SUM(DefectivePcs) AS DefectivePcs, SUM(Checked) AS Checked,
-      CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU
-    FROM rag.vw_LineDayQuality
-    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
-    GROUP BY Factory, Unit, Line
-    HAVING SUM(Checked) > 0
-    ORDER BY Defects DESC
 
 - name: defect_summary_by_factory_window
   agent: quality
@@ -862,6 +1106,27 @@
     FROM rag.vw_CancelledExportOrder
     WHERE CancelledDate >= @from AND CancelledDate < @to
     ORDER BY CancelledDate DESC
+
+- name: orders_by_file_id
+  agent: order
+  database: BitopiSplint
+  example: 'Which export orders are in file FR-26-1985?'
+  follow_ups:
+    - 'Show the DHU of file FR-{file_no} this week'
+  description: >
+    Export orders and POs of one order file by its file number (FileRefID, e.g. FR-26-1985 — the file number VistaQ
+    shows on its QC). FileRefNo is the file's free-text name; this tool needs the structured FR number.
+  answer_list: 'Export orders and POs in file {file} ({n} orders)'
+  match: '(?i)(?=.*\b(?:export\s+orders?|eos?|orders?|pos?|purchase\s+orders?)\b).*?\b(FR-(\d{2}-\d{1,6}))\b'
+  params:
+    file: { from_group: 1, upper: true }
+    file_no: { from_group: 2 }
+  sql: |
+    SELECT TOP (200)
+      ExportOrderID, ExportPONo, Buyer, StyleName, OrderQty, PCD, ShipDate, ExportOrderStatus, Factory
+    FROM rag.vw_ExportOrder
+    WHERE FileRefID = @file
+    ORDER BY LEN(ExportOrderID), ExportOrderID
 
 - name: orders_by_fileref
   agent: order

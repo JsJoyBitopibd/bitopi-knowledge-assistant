@@ -8,7 +8,8 @@ from ragbot.auth.models import Scope
 from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.data.guard import GuardError
-from ragbot.data.tools import load_fixed_tools, match_fixed_tool, run_fixed_tool, _views_in
+from ragbot.data.tools import (companion_tool, load_fixed_tools, match_fixed_tool, run_companion, run_fixed_tool,
+                               tool_sql, _views_in)
 from ragbot.data.virtual import validate_definition
 from ragbot.domain_agents import load_agents, validate_agents
 
@@ -48,9 +49,15 @@ def offline(cats) -> int:
             problems += 1
             continue
         cat = cats[tool["database"]]
-        views = _views_in(tool["sql"], cat)
+        views = _views_in(tool_sql(tool), cat)          # group_by / measures placeholders filled with defaults
         if not views:
             print(f"[offline] fixed tool {tool['name']}: no catalog view referenced")
+            problems += 1
+        comp = companion_tool(tool)
+        if comp is not None and (comp.get("database") not in cats or not comp.get("column") or not comp.get("sql")
+                                 or not _views_in(comp["sql"].replace("@" + comp.get("param", "values"), "''"),
+                                                  cats.get(comp.get("database"), cat))):
+            print(f"[offline] fixed tool {tool['name']}: companion needs a loaded database, a column and SQL over its views")
             problems += 1
         # the example question must reach this tool: tools are tried in file order and the first match
         # wins, so a broader tool placed earlier can shadow this one
@@ -109,6 +116,10 @@ def live(cats) -> int:
                 problems += 1
             else:
                 print(f"[live] fixed tool {tool['name']}: OK ({len(qr.rows)} row(s))")
+                extra = run_companion(tool, qr, cats, user="check_catalog", scope=Scope.unrestricted())
+                if extra is not None:
+                    print(f"[live]   companion: {'FAILED — ' + extra.error if extra.error else f'OK ({len(extra.rows)} row(s))'}")
+                    problems += 1 if extra.error else 0
         except Exception as e:
             print(f"[live] fixed tool {tool['name']}: FAILED — {e.__class__.__name__}: {e}")
             problems += 1
