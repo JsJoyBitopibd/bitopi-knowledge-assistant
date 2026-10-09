@@ -182,6 +182,13 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
   and the SQL on request. Never the connection string, never column lists beyond the catalog.
 - If a question needs a table that is not in the catalog: "System doesn't have the data." plus
   "This may be in <system>; ask IT to add a view."
+- When a model-written statement returns nothing (Phase P2, `src/ragbot/data/empty_retry.py`): the recorded
+  values of the text columns it filtered on are looked up (guarded `SELECT DISTINCT`, shown as their own
+  `[D#]` cards); a unique close spelling is corrected and the answer carries a cited note saying which word was
+  matched to which recorded value; at most two further model calls may be spent (the owner's bound), only after
+  that empty first try, never on the `both` route. If still nothing: "System doesn't have the data. I checked
+  <system> for '<the user's own words>' and found no matching records…" — never a column, table or recorded
+  value in the sentence; the recorded values are offered as questions to click.
 
 ## 6. Virtual views (this build, until a DBA runs the DDL above)
 

@@ -15,11 +15,15 @@ Choosing what to query:
 - On raw tables never write SELECT * — name the columns you need. COUNT(*) is fine.
 - A table shown with more than 1,000,000 rows must be filtered with a WHERE clause.
 - Join only along a listed key, a listed "Joins:" line, or a "Likely joins" line.
+- When a "Known values" line gives the recorded spelling of a word in the question, filter on that recorded
+  value and that column — never on the question's own spelling.
 
 {agent}
 
 {catalogs}
 
 {tables}
+
+{values}
 
 Today is {today}.

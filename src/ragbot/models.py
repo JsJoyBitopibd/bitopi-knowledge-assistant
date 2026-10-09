@@ -62,6 +62,12 @@ class QueryResult(BaseModel):
     databases_considered: list[str] = Field(default_factory=list)  # catalogs the SQL model was shown (data/db_router.py)
     sql_cached: bool = False     # the SQL came from the question->SQL cache, no generation call (tools.py)
     agent: str = ""              # domain agent that answered (config/agents, Phase K); "" when none
+    # Phase P2: what the empty-result repair (data/empty_retry.py) did to a model-written statement
+    filters: dict[str, str] = Field(default_factory=dict)      # column -> the literal the statement filtered on
+    corrections: list[list[str]] = Field(default_factory=list)  # [column, asked, matched]: a literal replaced by a recorded value
+    candidates: list[str] = Field(default_factory=list)         # recorded values a lookup found when nothing matched (chips)
+    checked: bool = False        # a lookup ran or an identifier was filtered: the documents cannot rescue this question
+    lookups: list[Any] = Field(default_factory=list)            # the DISTINCT lookups that ran (QueryResult, tool "lookup"): [D2]…
 
     @property
     def row_keys(self) -> list[str]:

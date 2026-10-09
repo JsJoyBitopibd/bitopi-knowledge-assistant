@@ -269,3 +269,12 @@ python scripts\refresh_aggregates.py --every 24      # or keep it running
 
 The DBA index on `dbo.ExportOrderBack(ExportOrderID)` (`docs/schema/rag_views_bitopisplint.sql`)
 would make the live query fast too; the copy is the no-DDL workaround until then.
+
+**Value index (Phase P2).** The same refresh copies the names the data records — stores, companies, item
+categories, store groups, issue causes (`config/aggregates.yaml` specs with `entity:`) — so a question's
+spelling ("mantainance store of misami") becomes the recorded value ('Maintenance Store (Misami)') in a fixed
+tool's parameter, in the SQL prompt's "Known values" line and in the router's evidence. In Docker the
+`aggregates` service does this daily (`docker compose up -d aggregates`; mount `config/` into it so edited
+specs count). `python scripts\refresh_aggregates.py values_stores values_companies …` refreshes the value
+copies alone (a few hundred rows, seconds). The admin caption's "databases" and `logs/sql_gen.csv` (`repair`
+rows) show when the self-correction after an empty result fired.

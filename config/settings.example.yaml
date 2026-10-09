@@ -66,6 +66,15 @@ data:
   big_table_rows: 1000000         # raw tables above this need a WHERE clause (guard)
   max_databases_per_question: 2   # catalogs shown to the SQL model per question, ranked by data/db_router.py (J1)
   max_databases_per_question_max: 3   # one more when the next catalog ties the last pick on keywords (P1)
+  values:                         # value index (P2.1, data/values.py): recorded names matched against the question
+    enabled: true
+    fuzzy_cutoff: 0.85            # difflib ratio a close match must reach ('mantainance store' ~ 'Maintenance Store' = 0.88)
+  empty_retry:                    # self-correction after a model-written statement returns nothing (P2.2, data/empty_retry.py)
+    enabled: true
+    max_model_calls: 2            # extra SQL-model calls per question, only after an empty or failed first try (owner, 2026-10-08)
+    max_seconds: 20               # wall clock from the first statement; no re-ask starts after it
+    lookup_values: 20             # DISTINCT values read per filtered text column
+    lookup_columns: 3             # text columns looked up per statement
   sql_cache_ttl_seconds: 86400    # question -> generated SQL replayed within the day (J2); 0 = off
 
 llm:

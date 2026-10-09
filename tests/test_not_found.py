@@ -38,6 +38,23 @@ def test_generated_or_failed_queries_are_not_called_empty():
     assert not_found.empty([gen]) is None and not_found.empty([failed]) is None and not_found.empty([]) is None
 
 
+def test_empty_filter_sentence_uses_the_users_words_and_candidates_become_chips():
+    """P2: a model-written statement with filters found nothing after the lookups: the user's literals in the
+    sentence, never a column, a table or a recorded value; the recorded values are offered as chips."""
+    gen = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="generated", sql="SELECT 1",
+                      columns=["Balance"], rows=[[None]], checked=True,
+                      filters={"ItemCode": "1178108", "CompanyID": "02", "SLolcation": "mantainance store"},
+                      candidates=["Central Store (Misami)", "Maintenance Store (Misami)"])
+    s = not_found.empty_filter([gen])
+    assert s.startswith("I checked Inventory (store system) for '1178108', '02', 'mantainance store' and found no matching records")
+    assert "SLolcation" not in s and "dbo." not in s and "Maintenance Store" not in s
+    assert not_found.empty_filter([gen.model_copy(update={"checked": False})]) is None     # nothing was looked up
+    assert not_found.empty_filter([gen.model_copy(update={"rows": [[5]]})]) is None        # it has an answer
+    chips = not_found.suggestions("balance of 1178108 in the mantainance store of misami", [gen])
+    assert chips[:2] == ["balance of 1178108 in the Central Store (Misami) of misami",
+                         "balance of 1178108 in the Maintenance Store (Misami) of misami"]
+
+
 def test_general_uses_the_agents_where_sentence_else_the_default():
     assert not_found.general("What was the AQL result of the last final audit?").startswith("Quality data I can read")
     assert not_found.general("What is the colour of the sky?").startswith("I couldn't find this")

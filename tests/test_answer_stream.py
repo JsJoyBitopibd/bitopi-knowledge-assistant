@@ -163,6 +163,49 @@ def test_a_blank_generated_scalar_with_no_documents_is_not_found_without_a_model
     assert evs[-1].answer.not_found and evs[-1].answer.text.startswith("System doesn't have the data.")
 
 
+def _repaired(monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    lookup = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="lookup",
+                         sql="SELECT DISTINCT TOP (20) [SLolcation] FROM dbo.Balance WHERE ItemCode = '1178108'",
+                         columns=["SLolcation"], rows=[["Central Store (Misami)"], ["Maintenance Store (Misami)"]])
+    main = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="generated",
+                       sql="SELECT TOP (200) SUM(GRNQty) - SUM(IssueQty) AS Balance FROM dbo.Balance WHERE ItemCode = '1178108' AND SLolcation = 'Maintenance Store (Misami)'",
+                       params={"SLolcation": "Maintenance Store (Misami)"}, columns=["Balance"], rows=[[0.875]],
+                       filters={"ItemCode": "1178108", "SLolcation": "Maintenance Store (Misami)"},
+                       corrections=[["SLolcation", "mantainance store", "Maintenance Store (Misami)"]], checked=True)
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [main, lookup])
+
+
+def test_a_repaired_result_is_templated_with_a_cited_note_and_no_model_call(wire, monkeypatch):
+    """P2: the misspelled store was corrected from the recorded values; the answer says so, citing the lookup."""
+    wire("data", [])
+    _repaired(monkeypatch)
+    evs = list(orch.answer_stream("closing balance of 1178108 in the mantainance store", scope=Scope.unrestricted()))
+    a = evs[-1].answer
+    assert not a.not_found and a.usage.calls == 0 and a.text.startswith("Balance: 0.875 [D1].")
+    assert '"mantainance store" in the question was matched to "Maintenance Store (Misami)" as recorded in the data [D2].' in a.text
+    assert [r.marker for r in a.references] == ["D1", "D2"] and a.results[1].tool == "lookup"
+
+
+def test_a_checked_empty_result_is_not_found_in_the_users_words_with_chips_and_no_document_search(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: pytest.fail("the documents cannot rescue a checked data question"))
+    empty = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="generated", sql="SELECT 1",
+                        columns=["Balance"], rows=[[None]], filters={"ItemCode": "1178108", "SLolcation": "xyz store"},
+                        candidates=["Central Store (Misami)", "Maintenance Store (Misami)"], checked=True)
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [empty])
+    evs = list(orch.answer_stream("closing balance of 1178108 in the xyz store", scope=Scope.unrestricted()))
+    a = evs[-1].answer
+    assert a.not_found and a.usage.calls == 0
+    assert a.text == ("System doesn't have the data. I checked Inventory (store system) for '1178108', 'xyz store' and found "
+                      "no matching records; please check the number, name or spelling in the question.")
+    assert a.follow_ups[:2] == ["closing balance of 1178108 in the Central Store (Misami)",
+                                "closing balance of 1178108 in the Maintenance Store (Misami)"]
+
+
 def test_a_fixed_tool_zero_is_still_an_answer(wire, monkeypatch):
     import ragbot.data.tools as tools
     from ragbot.models import QueryResult

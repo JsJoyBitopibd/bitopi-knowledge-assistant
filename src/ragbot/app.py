@@ -434,9 +434,11 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
         with st.popover("Copy", type="tertiary", icon=":material/content_copy:"):
             st.code(t["text"], language=None, wrap_lines=True)
         ui.csv_buttons(refs, results, f"{cid}_{i}")
-        if t.get("q") and any(r.kind != "pdf" for r in refs):
+        if t.get("q") and (any(r.kind != "pdf" for r in refs)
+                           or (t.get("not_found") and t.get("route") in ("data", "both"))):
             # database answers may come from the short SQL result cache (their as-of time shows when the rows were
-            # read); this re-asks the question with the cache bypassed
+            # read); this re-asks the question with the cache bypassed — also on a not-found data answer (P2), so a
+            # question whose records arrived since can be asked again live
             st.button("Refresh data", key=f"rf_{cid}_{i}", type="tertiary", icon=":material/refresh:",
                       help="Re-run the database query live", on_click=ask, args=(t["q"], True))
         if refs and shown != i:
@@ -527,7 +529,7 @@ def conversation(q: str | None, refresh: bool) -> None:
             i = len(st.session_state.history)   # index this assistant turn will have in history
             turn = {"role": "assistant", "text": a.text, "refs": a.references, "q": q, "results": a.results,
                     "follow_ups": a.follow_ups, "request_id": a.request_id, "seconds": secs,
-                    "not_found": a.not_found, "error_kind": a.error_kind, "scope": scope.key()}
+                    "not_found": a.not_found, "error_kind": a.error_kind, "scope": scope.key(), "route": a.route}
             st.session_state.history.append(turn)
             st.session_state.src_turn = None
             answer_body(turn, i, latest=True, shown=i, a=a)

@@ -59,6 +59,22 @@ def test_no_false_match(q):
     assert not hit or not hit[0]["name"].startswith(("stock_", "grn_", "issues_", "stores_", "item_"))
 
 
+def test_a_store_the_value_index_knows_becomes_a_bound_parameter(monkeypatch):
+    """P2.1: 'mantainance store of misami' -> StoreName = 'Maintenance Store (Misami)', never the question's text."""
+    from ragbot.data.values import ValueEntry
+    stores = [ValueEntry("store", "Maintenance Store (Misami)", "2", "", "Inventory", "rag.vw_StockBalance.StoreName"),
+              ValueEntry("store", "Maintenance Store (Tarasima)", "4", "TAL", "Inventory", "rag.vw_StockBalance.StoreName")]
+    monkeypatch.setattr("ragbot.data.values.load_index", lambda path=None, specs=None: stores)
+    hit = match_fixed_tool(Q8OCT, load_fixed_tools())
+    assert hit[0]["name"] == "stock_balance_by_item"
+    assert hit[1]["store"] == "Maintenance Store (Misami)" and hit[1]["store_label"] == "in Maintenance Store (Misami)"
+    hit = match_fixed_tool("closing balance of 1178108 in the maintenance store", load_fixed_tools())
+    assert hit[1]["store"] == "" and hit[1]["store_label"] == "by store"           # two companies: unresolved
+    monkeypatch.setattr("ragbot.data.values.load_index", lambda path=None, specs=None: [])
+    hit = match_fixed_tool(Q8OCT, load_fixed_tools())
+    assert hit[1]["store"] == "" and hit[1]["store_label"] == "by store"           # no copies yet: every store
+
+
 def test_routed_to_data_without_a_model_call(monkeypatch):
     import ragbot.agent.router as router
     monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())

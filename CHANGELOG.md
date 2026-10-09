@@ -9,6 +9,22 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Phase P2 — the recorded names, and a second look when a query finds nothing.** A nightly value index
+  (`config/aggregates.yaml` specs with `entity:`; `src/ragbot/data/values.py`) copies the store, company, item
+  category, store group and issue-cause names as the data records them, and matches a question's words against
+  them — whole phrase, the store aliases of `entities.yaml`, then a close spelling ("mantainance store" →
+  'Maintenance Store (Misami)'), scoped to what the user may see. A fixed tool's `type: value` parameter binds the
+  recorded value (the stock-balance tool now filters on the store named); the SQL prompt gets a "Known values"
+  line with the recorded spelling and the column to filter on; the router counts a recorded name like a keyword.
+- **Self-correction, bounded** (`src/ragbot/data/empty_retry.py`). When a model-written statement returns nothing,
+  the recorded values of each text column it filtered on are looked up (guarded `SELECT DISTINCT`, cited as their
+  own cards); an exact hit means the zero is real; a unique close match replaces the misspelled literal and the
+  statement runs again, with a note under the answer saying what was matched; otherwise at most one more model
+  call shows the recorded values, or the other tables listed for the question. At most 2 extra calls per
+  question, only after an empty first try, within 20 s, never on the `both` route (the owner's bounds).
+- **Not-found replies after a model-written query say what was checked** in the user's own words ("I checked
+  Inventory (store system) for '1178108', 'xyz store' and found no matching records"), offer the recorded values
+  as questions to click, skip the documents search, and show "Refresh data".
 - **Phase P1 — store questions answered right the first time.** Seven curated Inventory views: `rag.vw_StockBalance`
   (closing balance of an item per company and store — receipts minus issues in the store ledger, converted to the
   item's base unit, with category, store group and the non-production flag), `vw_StockMovement`, `vw_GoodsReceipt`,
@@ -148,6 +164,11 @@ each phase is in `docs/ROADMAP.md`.
   quality.
 
 ### Fixed
+- **The `aggregates` service was not running** (the local copies dated from 7 Oct); it is up again and now also
+  refreshes the value index. The `ingest-worker`, `watch` and `aggregates` containers reported "unhealthy" because
+  the image's health probe is the Streamlit port they do not serve; the probe is disabled for them.
+- **A companion or lookup result added its own 50 rows to a provider call**; the row budget is now shared across
+  the results of one call.
 - **String parameters were bound as NVARCHAR against VARCHAR columns** (Phase P1). pyodbc sends a Python string as
   NVARCHAR; every code column in these databases is VARCHAR, and `varchar_column = nvarchar_parameter` converts the
   column side, which defeats index seeks and predicate push-down: the stock-balance view answered a literal in 1.2 s

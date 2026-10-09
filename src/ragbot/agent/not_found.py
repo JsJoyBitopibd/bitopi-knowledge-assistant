@@ -74,6 +74,19 @@ def empty(results: Sequence[QueryResult]) -> Optional[str]:
     return prompt("not_found_empty").strip().format(source=_label(r.database))
 
 
+def empty_filter(results: Sequence[QueryResult]) -> Optional[str]:
+    """P2: a model-written statement with filters ran, the recorded values were looked up, and still nothing
+    matched: say what was checked in the user's own words (the literals the statement filtered on — never a
+    column, table or recorded value; those go to the follow-up chips)."""
+    from .templated import is_blank_result
+    r = next((x for x in results if not x.error and not x.denied and x.tool == "generated" and x.filters
+              and x.checked and is_blank_result(x.columns, x.rows)), None)
+    if r is None:
+        return None
+    filters = ", ".join(f"'{v}'" for v in dict.fromkeys(r.filters.values()))
+    return prompt("not_found_empty_filter").strip().format(source=_label(r.database), filters=filters)
+
+
 def general(question: str) -> str:
     from ..domain_agents import pick_agent
     try:
@@ -108,6 +121,15 @@ def suggestions(question: str, results: Sequence[QueryResult] = (), limit: int =
     for r in results:
         if not r.error and not r.rows and r.tool != "generated" and r.params.get("window"):
             out += _wider(question, str(r.params["window"]))
+            break
+    for r in results:
+        # P2: the recorded values a lookup found where the question's word matched nothing — the question with
+        # that word replaced, as chips (never as a sentence: a value is a fact, and this reply cites nothing)
+        if r.tool == "generated" and r.candidates and r.filters:
+            lit = next((v for v in r.filters.values() if not v.strip().isdigit() and v.lower() in question.lower()), None)
+            if lit:
+                pat = re.compile(re.escape(lit), re.I)
+                out += [pat.sub(lambda m, c=c: c, question, count=1) for c in r.candidates[:3]]
             break
     tools = load_fixed_tools() if tools is None else tools
     try:

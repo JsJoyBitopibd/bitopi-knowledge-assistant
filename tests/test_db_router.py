@@ -142,6 +142,17 @@ def test_a_third_catalog_joins_only_when_it_ties_the_last_pick_on_keywords(cats,
     assert list(pick_catalogs("GRN stock", four)) == ["Inventory", "FM"]
 
 
+def test_a_recorded_value_of_a_database_counts_like_one_of_its_keywords(cats, monkeypatch):
+    import ragbot.data.db_router as dr
+    from ragbot.data.values import ValueHit
+    monkeypatch.setattr("ragbot.data.values.lookup", lambda q, scope, entity=None, entries=None: [
+        ValueHit("store", "Maintenance Store (Misami)", "2", "mantainance store", 1.0, "Inventory", "rag.vw_StockBalance.StoreName")])
+    ev = evidence("balance of 1178108 in the mantainance store", cats)
+    assert ev[0].database == "Inventory" and ev[0].keywords == dr.VALUE_POINTS      # no keyword, one recorded value
+    monkeypatch.setattr("ragbot.data.values.lookup", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no copies")))
+    assert evidence("balance of 1178108 in the mantainance store", cats)[0].keywords == 0   # the index is optional
+
+
 def test_factory_catalog_wins_its_factory_and_stays_out_of_others(cats, monkeypatch):
     import ragbot.data.db_router as dr
     from ragbot.data.db_router import factory_points

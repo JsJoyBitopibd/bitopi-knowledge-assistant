@@ -28,10 +28,11 @@ class ScriptedSQL(ChatModel):
     name = "fake"
 
     def __init__(self, replies):
-        self.replies, self.systems = list(replies), []
+        self.replies, self.systems, self.messages_seen = list(replies), [], []
 
     def _chat(self, messages, system, max_tokens, temperature):
         self.systems.append(system)
+        self.messages_seen += list(messages)
         return ChatReply(text=self.replies.pop(0), model="fake", stop_reason="stop")
 
 

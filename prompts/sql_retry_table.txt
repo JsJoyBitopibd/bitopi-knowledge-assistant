@@ -1,0 +1,6 @@
+That query ran and returned no rows for the identifiers in the question. These other tables were listed for the
+question and may hold them:
+{tables}
+Write the query once more against the table that records them, with the same identifier filters, and return
+DATABASE: <name> on the first line, then the SQL only. If none of the listed tables can hold them, return
+SELECT with the same filters on the most likely one.

@@ -1202,19 +1202,22 @@
     - 'Issues of item {item} {company_label}'
     - 'Which stores hold item {item}?'
   description: Stock balance (closing balance, stock in hand) of one item per company and store — receipts minus issues in the store ledger, in the item's base unit.
-  answer_list: 'Stock balance of item {item} {company_label} by store — receipts minus issues in the store ledger, in the base unit ({n} row(s))'
+  answer_list: 'Stock balance of item {item} {company_label} {store_label} — receipts minus issues in the store ledger, in the base unit ({n} row(s))'
   match: '(?i)(?=.*\b(?:closing\s+balance|stock\s+balance|balance|closing\s+stock|opening\s+stock|current\s+stock|stock\s+(?:position|in\s+hand|on\s+hand|level)|available\s+(?:qty|quantity|stock)|how\s+much\b.*\b(?:left|remaining|in\s+stock|do\s+we\s+have))\b)(?=.*\b(\d{6,8})\b)'
   unless: '(?i)\b(?:ledger\s+balance|account|accounts|voucher|vouchers|payable|receivable|bank|cash|loan|lc|bblc|trial\s+balance)\b|\b[A-Z]{2,4}-\d{2}-\d{2,5}\b'
   params:
     item: { from_group: 1 }
     company: { type: entity, entity: company, default: '' }
+    # the store as recorded (value index, P2.1): 'mantainance store of misami' -> 'Maintenance Store (Misami)';
+    # unresolved -> every store of the item is listed
+    store: { type: value, entity: store, default: '', label: 'in {value}', else_label: 'by store' }
   heavy: true
   sql: |
     SELECT TOP (50)
       CompanyID, CompanyName, StoreName, ItemCode, ItemName, ItemCategory, StoreGroup, NonProductionItem,
       BaseUOM, ReceivedQty, IssuedQty, ClosingBalance, LastTransaction
     FROM rag.vw_StockBalance
-    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company) AND (@store = '' OR StoreName = @store)
     ORDER BY CompanyID, StoreName
 
 - name: grn_issue_by_item

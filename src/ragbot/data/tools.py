@@ -315,6 +315,19 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             if spec.get("type") == "measures":
                 params[name] = _measures(question, spec)
                 continue
+            if spec.get("type") == "value":
+                # P2.1: a recorded name the question uses — however spelled — from the value index; the bound
+                # parameter is the value as recorded, never the question's text. '' when none or several match
+                # (the tool then runs for all of them). Visibility is not decided here: the view's scope filter is.
+                from .values import resolve
+                try:
+                    hit, cands = resolve(question, Scope.unrestricted(), spec.get("entity", "store"))
+                except Exception:
+                    hit, cands = None, []
+                params[name] = hit.value if hit else spec.get("default", "")
+                params[f"{name}_label"] = (spec.get("label", "in {value}").format(value=hit.value) if hit
+                                           else spec.get("else_label", ""))
+                continue
             if spec.get("type") == "entity":
                 # P1: a company named by code ("companyid=02") or by name/alias ("misami") becomes a bound parameter
                 # from config/reference/entities.yaml — never the question's text. '' (the default) means "any".
@@ -544,6 +557,26 @@ def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -
     return fallback_db, raw
 
 
+def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bool, tool: str = "generated",
+                 considered: list[str] = (), agent: str = "") -> QueryResult:
+    """One statement through the chain every model-written, corrected or lookup statement takes: guard (the
+    catalog's full allow-list) -> virtual-view rewrite with the scope filter -> parameters -> cached_run.
+    Raises GuardError / the database's error; a statement that reads no table is refused."""
+    s = settings()
+    safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
+    sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
+    views += [n for n in _views_in(safe, cat) if not cat.view(n)]
+    if not views:
+        raise GuardError("the generated SQL reads no view or table (the model found none)")
+    params = _extract_params(safe, cat)
+    cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env, display_sql=safe,
+                                   tool=tool, user=user, refresh=refresh, scope_key=scope.key(),
+                                   database=getattr(cat, "connection_database", None))
+    return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
+                       params=params, tool=tool, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
+                       databases_considered=list(considered), agent=agent)
+
+
 def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
                      scope: Scope, qvec: Optional[list[float]] = None, agent: str = "") -> QueryResult:
     """One SQL-generation call sees the catalogs picked for the question (data/db_router.py) and must
@@ -569,15 +602,27 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
         log_selection(name, sel, question, user)       # which tables to sample (G2)
     tables_text = "\n\n".join(t for t in (cats[n].render_selected(sel, join_hints(sel, cats[n]))
                                           for n, sel in selected.items()) if t)
+    # Known values (P2.1): the recorded spelling of a store, company or category the question names, so the
+    # model filters on the value as recorded, never on the question's spelling. Scoped: nothing the user may not see.
+    values_text = "(none)"
+    if s.get("data.values.enabled", True):
+        try:
+            from .values import known_values_lines
+            lines = known_values_lines(question, scope, list(cats))
+            values_text = "\n".join(f"- {ln}" for ln in lines) if lines else "(none)"
+        except Exception:
+            values_text = "(none)"
     # Static text first (rules, curated views, examples), the per-question tables last: a stable
     # prefix lets the provider reuse its cached prompt across questions.
     system = (prompt("sql_generate").replace("{agent}", charter_text(agent))
               .replace("{catalogs}", catalogs_text)
               .replace("{tables}", tables_text or "(none selected for this question)")
+              .replace("{values}", "Known values (recorded spellings of words in the question):\n" + values_text)
               .replace("{today}", date.today().isoformat()))
     messages = [{"role": "user", "content": question}]
     fallback = _pick_catalog(question, cats)
     last_err = ""
+    t_start = time.perf_counter()
     attempts = 1 + int(s["data.sql_retries"]) + (1 if cached else 0)   # a failed replay costs no model attempt
     # A statement that returned nothing is remembered only briefly (P0): long enough that a dashboard chip
     # or a repeat within minutes replays it without a model call, never for the rest of the day — the
@@ -617,16 +662,23 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                                            display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
                                            database=getattr(cat, "connection_database", None))
             blank = is_blank_result(cols, rows)
+            log_generation(kind=kind, database_line=db_line, database_used=db_name, fallback=bool(raw) and not db_line,
+                           rows=0 if blank else len(rows), stop_reason=stop, raw_reply=raw or sql, **gen)
+            qr = QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
+                             params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
+                             databases_considered=considered, sql_cached=replay, agent=agent)
+            if blank and not replay:
+                qr = _repair_blank(qr, question, cats, cat, raw or "", messages, system, chat, selected.get(db_name, []),
+                                   scope=scope, user=user, refresh=refresh, started=t_start, considered=considered,
+                                   agent=agent)
+                blank = is_blank_result(qr.columns, qr.rows)
             if key is not None:
                 if replay and blank:
                     _SQL.pop(key)                     # a day-long entry that now returns nothing is forgotten …
                 if not replay or blank:
-                    _SQL.put(key, (db_name, safe), short_ttl if blank else ttl)   # … and kept only briefly
-            log_generation(kind=kind, database_line=db_line, database_used=db_name, fallback=bool(raw) and not db_line,
-                           rows=0 if blank else len(rows), stop_reason=stop, raw_reply=raw or sql, **gen)
-            return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
-                               params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
-                               databases_considered=considered, sql_cached=replay, agent=agent)
+                    _SQL.put(key, (qr.database if qr.database in cats else db_name, qr.sql or safe),
+                             short_ttl if blank else ttl)   # … and kept only briefly; a corrected statement for the day
+            return qr
         except Exception as e:
             last_err = f"{e.__class__.__name__}: {e}"
             is_guard = isinstance(e, GuardError)
@@ -641,6 +693,50 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                                                       "Return DATABASE: <name> on the first line, then the corrected SQL only."}]
     return QueryResult(database=fallback.database, engine=fallback.engine, views=[], sql="", columns=[], rows=[],
                        error=last_err, databases_considered=considered, agent=agent)
+
+
+def _repair_blank(qr: QueryResult, question: str, cats: dict[str, Catalog], cat: Catalog, raw: str,
+                  messages: list[dict], system: str, chat: Any, shown_tables: list[str], *, scope: Scope, user: str,
+                  refresh: bool, started: float, considered: list[str], agent: str) -> QueryResult:
+    """P2.2: a model-written statement returned nothing — look the recorded values up, correct a misspelling, or
+    re-ask once (data/empty_retry.py). The repaired result carries its lookups ([D2]…), the filters it tried and,
+    on a correction, which literal became which recorded value. Off for the `both` route and by setting."""
+    from . import empty_retry
+    if not empty_retry.is_allowed():
+        return qr
+    s = settings()
+
+    def executor(for_cat: Catalog) -> empty_retry.Executor:
+        return lambda stmt, tool: _run_guarded(stmt, for_cat, scope=scope, user=user, refresh=refresh, tool=tool,
+                                               considered=considered, agent=agent)
+
+    def ask(instruction: str, rows_sent: int) -> tuple[str, empty_retry.Executor]:
+        convo = messages + [{"role": "assistant", "content": raw}, {"role": "user", "content": instruction}]
+        reply = chat.chat(convo, system=system, max_tokens=int(s.get("llm.max_tokens_sql", 1536)), temperature=0,
+                          purpose="sql", user=user, sent_rows=rows_sent)
+        raw2 = re.sub(r"^```\w*|```$", "", reply.text.strip(), flags=re.M).strip()
+        db2, sql2 = _split_database_line(raw2, cats, cat.database)
+        log_generation(user=user, agent=agent, kind="retry", considered=considered, database_used=db2,
+                       database_line=raw2.splitlines()[0] if raw2.upper().startswith("DATABASE:") else "",
+                       stop_reason=reply.stop_reason or "", raw_reply=raw2)
+        return sql2, executor(cats[db2])
+
+    with trace.span("data.repair"):
+        out = empty_retry.repair(question=question, cat=cat, scope_all=scope.all_factories, sql=qr.sql, result=qr,
+                                 shown_tables=shown_tables, execute=executor(cat), ask=ask, started=started,
+                                 is_blank=lambda r: is_blank_result(r.columns, r.rows))
+    result = out.result
+    result.lookups = out.lookups
+    if result.corrections:
+        # the corrected literal joins the query's filter line, where the verifier reads it (citations.py)
+        for col, _asked, matched in result.corrections:
+            result.params = {**result.params, col: matched}
+    if not result.key_columns and result.filters:
+        result.key_columns = [c for c in result.filters if c in result.columns]    # a table with no key: the filters
+    if out.note:
+        log_generation(user=user, agent=agent, kind="repair", considered=considered, database_used=result.database,
+                       rows=len(result.rows), raw_reply=out.note)
+    return result
 
 
 def _qualify_bare_tables(sql: str, cat: Catalog) -> str:
@@ -742,5 +838,5 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
             picked = pick_catalogs(question, cats, qvec)
             if agent is not None:
                 picked = _with_agent_catalog(question, picked, cats, agent, qvec)
-        return [generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec,
-                                 agent=agent.name if agent else "")]
+        r = generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec, agent=agent.name if agent else "")
+        return [r, *r.lookups]       # the DISTINCT lookups a repair ran are sources too: [D2]… (data/empty_retry.py)

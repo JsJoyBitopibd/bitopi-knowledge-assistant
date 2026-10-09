@@ -142,13 +142,16 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             out.text, out.route = ask, "clarify"
             yield Final(_log(out, user, scope)); return
     if r in ("data", "both"):
+        from ..data import empty_retry
         from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
     if r == "both":
         # Independent sources: search the documents while the database query (and its SQL-generation
         # call) runs, instead of one after the other. A worker's exception re-raises in .result().
+        # No empty-result repair here (P2): a document search already runs, and the 4 cores are shared.
         yield Stage("searching+querying", "Searching documents and querying the database…")
         docs_f = trace.submit(_POOL, retrieve, q, where=where, scope=scope)
-        data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope)
+        with empty_retry.allowed(False):
+            data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope)
         chunks = docs_f.result()[:top]
         results = list(data_f.result())
     elif r == "documents":
@@ -156,7 +159,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         chunks = retrieve(q, where=where, scope=scope)[:top]
     elif r == "data":
         yield Stage("querying", "Querying the database…")
-        results = list(answer_from_data(q, user, refresh, scope=scope))
+        with empty_retry.allowed(True):
+            results = list(answer_from_data(q, user, refresh, scope=scope))
     if r in ("data", "both"):
         out.agent = next((x.agent for x in results if x.agent), "")   # domain agent (Phase K), for the log
         # which catalogs the SQL model was shown, kept on the answer so a not-found row in chat.csv says it too
@@ -170,7 +174,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             # model call cannot answer it, and would only hide the reason behind a generic not-found.
             out.text, out.not_found = nf + " " + prompt("scope_denied").strip(), True
             yield Final(_log(out, user, scope)); return
-        if r == "data" and not _has_rows(results) and not chunks and not _tool_answered(results):
+        if r == "data" and not _has_rows(results) and not chunks and not _tool_answered(results) \
+                and not any(x.checked for x in results):
             # data route found nothing usable: fall back to documents once (a PDF may hold it). Not when a fixed
             # tool or a pasted statement ran: the question is a data question by construction (it matched a tool's
             # pattern), and the PDFs hold no stock balances — the search cost 54 s on this VM for "item 9999999"
@@ -181,7 +186,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if not chunks and not _has_rows(results):
         # one plain sentence after the fixed line (agent/not_found.py): what was checked, or where else to look
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
-                               else not_found.empty(results) or not_found.general(q))
+                               else not_found.empty(results) or not_found.empty_filter(results) or not_found.general(q))
         out.not_found = True
         if not denied:
             out.follow_ups = not_found.suggestions(q, results)
@@ -191,7 +196,9 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # answer.templated_generated is off, model-written SQL too (J3) — the rows are the answer.
     # A fixed tool's companion (e.g. each VistaQ file's export orders from the ERP) is written the same way: [D2].
     companion = len(results) == 2 and results[1].tool.endswith(":companion")
-    if r == "data" and not chunks and (len(results) == 1 or companion) and s.get("answer.templated", True):
+    # a repaired model-written result comes with the DISTINCT lookups that fixed it ([D2]…, P2): still templated
+    with_lookups = len(results) > 1 and all(x.tool == "lookup" for x in results[1:])
+    if r == "data" and not chunks and (len(results) == 1 or companion or with_lookups) and s.get("answer.templated", True):
         if _templated_answer(out, results, nf, allow_generated=bool(s.get("answer.templated_generated", True))):
             yield Final(_log(out, user, scope)); return
 
@@ -232,15 +239,16 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
 
 def _tool_answered(results: list[QueryResult]) -> bool:
     """Did a fixed tool or a pasted statement run (whatever it returned)? Such a question needs no documents fallback."""
-    return any(x.tool != "generated" for x in results)
+    return any(x.tool not in ("generated", "lookup") for x in results)
 
 
 def _has_rows(results: list[QueryResult]) -> bool:
     """Did any data result answer something? A model-written statement that returned one NULL/0/empty cell
     (SUM over no rows) is treated as no rows (P0): `[[None]]` is truthy, so `any(x.rows)` used to call it an
     answer, spend an answer-model call on it and only then search the documents. A fixed tool's 0 stays an
-    answer (C7)."""
-    return any(x.rows and not (x.tool == "generated" and is_blank_result(x.columns, x.rows)) for x in results)
+    answer (C7). A DISTINCT lookup (P2) is evidence of what is recorded, never an answer by itself."""
+    return any(x.rows and x.tool != "lookup" and not (x.tool == "generated" and is_blank_result(x.columns, x.rows))
+               for x in results)
 
 
 def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) -> Stage:
@@ -274,6 +282,13 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
         if more:
             text += "\n\n" + more
             used.append(results[1])
+    for col, asked, matched in results[0].corrections:
+        # P2: a literal of the question was replaced by a recorded value — say so, citing the lookup that holds it
+        holder = next((x for x in results[1:] if x.tool == "lookup" and any(str(v) == matched for row in x.rows for v in row)),
+                      None)
+        if holder is not None:
+            used.append(holder)
+            text += "\n\n" + prompt("matched_value_note").strip().format(asked=asked, matched=matched, marker=f"D{len(used)}")
     block, refs = sources_block([], used)
     ok, problems = verify(text, [], used, nf)
     if not ok:
@@ -303,7 +318,8 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
     """Assemble the <sources> block, stream the model's answer as Tokens, verify it, and fill `out`
     in place. Two attempts: a draft that fails verification is voided with Replace and the second
     attempt uses the stricter prompt. Leaves out.not_found=True with no text if both attempts fail."""
-    block, refs = sources_block(chunks, results, int(s["data.max_rows_to_llm"]))
+    # the row budget per provider call is shared by every result (a companion or a lookup used to add its own 50)
+    block, refs = sources_block(chunks, results, max(5, int(s["data.max_rows_to_llm"]) // max(1, len(results))))
     out.sources_text = block
     hist = "\n".join(f"{t['role']}: {t['text']}" for t in history[-2 * int(s["answer.history_turns"]):])
     user_msg = ((f"Earlier in this conversation:\n{hist}\n\n" if hist else "") + block +

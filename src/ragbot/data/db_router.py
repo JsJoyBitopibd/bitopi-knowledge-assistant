@@ -131,16 +131,37 @@ def factory_points(question: str, cat: Catalog, codes: list[str]) -> float:
     return -FACTORY_POINTS if named else 0.0
 
 
+VALUE_POINTS = 3            # a recorded name of a database found in the question counts like one of its keywords
+
+
+def value_hits(question: str, cats: dict[str, Catalog]) -> dict[str, int]:
+    """{database: recorded values of that database the question names} from the value index (P2.1); {} when
+    the index is off or has no copies yet. Ranking only: nothing from the index is shown here."""
+    if not settings().get("data.values.enabled", True):
+        return {}
+    try:
+        from ..auth.models import Scope
+        from .values import lookup
+        counts: dict[str, int] = {}
+        for h in lookup(question, Scope.unrestricted()):
+            if h.database in cats:
+                counts[h.database] = counts.get(h.database, 0) + 1
+        return counts
+    except Exception:
+        return {}
+
+
 def evidence(question: str, cats: dict[str, Catalog], qvec: Optional[list[float]] = None) -> list[Evidence]:
     """Every catalog scored, best first."""
     from .schema_index import get_index   # lazy: numpy + the index build are not needed by the fixed-tool path
     out: list[Evidence] = []
+    values = value_hits(question, cats)
     for name, cat in cats.items():
         share, cos = 0.0, None
         if cat.offered_tables:
             idx = get_index(cat)
             share, cos = idx.best_name_share(prepared(question, cat)), idx.best_cosine(qvec)
-        out.append(Evidence(name, keyword_score(question, cat), share, cos))
+        out.append(Evidence(name, keyword_score(question, cat) + VALUE_POINTS * values.get(name, 0), share, cos))
     with_vectors = sorted((e for e in out if e.cosine is not None), key=lambda e: -e.cosine)
     bonus: dict[str, float] = {}
     if len(with_vectors) * 2 >= len(out):
