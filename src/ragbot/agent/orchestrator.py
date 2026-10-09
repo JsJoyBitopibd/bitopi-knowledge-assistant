@@ -32,6 +32,7 @@ from .citations import normalize_markers, sources_block, verify
 from .events import Event, Final, Replace, Stage, Token
 from .rewrite import standalone_question
 from .router import _DOC_HINT, route
+from .templated import is_blank_result
 
 _MARK = re.compile(r"\[([PD]\d+)\]")
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="answer")
@@ -158,21 +159,23 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         results = list(answer_from_data(q, user, refresh, scope=scope))
     if r in ("data", "both"):
         out.agent = next((x.agent for x in results if x.agent), "")   # domain agent (Phase K), for the log
+        # which catalogs the SQL model was shown, kept on the answer so a not-found row in chat.csv says it too
+        out.databases_considered = list(dict.fromkeys(d for x in results for d in x.databases_considered))
         # a failed query is not a source: never let the model cite an error message
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
         denied = any(x.denied for x in results)
         results = [x for x in results if not x.error]
-        if r == "data" and denied and not any(x.rows for x in results):
+        if r == "data" and denied and not _has_rows(results):
             # The question names a factory outside the user's scope: say so now. A document search and a
             # model call cannot answer it, and would only hide the reason behind a generic not-found.
             out.text, out.not_found = nf + " " + prompt("scope_denied").strip(), True
             yield Final(_log(out, user, scope)); return
-        if r == "data" and not any(x.rows for x in results) and not chunks:
+        if r == "data" and not _has_rows(results) and not chunks:
             # data route found nothing usable: fall back to documents once (a PDF may hold it)
             yield Stage("searching", "Searching documents…")
             chunks = retrieve(q, where=where, scope=scope)[:top]
 
-    if not chunks and not any(x.rows for x in results):
+    if not chunks and not _has_rows(results):
         # one plain sentence after the fixed line (agent/not_found.py): what was checked, or where else to look
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
                                else not_found.empty(results) or not_found.general(q))
@@ -222,6 +225,14 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _has_rows(results: list[QueryResult]) -> bool:
+    """Did any data result answer something? A model-written statement that returned one NULL/0/empty cell
+    (SUM over no rows) is treated as no rows (P0): `[[None]]` is truthy, so `any(x.rows)` used to call it an
+    answer, spend an answer-model call on it and only then search the documents. A fixed tool's 0 stays an
+    answer (C7)."""
+    return any(x.rows and not (x.tool == "generated" and is_blank_result(x.columns, x.rows)) for x in results)
 
 
 def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) -> Stage:
@@ -357,7 +368,7 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str
     """Thumbs up/down from the UI go to logs/chat.csv as a feedback row (docs/PLAN.md M5)."""
     append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "feedback",
                                           f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}",
-                                          "", request_id, "", "", ""])
+                                          "", request_id, "", "", "", ""])
 
 
 # `scope` (PRD FR-6.2): what the user was allowed to see when they asked, so an administrator can
@@ -365,7 +376,8 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str
 # `seconds` and `timings` (JSON, ragbot/trace.py) say where the time went; `agent` is the domain agent
 # that answered a data question (Phase K).
 _CHAT_HEADER = ["ts", "user", "scope", "route", "question", "rewritten", "not_found", "refs", "in_tokens",
-                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings", "agent"]
+                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings", "agent",
+                "databases_considered"]
 
 
 def _log(a: Answer, user: str, scope: Scope) -> Answer:
@@ -377,7 +389,8 @@ def _log(a: Answer, user: str, scope: Scope) -> Answer:
         datetime.now().isoformat(timespec="seconds"), user, scope.key(), a.route, a.question, a.rewritten_question,
         a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
         a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind, a.request_id,
-        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else "", a.agent])
+        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else "", a.agent,
+        ";".join(a.databases_considered)])
     return a
 
 

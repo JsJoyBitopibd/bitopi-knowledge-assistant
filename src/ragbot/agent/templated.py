@@ -58,6 +58,19 @@ def follow_ups(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "", 
     return out[:limit]
 
 
+def is_blank_result(columns: list[str], rows: list[list[Any]]) -> bool:
+    """True when a result answers nothing: no rows, or one row x one column holding NULL, 0 or an empty
+    string (SUM over no rows, COUNT of nothing). Used by the SQL cache (never replay such a statement for a
+    day), the orchestrator (a `[[None]]` row is truthy, so `any(x.rows)` would call it an answer) and the
+    template below. A fixed tool's 0 is still an answer (C7): callers check `tool == "generated"`."""
+    if not rows or not columns:
+        return True
+    if len(rows) == 1 and len(columns) == 1:
+        v = rows[0][0]
+        return v is None or v == 0 or str(v).strip() == ""
+    return False
+
+
 def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False,
                  marker: str = "D1") -> Optional[str]:
     """The answer text for one data result, or None when it should be left to the model.
@@ -73,10 +86,11 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
     tool = tool or {}
     if len(r.rows) == 1 and len(r.columns) == 1:
         value = r.rows[0][0]
-        if r.tool == "generated" and (value is None or value == 0 or str(value).strip() == ""):
+        if r.tool == "generated" and is_blank_result(r.columns, r.rows):
             # A fixed tool's 0 is an answer (C7). A model-written query's 0 or NULL more often means the SQL
             # matched nothing — the router sent a policy question to the database — so the answer model
-            # keeps judging it, and its not-found still triggers the documents retry (orchestrator).
+            # keeps judging it, and its not-found still triggers the documents retry (orchestrator). Since
+            # Phase P0 the orchestrator treats such a result as no rows and goes to the documents directly.
             return None
         lead = _fill(tool["answer"], r, value=value) if tool.get("answer") else None
         # a model-written `SELECT COUNT(*) FROM …` without an alias comes back with an empty column name

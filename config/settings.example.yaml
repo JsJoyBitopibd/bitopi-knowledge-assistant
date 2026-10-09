@@ -72,6 +72,8 @@ llm:
   max_tokens_route: 64
   max_tokens_sql: 4096         # Gemini thinks before writing SQL; at 1536 a third of the calls hit the limit and retried (+3 s)
   max_chunks_to_llm: 8
+  daily_budget: 500            # provider requests per day this deployment may spend (free tier: 500 per model);
+                               # the admin caption shows "calls today n/budget", scripts/eval.py --budget refuses to overspend
 
 answer:
   not_found_text: "System doesn't have the data."

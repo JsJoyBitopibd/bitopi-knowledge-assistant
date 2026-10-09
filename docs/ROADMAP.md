@@ -626,3 +626,50 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
   "delete" requests are still refused.
 - Gate: as above, plus a test that the code has no mail, webhook or ticket-system client, and the
   existing refusal tests unchanged.
+
+---
+
+# Phase P — right the first time, then self-correct (after v1.12.0)
+
+Asked for on 2026-10-08: "optimize the chatbot so it can reply faster with critical operations and with
+accurate data; if the user needs data from joining one database to another it can give". The case that
+prompted it (request `394796addf6e`, 8 Oct 15:08) — the closing balance of item 1178108 at Misami's
+maintenance store — was answered "System doesn't have the data." in 23.3 s and 4 model calls although the
+item has 8 receipts and 22 issues. The full diagnosis, the owner's decisions (closing balance = live ledger
+receipts minus issues in base units; nightly value sampling approved; at most 2 extra model calls, only after
+an empty or failed first try) and the design are in the approved plan (session of 2026-10-08/09); the
+stages and gates are tracked in `docs/PROGRESS.md` "Phase P".
+
+- **P0 hygiene and observability.** A model-written statement that returned nothing (0 rows, or one
+  NULL/0/empty cell) is no longer the day's cached answer: it is kept only `data.result_cache_ttl_seconds`
+  (180 s), so a repeat within minutes replays without a model call and a repeat later is generated afresh
+  (the 15:17 follow-up replayed the NULL for nine minutes). `TTLCache.pop` replaces the no-op
+  `put(key, None, 0)`. The orchestrator treats such a result as no rows (`[[None]]` is truthy) and goes to
+  the documents directly instead of spending an answer-model call first. Logs: `sql.csv` gains `database`;
+  new `logs/sql_gen.csv` records every SQL attempt (kind generate/replay/retry/guard/error, the databases
+  shown, the model's `DATABASE:` line, the raw reply, guard and database errors, stop reason); `chat.csv`
+  gains `databases_considered` (filled on a not-found too). A quota gauge (`ragbot/quota.py`: today's rows in
+  `calls.csv` against `llm.daily_budget`) in the admin caption and `scripts/eval.py --budget`. Tests write
+  their logs to a temp folder (`tests/conftest.py`). Compose mounts for prompts, tools, agents, aggregates
+  and `config/reference` so P1's config edits need no rebuild.
+- **P1 right the first time, config-first.** Read-only fact finding (store master, company 02, the user's
+  own sums); Inventory vocabulary (keywords, `synonyms:`, `hints:`, `table_notes:`), FM drops the bare `item`
+  keyword, `config/reference/entities.yaml`; router fixes (compound tokens `companyid` → `company id`,
+  SQL reserved words stripped from pasted statements, tie-break by table-name share, an adaptive third
+  catalog, list cues `find/get/fetch/give/show`, pasted SQL guarded as-is); a column-word signal in the schema
+  index with a per-catalog `schema_rag_k`; curated Inventory views (`rag.vw_StockBalance` = receipts minus
+  issues per company, store, item and UOM; snapshot, receipts, issues, item, store, company); Inventory
+  fixed tools (stock balance, GRN, issues, GRN+issue, stores holding an item, item by code) and an
+  Inventory agent that states the data age; scope and golden cases.
+- **P2 self-correction on an empty result, bounded.** Nightly value index (`values_*` aggregate specs,
+  scope-filtered fuzzy lookup); `data/empty_retry.py`: guarded DISTINCT lookups on text filters, exact hit =
+  true zero, unique close match = corrected re-run with a cited disclosure sentence, one table-swap re-ask
+  for digit-only filters, one informed re-ask with ≤ 50 values; templated not-found in the user's words with
+  candidate chips and Refresh; at most 2 extra model calls, 20 s wall clock, `both` route excluded.
+- **P3 cross-database.** A decision table per connection group in `docs/DATA_ACCESS.md`; fixed-tool
+  companion merge in Python (`[D1][D2]`, both results kept so every value verifies); nightly local master
+  copies joined in SQLite; three-part names for same-server catalogs behind `data.cross_database_names`
+  (default off, raw offered tables only, never `rag.*`, unrestricted scope only) — the owner decides.
+- Gate per stage: `pytest`; `scope_check.py` 0 leaks; data/both eval no drop > 5 points; the two 8 Oct
+  questions through `scripts/ask.py`; `latency.py --group sql` p50 within 0.5 s of 5.98 s; P3 ends with the
+  full golden set and `v1.13.0`.

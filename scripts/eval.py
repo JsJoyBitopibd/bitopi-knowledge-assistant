@@ -47,6 +47,8 @@ def main():
     ap.add_argument("--limit", type=int); ap.add_argument("--sleep", type=float, default=0.0)
     ap.add_argument("--kind", help="comma-separated kinds to run"); ap.add_argument("--tag", default="")
     ap.add_argument("--compare", metavar="FILE", help="only compare a saved run (eval/results/<stamp>.json)")
+    ap.add_argument("--budget", action="store_true",
+                    help="refuse to start when today's provider calls plus this run's would exceed llm.daily_budget")
     a = ap.parse_args()
     if a.compare:
         compare(Path(a.compare) if Path(a.compare).is_absolute() else ROOT / a.compare)
@@ -56,6 +58,13 @@ def main():
         cases = [c for c in cases if c.get("kind") in a.kind.split(",")]
     if a.limit:
         cases = cases[: a.limit]
+    if a.budget:
+        # about 3 provider calls per case (route, SQL or answer, judge); the free tier's bucket is shared with staff
+        from ragbot.quota import can_spend
+        ok, why = can_spend(3 * len(cases))
+        print(f"budget: {why}")
+        if not ok:
+            raise SystemExit(2)
     rows = []
     for c in cases:
         res = answer(c["q"], history=c.get("history"), where={"category": c["category"]} if c.get("category") else None,

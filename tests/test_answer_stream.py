@@ -111,12 +111,14 @@ def test_answer_equals_stream_final(wire):
 
 def test_data_miss_clears_draft_before_documents_retry(wire, monkeypatch):
     """A data answer that ends not-found is retried against the documents; the not-found draft must
-    be cleared BEFORE the (slow) document search starts, not after it."""
+    be cleared BEFORE the (slow) document search starts, not after it. (Two results with real but irrelevant
+    rows reach the model; a single blank 0/NULL result takes the shorter path tested below.)"""
     import ragbot.data.tools as tools
     from ragbot.models import QueryResult
     wire("data", ["System doesn't have the data.", GOOD])
-    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
-        database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["n"], rows=[[0]])])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [
+        QueryResult(database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["n"], rows=[[5]]),
+        QueryResult(database="DB", engine="sqlserver", views=["rag.vw_Y"], sql="SELECT 2", columns=["m"], rows=[[3]])])
     evs = list(orch.answer_stream("how many licences does the Group have?", scope=Scope.unrestricted()))
     names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
     retry_search = names.index("Stage:searching")
@@ -132,3 +134,41 @@ def test_the_writing_stage_names_its_sources_before_the_answer_arrives(wire):
     assert writing.sources == ["SOP p. 4"]
     first_token = next(i for i, e in enumerate(evs) if isinstance(e, Token))
     assert evs.index(writing) < first_token
+
+
+def test_a_blank_generated_scalar_goes_straight_to_the_documents(wire, monkeypatch):
+    """P0: SUM over no rows returns [[None]] — truthy, so it used to cost an answer-model call that said
+    not-found, and only then the documents search. Now it is no rows: one search, no model call for the data."""
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    logged = wire("data", [GOOD])                       # one reply: a data-side answer call would exhaust it
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
+        database="Inventory", engine="sqlserver", views=["dbo.vw_productItemBalance"], sql="SELECT SUM(x)",
+        columns=[""], rows=[[None]], databases_considered=["FM", "Inventory"])])
+    evs = list(orch.answer_stream("closing balance of 1178108 at company 02", scope=Scope.unrestricted()))
+    names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
+    assert "Replace" not in names and names.count("Stage:searching") == 1
+    assert evs[-1].answer.text == GOOD
+    assert logged[-1].databases_considered == ["FM", "Inventory"]
+
+
+def test_a_blank_generated_scalar_with_no_documents_is_not_found_without_a_model_call(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    logged = wire("data", [])                           # no reply available: any model call would raise
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
+        database="Inventory", engine="sqlserver", views=["dbo.X"], sql="SELECT COUNT(*)", columns=["n"], rows=[[0]])])
+    evs = list(orch.answer_stream("how many x", scope=Scope.unrestricted()))
+    assert evs[-1].answer.not_found and evs[-1].answer.text.startswith("System doesn't have the data.")
+
+
+def test_a_fixed_tool_zero_is_still_an_answer(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    wire("data", [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
+        database="P", engine="sqlserver", views=["rag.vw_PPMMeeting"], sql="SELECT 1", tool="some_count_tool",
+        columns=["Meetings"], rows=[[0]])])
+    evs = list(orch.answer_stream("how many meetings", scope=Scope.unrestricted()))
+    assert not evs[-1].answer.not_found and "0" in evs[-1].answer.text

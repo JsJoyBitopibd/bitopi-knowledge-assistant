@@ -448,10 +448,13 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
         # where the seconds went (ragbot/trace.py); the request id finds the answer's rows in the logs
         took = " · ".join(f"{k} {tm[k]:.1f}s" for k in ("route", "retrieve", "data", "first_token", "answer")
                           if k in tm)
+        from .quota import gauge
         st.caption(f"route: {a.route}" + (f" · agent: {a.agent}" if a.agent else "")
+                   + (f" · databases: {', '.join(a.databases_considered)}" if a.databases_considered else "")
                    + f" · tokens in/out: {a.usage.input_tokens}/{a.usage.output_tokens}"
                    + (f" · {tm['total']:.1f}s ({took})" if "total" in tm else "")
                    + (f" · request {a.request_id}" if a.request_id else "")
+                   + f" · {gauge()}"
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
     if latest:
         ui.follow_ups(t.get("follow_ups") or [], f"{cid}_{i}", ask,

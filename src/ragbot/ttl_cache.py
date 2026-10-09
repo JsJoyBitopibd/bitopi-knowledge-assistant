@@ -38,6 +38,12 @@ class TTLCache:
             while len(self._d) > self.maxsize:
                 self._d.popitem(last=False)
 
+    def pop(self, key: Hashable) -> None:
+        """Remove one entry (a cached statement that no longer runs, or that proved empty). Missing is fine.
+        `put(key, None, 0)` does NOT do this: a non-positive TTL is a no-op by design."""
+        with self._lock:
+            self._d.pop(key, None)
+
     def clear(self) -> None:
         with self._lock:
             self._d.clear()

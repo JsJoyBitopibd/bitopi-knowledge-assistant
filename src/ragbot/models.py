@@ -125,3 +125,4 @@ class Answer(BaseModel):
     follow_ups: list[str] = Field(default_factory=list)        # suggested next questions (fixed-tool answers only)
     request_id: str = ""         # joins this answer's rows in chat.csv, calls.csv and sql.csv (ragbot/trace.py)
     timings: dict[str, float] = Field(default_factory=dict)    # seconds per stage, "total" end to end
+    databases_considered: list[str] = Field(default_factory=list)  # catalogs the SQL model saw, also on a not-found (P0)

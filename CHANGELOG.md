@@ -9,6 +9,16 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Phase P0 — the logs explain a failed data answer.** `logs/sql.csv` gains a `database` column (19 catalogs share
+  one connection line, so the statement alone did not say where it ran); new `logs/sql_gen.csv` records every SQL
+  attempt: the databases the model was shown, the `DATABASE:` line it wrote, the raw reply, whether the guard or the
+  database refused it, the row count and the stop reason; `logs/chat.csv` gains `databases_considered`, filled on
+  a not-found too. Admins see the databases under each answer.
+- **Quota gauge.** `ragbot/quota.py` counts today's provider calls in `calls.csv` against `llm.daily_budget` (500,
+  the free tier); the admin caption shows "calls today n/500" and `scripts/eval.py --budget` refuses a run that
+  would overspend the day (the judge alone took a third of a free day).
+- Phase P design in `docs/ROADMAP.md` (P0 hygiene → P1 right the first time → P2 bounded self-correction → P3
+  cross-database), with the diagnosis of the 8 Oct closing-balance failure.
 - **RHL's VistaQ server** as two catalogs, `VistaQ_Default_RHL` (QC inspections and defects, daily QC and defect
   summaries, production and session plans, cutting, corrective actions) and `VistaQ_Logging_RHL` (application logs),
   on their own connection line `SQLSERVER_CONN_VISTAQ`. Discovery, schema vectors, and name hints for line, unit,
@@ -117,6 +127,17 @@ each phase is in `docs/ROADMAP.md`.
 - Wording: "Found N matching rows" instead of "N row(s) found"; the not-found note under an answer points to the
   suggested questions; the home "Try asking" list, the input placeholder and the greeting reply mention line
   quality.
+
+### Fixed
+- **A model-written statement that returned nothing was the day's cached answer** (Phase P0). The question → SQL
+  cache stored every statement that ran, whatever it returned, so an empty or NULL result was replayed for the rest
+  of the day (8 Oct 2026: the closing-balance question failed again nine minutes later from the cache), and the
+  "drop" after a failed replay was a no-op (`TTLCache.put` with a zero TTL returns early). A blank result is now kept
+  only for `data.result_cache_ttl_seconds` (180 s) and a failed replay is really removed (`TTLCache.pop`).
+- **A one-cell NULL/0 result cost an answer-model call before the documents were searched.** `[[None]]` is a truthy
+  row list, so the orchestrator called it rows, sent it to the model (which said not-found) and only then searched
+  the documents. It is now treated as no rows: one documents search, no model call on the empty rows (3 provider
+  calls instead of 4 on that question).
 
 ## [1.12.0] — 2026-10-06 — Phase L: watcher and morning brief
 

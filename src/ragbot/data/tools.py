@@ -17,6 +17,7 @@ import yaml
 from sqlglot import exp, parse_one
 
 from .. import trace
+from ..agent.templated import is_blank_result
 from ..auth.models import Scope
 from ..config import prompt, settings
 from ..llm import get_chat
@@ -26,6 +27,7 @@ from .cache import cached_run
 from .catalog import Catalog, catalog_stamp, load_catalogs
 from .db_router import keyword_score, pick_catalogs
 from .guard import GuardError, guard
+from .schema_usage import log_generation
 from .virtual import rewrite_virtual
 
 
@@ -568,18 +570,26 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
     fallback = _pick_catalog(question, cats)
     last_err = ""
     attempts = 1 + int(s["data.sql_retries"]) + (1 if cached else 0)   # a failed replay costs no model attempt
+    # A statement that returned nothing is remembered only briefly (P0): long enough that a dashboard chip
+    # or a repeat within minutes replays it without a model call, never for the rest of the day — the
+    # 8 Oct 2026 closing-balance question replayed its NULL for nine minutes and failed twice.
+    short_ttl = min(ttl, int(s.get("data.result_cache_ttl_seconds", 180)))
+    gen = dict(user=user, agent=agent, considered=considered)
     for attempt in range(attempts):
         replay = attempt == 0 and cached is not None
         if replay:
             db_name, sql = cached
-            raw = None
+            raw, db_line, stop = None, "", ""
         else:
             # ChatModel.chat() records the call as `llm.sql` itself (ragbot/trace.py): no span here
             reply = chat.chat(messages, system=system, max_tokens=int(s.get("llm.max_tokens_sql", 1536)),
                               temperature=0, purpose="sql", user=user)
             raw = re.sub(r"^```\w*|```$", "", reply.text.strip(), flags=re.M).strip()
+            stop = reply.stop_reason or ""
             db_name, sql = _split_database_line(raw, cats, fallback.database)
+            db_line = raw.splitlines()[0].strip() if raw.upper().startswith("DATABASE:") else ""
         cat = cats[db_name]
+        kind = "replay" if replay else ("retry" if attempt > (1 if cached else 0) else "generate")
         try:
             safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
             sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
@@ -588,6 +598,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                 # A statement that reads no view or table — the model's way of saying "not found", e.g.
                 # SELECT 'System doesn''t have the data.' — is not a source: its constant row would become
                 # a cited "database answer" (found by the scope leak suite, case s33, 2026-10-06).
+                log_generation(kind="guard", database_line=db_line, database_used=db_name, fallback=not db_line,
+                               guard_error="reads no view or table", stop_reason=stop, raw_reply=raw or sql, **gen)
                 return QueryResult(database=cat.database, engine=cat.engine, views=[], sql=safe, columns=[],
                                    rows=[], error="the generated SQL reads no view or table (the model found none)",
                                    databases_considered=considered, agent=agent)
@@ -595,15 +607,25 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
                                            display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
                                            database=getattr(cat, "connection_database", None))
-            if key is not None and not replay:
-                _SQL.put(key, (db_name, safe), ttl)
+            blank = is_blank_result(cols, rows)
+            if key is not None:
+                if replay and blank:
+                    _SQL.pop(key)                     # a day-long entry that now returns nothing is forgotten …
+                if not replay or blank:
+                    _SQL.put(key, (db_name, safe), short_ttl if blank else ttl)   # … and kept only briefly
+            log_generation(kind=kind, database_line=db_line, database_used=db_name, fallback=bool(raw) and not db_line,
+                           rows=0 if blank else len(rows), stop_reason=stop, raw_reply=raw or sql, **gen)
             return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
                                params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
                                databases_considered=considered, sql_cached=replay, agent=agent)
         except Exception as e:
             last_err = f"{e.__class__.__name__}: {e}"
+            is_guard = isinstance(e, GuardError)
+            log_generation(kind="guard" if is_guard else "error", database_line=db_line, database_used=db_name,
+                           fallback=bool(raw) and not db_line, guard_error=last_err if is_guard else "",
+                           db_error="" if is_guard else last_err, stop_reason=stop, raw_reply=raw or sql, **gen)
             if replay:
-                _SQL.put(key, None, 0)    # a cached statement that no longer runs is dropped (schema change?)
+                _SQL.pop(key)             # a cached statement that no longer runs is dropped (schema change?)
                 continue                  # and the question is generated afresh
             messages += [{"role": "assistant", "content": raw},
                          {"role": "user", "content": f"That query failed: {last_err}\n"
