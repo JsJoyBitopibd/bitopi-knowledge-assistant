@@ -35,3 +35,4 @@
 {"id": "s35", "as": "tal", "kind": "data", "q": "please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami", "expect_no_rows": true}
 {"id": "s36", "as": "tal", "kind": "data", "q": "Which stores hold item 1178108?", "subset_of_all": true}
 {"id": "s37", "as": "all", "kind": "data", "q": "please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami", "expect_rows": true, "control": true}
+{"id": "s38", "as": "tal", "kind": "data", "q": "GRN ids of item 1178108 for company 02 with the company name from the system manager", "expect_no_rows": true}

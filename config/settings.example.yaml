@@ -66,6 +66,9 @@ data:
   big_table_rows: 1000000         # raw tables above this need a WHERE clause (guard)
   max_databases_per_question: 2   # catalogs shown to the SQL model per question, ranked by data/db_router.py (J1)
   max_databases_per_question_max: 3   # one more when the next catalog ties the last pick on keywords (P1)
+  cross_database_names: false     # P3: let a model-written statement read a sibling database on the same SQL Server
+                                  # instance as Database.schema.table (raw offered tables only, never rag.* views,
+                                  # unrestricted users only; the guard checks each against its own catalog). Owner's call.
   values:                         # value index (P2.1, data/values.py): recorded names matched against the question
     enabled: true
     fuzzy_cutoff: 0.85            # difflib ratio a close match must reach ('mantainance store' ~ 'Maintenance Store' = 0.88)

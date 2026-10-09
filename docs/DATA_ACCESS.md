@@ -190,6 +190,29 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
   <system> for '<the user's own words>' and found no matching records…" — never a column, table or recorded
   value in the sentence; the recorded values are offered as questions to click.
 
+## 5a. Cross-database questions (Phase P3) — every combination, decided
+
+The catalogs fall into three connection groups (checked read-only on 2026-10-09 with `@@SERVERNAME`):
+
+| Group | Catalogs | How they are reached |
+|---|---|---|
+| **A — RND-SERVER\MSSQLSERVER2019** | BIMOB_MVC, BIMOB_MVC_TAL, BiMob, Dashboard, DiskManager, FM, HR, HWATT, Hrms5Misami, Inventory, PlanningTNA, Production, SystemManager, VISTAQ, Washing, erp (line `SQLSERVER_CONN_PRODUCTION`, one database each) and BitopiSplint (its own line `SQLSERVER_CONN_BITOPISPLINT`, the same instance) | one login, one instance: a statement opened on one database can name another as `Database.schema.table` |
+| **B — VISTAQ host** | VistaQ_Default_RHL, VistaQ_Logging_RHL (`SQLSERVER_CONN_VISTAQ`) | a different server: nothing crosses on the server side |
+| **C — MySQL** | none configured today (`MYSQL_CONN`) | — |
+
+The mechanism for a question that needs two databases, in the order they are tried:
+
+| Pair | Mechanism | Where |
+|---|---|---|
+| Any two, a known question shape | **Fixed tool + companion**: the main statement runs in A's database, the companion in B's with the main rows' keys and the main tool's parameters bound; `merge: {on, add}` joins the companion's columns onto the main rows in Python, one table cited `[D1][D2]` with both cards kept (every cell is licensed by the row set it came from). VistaQ + ERP (`quality_by_group_window`) is the live example | `config/fixed_tools.yaml` `companion:`, `tools.merge_companion` |
+| Any two, small masters | **Local copies joined in SQLite**: `config/aggregates.yaml` copies a master (`company_master` from SystemManager) nightly; a fixed tool's `local_sql` joins it with a copy of its own data, cited with the copy's as-of time | `aggregate:` + `local_sql`, `data/aggregates.py` |
+| Two of group A, model-written SQL | **Three-part names**, off by default (`data.cross_database_names`): when on and the picked catalogs share the instance, the SQL prompt says a sibling's listed table may be read as `Database.schema.table`; the guard accepts it only for a raw table that sibling offers (never a `rag.*` view — virtual views are CTEs local to one catalog — never a sensitive name; SELECT * and the big-table WHERE rules apply), unrestricted users only (restricted scopes are offered no raw tables at all). The `[D#]` card names both tables. Turning it on is the owner's decision; with `rag_reader`, re-run `scripts/gen_reader_grants.py` so the login may read every sibling | `guard(allowed_catalogs=…)`, `tools.siblings_of` |
+| Group A with group B, model-written SQL | Not possible in one statement (different servers): a fixed tool with a companion is the way |
+| Anything with MySQL | A fixed tool with a companion when a MySQL catalog exists |
+
+What never happens: a three-part name for a restricted user, a foreign `rag.*` view, a merge computed by the
+model (the join runs in SQL Server, in Python or in SQLite — the model only sees the rows).
+
 ## 6. Virtual views (this build, until a DBA runs the DDL above)
 
 No DDL has been run against `192.168.10.6\MSSQLSERVER2019` — writes to the server are strictly

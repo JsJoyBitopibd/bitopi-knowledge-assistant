@@ -49,6 +49,31 @@ def _log(engine: str, tool: str, display_sql: str, sql_exec: str, params: dict, 
 _DB_KEY = re.compile(r"((?:^|;)\s*(?:database|initial catalog)\s*=)[^;]*", re.IGNORECASE)
 
 
+def _dsn_key(raw: str, key: str) -> str:
+    m = re.search(rf"(?:^|;)\s*{key}\s*=\s*([^;]*)", raw, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def server_of(conn_env: str) -> str:
+    """The SQL Server instance a connection line points at (its Server= key, lower-case), so two login lines on
+    one instance count as the same server (Phase P3: BitopiSplint has its own line on the production instance)."""
+    try:
+        return _dsn_key(env(conn_env), "server").lower()
+    except Exception:
+        return ""
+
+
+def sql_database(conn_env: str, connection_database: Optional[str] = None) -> str:
+    """The database name a statement on this catalog runs in: its `connection_database:` or the line's own
+    Database= (the name a three-part reference must use)."""
+    if connection_database:
+        return connection_database
+    try:
+        return _dsn_key(env(conn_env), "database") or _dsn_key(env(conn_env), "initial catalog")
+    except Exception:
+        return ""
+
+
 def dsn(conn_env: str, database: Optional[str] = None) -> str:
     """The connection string named by `conn_env` in .env, pointed at `database` when one is given. One
     read-only login covers the whole SQL Server instance, so the catalogs of that server share one env var

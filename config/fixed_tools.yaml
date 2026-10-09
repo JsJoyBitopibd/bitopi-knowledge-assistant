@@ -562,7 +562,7 @@
     - 'Which export orders are in file FR-{eo_file}?'
     - 'Show me the defect summary {window}'
   description: QC figures for the order file (FR number) that holds an export order or a named file. VistaQ records QC per file, not per export order or PO.
-  answer_list: 'QC {window} for file FR-{eo_file}, live from VistaQ. VistaQ records QC per file, not per export order or PO; the file''s export orders and POs follow'
+  answer_list: 'QC {window} for file FR-{eo_file}, live from VistaQ. VistaQ records QC per file, not per export order or PO; the file''s buyer, export orders and POs from the ERP are in the same row'
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*?\b(?:TAL|RHL|BGL|KTL|CKDL|FR)-(\d{2}-\d{1,6})(?:-\d{1,4})?\b)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected)\b)'
   params:
     window: { from_group: 1, type: date_window, default: 'today' }
@@ -599,6 +599,10 @@
     column: FileNo
     param: files
     answer_list: 'Export orders and POs of each file, from the ERP'
+    # P3: the ERP's columns joined onto each VistaQ row by file number — one table from two servers, cited
+    # [D1][D2]; both cards stay (tools.merge_companion)
+    # ("on" is quoted: YAML 1.1 reads a bare `on` as the boolean true)
+    merge: { "on": [FileNo], add: [Buyer, ExportOrders, POs, FirstEO, LastEO] }
     sql: |
       SELECT TOP (200)
         e.FileRefID AS FileNo, MAX(e.Buyer) AS Buyer, COUNT(*) AS ExportOrders, COUNT(DISTINCT e.ExportPONo) AS POs,
@@ -632,7 +636,7 @@
       type: group_by
       default: [factory]
       columns: { factory: Factory, unit: Unit, line: Line, buyer: Buyer, style: Style, color: Color, file: FileNo }
-      po_eo_note: '. VistaQ records QC per file (FR number), not per PO or export order; each file''s export orders and POs from the ERP follow'
+      po_eo_note: '. VistaQ records QC per file (FR number), not per PO or export order; each file''s buyer, export orders and POs from the ERP are in the same row'
     measures: *vq_measures
   heavy: true
   sql: |

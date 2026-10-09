@@ -270,15 +270,21 @@ def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) ->
 def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_generated: bool = False) -> bool:
     """Fill `out` from agent/templated.py when the results qualify and the text verifies: one result, or a fixed
     tool's result [D1] followed by its companion [D2] (an empty companion is left out)."""
-    from ..data.tools import companion_tool, load_fixed_tools
+    from ..data.tools import companion_tool, load_fixed_tools, merge_companion
     from .templated import try_template
     tool = next((t for t in load_fixed_tools() if t.get("name") == results[0].tool), None)
-    text = try_template(results[0], tool, allow_generated)
+    comp = companion_tool(tool) if tool is not None else None
+    merged = None
+    if comp is not None and comp.get("merge") and len(results) > 1 and not results[1].error and results[1].rows:
+        # P3: the companion's columns joined onto the main rows — one table from two databases, cited [D1][D2];
+        # both results stay in `used`, so every merged cell is licensed by the row set it came from
+        merged = merge_companion(results[0], results[1], comp["merge"])
+    text = try_template(merged or results[0], tool, allow_generated, marker="D1][D2" if merged else "D1")
     if not text:
         return False
-    used = [results[0]]
-    if len(results) > 1 and tool is not None and not results[1].error and results[1].rows:
-        more = try_template(results[1], companion_tool(tool), marker="D2")
+    used = [results[0]] + ([results[1]] if merged else [])
+    if merged is None and len(results) > 1 and tool is not None and not results[1].error and results[1].rows:
+        more = try_template(results[1], comp, marker="D2")
         if more:
             text += "\n\n" + more
             used.append(results[1])

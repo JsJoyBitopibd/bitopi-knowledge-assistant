@@ -9,6 +9,15 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Phase P3 — questions that span two databases.** Every combination is decided in `docs/DATA_ACCESS.md` §5a:
+  the 18 catalogs on the production instance, the two VistaQ catalogs on their own host. Three mechanisms:
+  a fixed tool's companion from another database can now declare `merge:` and its columns are joined onto the
+  main rows in Python — one table from two servers, cited `[D1][D2]` (the VistaQ QC-per-file answers now carry
+  each file's buyer, export orders and POs from the ERP in the same rows); small masters are copied nightly for
+  SQLite joins (`company_master`); and, **off by default** (`data.cross_database_names`), a model-written statement
+  may read a sibling database on the same instance as `Database.schema.table` — the guard accepts only a raw table
+  that sibling's catalog offers, never a `rag.*` view or a sensitive name, for unrestricted users only, and the
+  reference card names both tables. Proven on a dev copy with the setting on; the owner decides for production.
 - **Phase P2 — the recorded names, and a second look when a query finds nothing.** A nightly value index
   (`config/aggregates.yaml` specs with `entity:`; `src/ragbot/data/values.py`) copies the store, company, item
   category, store group and issue-cause names as the data records them, and matches a question's words against

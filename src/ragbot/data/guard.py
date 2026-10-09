@@ -77,8 +77,16 @@ def assert_read_only(sql: str, dialect: str = "tsql") -> None:
 
 def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, *,
           allowed_tables: frozenset[str] | set[str] = frozenset(),
-          big_tables: dict[str, int] | None = None) -> str:
-    """Validate and normalise. Returns SQL with a row cap applied. Raises GuardError otherwise."""
+          big_tables: dict[str, int] | None = None,
+          allowed_catalogs: dict[str, frozenset[str]] | None = None) -> str:
+    """Validate and normalise. Returns SQL with a row cap applied. Raises GuardError otherwise.
+
+    `allowed_catalogs` (Phase P3, opt-in: setting data.cross_database_names, unrestricted scopes only) maps the
+    lower-case SQL name of a sibling database on the same server to the lower-case `schema.table` set it offers:
+    a three-part reference `Db.schema.table` is accepted only for one of those tables — never a `rag.*` view
+    (virtual views are CTEs local to a catalog), never a sensitive name — and then counts as a raw table (no
+    SELECT *, WHERE on big ones, keyed `db.schema.table` in `big_tables`). Without the map every three-part
+    name is rejected, as always."""
     s = sql.strip().rstrip(";").strip()
     if not s:
         raise GuardError("empty statement")
@@ -110,9 +118,19 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
     for t in tree.find_all(exp.Table):
         if not isinstance(t.this, exp.Identifier):
             raise GuardError(f"only plain view references are allowed, not {t.sql(read_dialect)!r}")
-        if t.catalog:
-            raise GuardError(f"three-part name not allowed: {t.sql(read_dialect)}")
         db, name = (t.db or "").lower(), t.name.lower()
+        if t.catalog:
+            sibling = (allowed_catalogs or {}).get(t.catalog.lower())
+            if sibling is None:
+                raise GuardError(f"three-part name not allowed: {t.sql(read_dialect)}")
+            if db == "rag":
+                raise GuardError(f"another database's rag.* views cannot be read: {t.sql(read_dialect)}")
+            if is_sensitive(t.name):
+                raise GuardError(f"restricted table: {t.name}")
+            if f"{db}.{name}" not in sibling:
+                raise GuardError(f"table not in catalog: {t.catalog}.{t.db}.{t.name}")
+            raw.append(f"{t.catalog.lower()}.{db}.{name}")
+            continue
         if is_sensitive(t.name):
             raise GuardError(f"restricted table: {t.name}")
         if not db:

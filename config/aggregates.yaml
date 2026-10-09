@@ -23,6 +23,18 @@
   indexes: [ExportOrderID]
   scope_column: Factory
 
+# ---------------------------------------------------------------- local master copies (Phase P3, 2026-10-09)
+# Small masters from other databases, copied nightly so a fixed tool's `local_sql` can JOIN them in SQLite with a
+# copy of its own data — two production databases joined locally, cited with the copy's as-of time
+# (docs/DATA_ACCESS.md "Cross-database questions").
+- name: company_master
+  database: SystemManager
+  description: The group's 12 companies with code, name, short name and location (SystemManager.dbo.Company).
+  views: []
+  sql: |
+    SELECT CompanyID, CompanyName, CompanyShortName, Loc FROM dbo.Company
+  indexes: [CompanyID]
+
 # ---------------------------------------------------------------- value index (Phase P2.1, 2026-10-09)
 # Names recorded in the data, copied nightly so a question's spelling ("mantainance store of misami") can become
 # the recorded value ('Maintenance Store (Misami)') — src/ragbot/data/values.py. A spec with `entity:` is a value

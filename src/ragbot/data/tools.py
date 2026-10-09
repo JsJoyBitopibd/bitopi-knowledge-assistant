@@ -454,27 +454,74 @@ def run_companion(tool: dict[str, Any], result: QueryResult, cats: dict[str, Cat
     if not values:
         return None
     sql, params = _expand_list(comp["sql"], comp.get("param", "values"), values)
+    # P3: the parent's own parameters (a company, a store, a window) are available to the companion's SQL too
+    params = {**{k: v for k, v in result.params.items() if k not in params}, **params}
     out = run_fixed_tool({**comp, "sql": sql}, params, cats, user, refresh, scope=scope)
     out.agent = comp["agent"]
     return out
 
 
-def _views_in(sql: str, cat: Catalog) -> list[str]:
-    """Curated views and discovered tables the statement reads (for the [D#] reference)."""
+def merge_companion(main: QueryResult, extra: QueryResult, spec: dict[str, Any]) -> Optional[QueryResult]:
+    """P3 (the unbuilt ROADMAP K2 line): two databases' rows in one table. A companion that declares
+    `merge: {on: [key columns], add: [columns]}` has its listed columns left-joined onto the main result's rows
+    by key, in Python — every cell is copied verbatim from one of the two row sets, so the citation verifier
+    licenses the merged table from [D1] and [D2] together; a main row with no companion match shows "—".
+    Returns None when a key or added column is missing from either side."""
+    # YAML 1.1 turns a bare `on:` key into the boolean True (found 2026-10-09): accept both spellings
+    on = [str(c) for c in (spec.get("on") or spec.get(True) or [])]
+    add = [str(c) for c in spec.get("add") or []]
+    if not on or not add or any(c not in main.columns for c in on) or any(c not in extra.columns for c in on + add):
+        return None
+    mi = [main.columns.index(c) for c in on]
+    ei = [extra.columns.index(c) for c in on]
+    ai = [extra.columns.index(c) for c in add]
+    index: dict[tuple, list[Any]] = {}
+    for row in extra.rows:
+        index.setdefault(tuple(str(row[j]) for j in ei), row)
+    rows = [list(row) + ([index[tuple(str(row[j]) for j in mi)][k] for k in ai]
+                         if tuple(str(row[j]) for j in mi) in index else [None] * len(ai)) for row in main.rows]
+    added = [c if c not in main.columns else f"{c} ({extra.database})" for c in add]
+    return QueryResult(database=f"{main.database} + {extra.database}", engine=main.engine, views=main.views + extra.views,
+                       sql=main.sql, sql_executed=main.sql_executed, params=main.params, tool=f"{main.tool}:merged",
+                       columns=main.columns + added, rows=rows, key_columns=main.key_columns,
+                       as_of=min(main.as_of, extra.as_of), agent=main.agent)
+
+
+def _views_in(sql: str, cat: Catalog, siblings: Optional[dict[str, Catalog]] = None) -> list[str]:
+    """Curated views and discovered tables the statement reads (for the [D#] reference); a sibling database's
+    table as `Database.schema.table` (P3) when the statement names one the sibling offers."""
+    three: set[str] = set()
     try:
         tree = parse_one(sql, read=cat.dialect)
-        names = {".".join(p for p in [t.db, t.name] if p) for t in tree.find_all(exp.Table)}
+        names = set()
+        for t in tree.find_all(exp.Table):
+            if t.catalog and siblings:
+                sib = next((s for n, s in siblings.items() if n.lower() == t.catalog.lower()), None)
+                if sib is not None and sib.table(f"{t.db}.{t.name}"):
+                    three.add(f"{next(n for n in siblings if n.lower() == t.catalog.lower())}.{t.db}.{t.name}")
+                continue
+            names.add(".".join(p for p in [t.db, t.name] if p))
     except Exception:
         names = set(re.findall(r"\b\w+\.\w+", sql, re.IGNORECASE))
-    return sorted(n for n in names if cat.view(n) or cat.table(n))
+    return sorted(n for n in names if cat.view(n) or cat.table(n)) + sorted(three)
 
 
-def _keys_for(views: list[str], cat: Catalog) -> list[str]:
-    """Row-key columns for the [D#] reference: a curated view's key_columns, a raw table's primary key."""
+def _keys_for(views: list[str], cat: Catalog, siblings: Optional[dict[str, Catalog]] = None) -> list[str]:
+    """Row-key columns for the [D#] reference: a curated view's key_columns, a raw table's primary key (a sibling
+    database's table through that sibling's catalog)."""
     keys: list[str] = []
     for v in views:
         vw = cat.view(v)
-        cols = vw.key_columns if vw else (cat.table(v).primary_key if cat.table(v) else [])
+        if vw:
+            cols = vw.key_columns
+        elif cat.table(v):
+            cols = cat.table(v).primary_key
+        elif siblings and v.count(".") == 2:
+            db, rest = v.split(".", 1)
+            sib = siblings.get(db)
+            cols = sib.table(rest).primary_key if sib is not None and sib.table(rest) else []
+        else:
+            cols = []
         keys += [k for k in cols if k not in keys]
     return keys
 
@@ -502,15 +549,44 @@ def _schema_selection(question: str, cats: dict[str, Catalog],
     return {name: select_tables(question, c, k, qvec, max_total=cap) for name, c in cats.items() if c.offered_tables}
 
 
-def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope) -> str:
+def siblings_of(cat: Catalog, cats: dict[str, Catalog]) -> dict[str, Catalog]:
+    """The other catalogs of `cats` on the same SQL Server instance as `cat` (same connection line, or two lines
+    whose Server= is the same), keyed by the SQL database name a three-part reference must use (P3). Empty
+    unless data.cross_database_names is on. The VistaQ pair is on another host and never joins the 17."""
+    from .connectors import server_of, sql_database
+    if not settings().get("data.cross_database_names", False) or cat.dialect != "tsql":
+        return {}
+    mine = server_of(cat.connection_env)
+    out: dict[str, Catalog] = {}
+    for other in cats.values():
+        if other is cat or other.dialect != "tsql":
+            continue
+        same_line = other.connection_env == cat.connection_env
+        if same_line or (mine and server_of(other.connection_env) == mine):
+            name = sql_database(other.connection_env, getattr(other, "connection_database", None))
+            if name:
+                out[name] = other
+    return out
+
+
+def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope,
+               siblings: Optional[dict[str, Catalog]] = None) -> str:
     """Guard with the catalog's FULL offered set as the allow-list (security), independent of which
     tables the prompt happened to show (relevance). Raw tables have no common factory column to filter
-    on, so a user limited to some factories may read the rag views only."""
+    on, so a user limited to some factories may read the rag views only — and may never cross databases."""
     offered = cat.offered_tables if scope.all_factories else []
     big_rows = int(settings().get("data.big_table_rows", 1_000_000))
+    big = {t.name.lower(): t.rows for t in offered if t.rows and t.rows > big_rows}
+    allowed_catalogs: Optional[dict[str, frozenset[str]]] = None
+    if siblings and scope.all_factories:
+        allowed_catalogs = {}
+        for db_name, sib in siblings.items():
+            allowed_catalogs[db_name.lower()] = frozenset(t.name.lower() for t in sib.offered_tables)
+            big.update({f"{db_name.lower()}.{t.name.lower()}": t.rows for t in sib.offered_tables
+                        if t.rows and t.rows > big_rows})
     return guard(sql, cat.view_names, cat.dialect, max_rows,
-                 allowed_tables=frozenset(t.name.lower() for t in offered),
-                 big_tables={t.name.lower(): t.rows for t in offered if t.rows and t.rows > big_rows})
+                 allowed_tables=frozenset(t.name.lower() for t in offered), big_tables=big,
+                 allowed_catalogs=allowed_catalogs)
 
 
 def _extract_params(sql: str, cat: Catalog) -> dict[str, Any]:
@@ -558,14 +634,15 @@ def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -
 
 
 def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bool, tool: str = "generated",
-                 considered: list[str] = (), agent: str = "") -> QueryResult:
+                 considered: list[str] = (), agent: str = "", cats: Optional[dict[str, Catalog]] = None) -> QueryResult:
     """One statement through the chain every model-written, corrected or lookup statement takes: guard (the
     catalog's full allow-list) -> virtual-view rewrite with the scope filter -> parameters -> cached_run.
     Raises GuardError / the database's error; a statement that reads no table is refused."""
     s = settings()
-    safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
+    siblings = siblings_of(cat, {c.database: c for c in (cats or {}).values()}) if cats else {}
+    safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope, siblings)
     sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
-    views += [n for n in _views_in(safe, cat) if not cat.view(n)]
+    views += [n for n in _views_in(safe, cat, siblings) if not cat.view(n)]
     if not views:
         raise GuardError("the generated SQL reads no view or table (the model found none)")
     params = _extract_params(safe, cat)
@@ -573,8 +650,8 @@ def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bo
                                    tool=tool, user=user, refresh=refresh, scope_key=scope.key(),
                                    database=getattr(cat, "connection_database", None))
     return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
-                       params=params, tool=tool, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
-                       databases_considered=list(considered), agent=agent)
+                       params=params, tool=tool, columns=cols, rows=rows, key_columns=_keys_for(views, cat, siblings),
+                       as_of=as_of, databases_considered=list(considered), agent=agent)
 
 
 def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
@@ -612,9 +689,22 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             values_text = "\n".join(f"- {ln}" for ln in lines) if lines else "(none)"
         except Exception:
             values_text = "(none)"
+    # P3: when the picked catalogs share one SQL Server instance and the owner turned it on, a statement may read a
+    # sibling database's listed tables as Database.schema.table (the guard checks each against its own catalog)
+    cross_rule = "Never with a database prefix."
+    if s.get("data.cross_database_names", False):
+        from .connectors import sql_database
+        groups = {n: siblings_of(c, cats) for n, c in cats.items()}
+        joined = sorted({sql_database(c.connection_env, getattr(c, "connection_database", None))
+                         for n, c in cats.items() if groups[n]} | {m for g in groups.values() for m in g})
+        if len(joined) >= 2:
+            cross_rule = (f"The databases {', '.join(joined)} are on one server: a query opened on one of them may "
+                          f"read another's listed tables as Database.schema.name (e.g. {joined[0]}.dbo.<table>), "
+                          "never its rag.* views; prefer one database when it suffices.")
     # Static text first (rules, curated views, examples), the per-question tables last: a stable
     # prefix lets the provider reuse its cached prompt across questions.
     system = (prompt("sql_generate").replace("{agent}", charter_text(agent))
+              .replace("{cross_db_rule}", cross_rule)
               .replace("{catalogs}", catalogs_text)
               .replace("{tables}", tables_text or "(none selected for this question)")
               .replace("{values}", "Known values (recorded spellings of words in the question):\n" + values_text)
@@ -643,11 +733,12 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             db_name, sql = _split_database_line(raw, cats, fallback.database)
             db_line = raw.splitlines()[0].strip() if raw.upper().startswith("DATABASE:") else ""
         cat = cats[db_name]
+        siblings = siblings_of(cat, cats)        # same-server catalogs a three-part name may read (P3, opt-in)
         kind = "replay" if replay else ("retry" if attempt > (1 if cached else 0) else "generate")
         try:
-            safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope)
+            safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope, siblings)
             sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
-            views += [n for n in _views_in(safe, cat) if not cat.view(n)]   # raw tables, for the [D#] reference
+            views += [n for n in _views_in(safe, cat, siblings) if not cat.view(n)]   # raw tables, for the [D#] reference
             if not views:
                 # A statement that reads no view or table — the model's way of saying "not found", e.g.
                 # SELECT 'System doesn''t have the data.' — is not a source: its constant row would become
@@ -665,8 +756,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             log_generation(kind=kind, database_line=db_line, database_used=db_name, fallback=bool(raw) and not db_line,
                            rows=0 if blank else len(rows), stop_reason=stop, raw_reply=raw or sql, **gen)
             qr = QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
-                             params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat), as_of=as_of,
-                             databases_considered=considered, sql_cached=replay, agent=agent)
+                             params=params, columns=cols, rows=rows, key_columns=_keys_for(views, cat, siblings),
+                             as_of=as_of, databases_considered=considered, sql_cached=replay, agent=agent)
             if blank and not replay:
                 qr = _repair_blank(qr, question, cats, cat, raw or "", messages, system, chat, selected.get(db_name, []),
                                    scope=scope, user=user, refresh=refresh, started=t_start, considered=considered,
@@ -708,7 +799,7 @@ def _repair_blank(qr: QueryResult, question: str, cats: dict[str, Catalog], cat:
 
     def executor(for_cat: Catalog) -> empty_retry.Executor:
         return lambda stmt, tool: _run_guarded(stmt, for_cat, scope=scope, user=user, refresh=refresh, tool=tool,
-                                               considered=considered, agent=agent)
+                                               considered=considered, agent=agent, cats=cats)
 
     def ask(instruction: str, rows_sent: int) -> tuple[str, empty_retry.Executor]:
         convo = messages + [{"role": "assistant", "content": raw}, {"role": "user", "content": instruction}]

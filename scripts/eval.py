@@ -19,12 +19,15 @@ def judge(sources: str, ans: str, expected: str) -> dict:
     """The judge's claims and verdict. A provider failure (timeout, quota) is retried once; if it fails
     again the case is returned unscored (verdict None) instead of crashing the run and losing it."""
     msg = (f"<sources>\n{sources}\n</sources>\n<answer>{ans}</answer>\n<expected>{expected}</expected>\n\n"
-           "1. List each factual claim in the answer and whether the sources support it.\n"
+           "1. List the factual claims in the answer (at most 12; a table counts as one claim per row group, not per "
+           "cell) and whether the sources support them.\n"
            "2. Say whether the answer agrees with the expected answer (same facts; wording may differ).\n"
            'Return JSON: {"claims":[{"claim":str,"supported":bool}],"verdict":"agree"|"partial"|"disagree"}')
     for attempt in (1, 2):
         try:
-            r = get_chat().chat([{"role": "user", "content": msg}], system=JUDGE_SYS, max_tokens=1500, purpose="judge")
+            # 3000: a dashboard or merged-table answer made the judge enumerate a claim per cell and overflow 1500
+            # (cases 84 and 88 on 2026-10-09), which parsed as "disagree"
+            r = get_chat().chat([{"role": "user", "content": msg}], system=JUDGE_SYS, max_tokens=3000, purpose="judge")
             break
         except LLMError as e:
             if attempt == 2:
