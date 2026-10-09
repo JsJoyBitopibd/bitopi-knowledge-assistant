@@ -81,7 +81,8 @@ def _compiled(word: str) -> re.Pattern:
 
 
 def keyword_hits(question: str, agent: Agent) -> int:
-    q = question.lower()
+    from ..data.db_router import _strip_sql     # a pasted statement's ORDER BY is not the order agent's "order"
+    q = _strip_sql(question).lower()
     return sum(1 for w in agent.keywords if _compiled(w).search(q))
 
 

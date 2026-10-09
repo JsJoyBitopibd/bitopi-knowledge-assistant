@@ -9,6 +9,25 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Phase P1 — store questions answered right the first time.** Seven curated Inventory views: `rag.vw_StockBalance`
+  (closing balance of an item per company and store — receipts minus issues in the store ledger, converted to the
+  item's base unit, with category, store group and the non-production flag), `vw_StockMovement`, `vw_GoodsReceipt`,
+  `vw_StockIssue`, `vw_Item`, `vw_Store`, `vw_Company`; six fixed tools (stock balance, receipts and issues, receipts,
+  issues, stores holding an item, item record) that answer with no model call; an Inventory / Store agent and charter.
+  The 8 Oct 2026 closing-balance question that was answered "System doesn't have the data." in 23 s now answers in
+  3 s: Maintenance Store (Misami), 13 L received, 12.125 L issued, 0.875 L in hand.
+- **Companies and stores by name.** `config/reference/entities.yaml` (the group's 12 companies with codes, short
+  names and aliases from `SystemManager.dbo.Company`; store aliases; metric synonyms). A fixed tool's `type: entity`
+  parameter turns "companyid=02" or "misami" into the bound parameter '02', never question text.
+- **The router hears the question's own words.** Catalog `synonyms:` ("closing balance" → "closing stock"),
+  `table_notes:` (one-line descriptions for discovered tables, seen by the prompt and the schema index) and a per-catalog
+  `schema_rag_k`; compound tokens split on real column names (`companyid` → company id); SQL reserved words stripped
+  from a pasted statement ("ORDER BY" no longer scores the order agent); ties broken by table-name share, then keyword
+  hits, not the alphabet; a third catalog is shown when it ties the second on keywords; "please find / get / fetch"
+  are list cues; a column-word signal in table selection (three shared words at least). Schema recall 16/17.
+- **A pasted SQL statement runs as written** — under the same guard, scope and row cap as a model-written one,
+  against the catalog that offers its tables (bare names qualified with `dbo.`, `TOP (200)` added); it is never
+  rewritten or scored on its words.
 - **Phase P0 — the logs explain a failed data answer.** `logs/sql.csv` gains a `database` column (19 catalogs share
   one connection line, so the statement alone did not say where it ran); new `logs/sql_gen.csv` records every SQL
   attempt: the databases the model was shown, the `DATABASE:` line it wrote, the raw reply, whether the guard or the
@@ -129,6 +148,16 @@ each phase is in `docs/ROADMAP.md`.
   quality.
 
 ### Fixed
+- **String parameters were bound as NVARCHAR against VARCHAR columns** (Phase P1). pyodbc sends a Python string as
+  NVARCHAR; every code column in these databases is VARCHAR, and `varchar_column = nvarchar_parameter` converts the
+  column side, which defeats index seeks and predicate push-down: the stock-balance view answered a literal in 1.2 s
+  and the same bound parameter timed out at 45 s. ASCII string parameters are now bound as VARCHAR
+  (`connectors._bind_varchar`); every parameterised fixed tool benefits.
+- **A fixed tool that found no rows triggered a documents search** (6–54 s of reranking on this VM) and a
+  model-written not-found instead of the plain "I checked … and found no matching records" sentence. The fallback
+  now runs only for model-written SQL: a question that matched a tool's pattern is a data question by construction.
+- **Decimal ledger sums rendered with ten decimals** (12.1250000000). Values with more than four decimal places are
+  trimmed (12.125); the citation verifier normalises numbers the same way, so the text still verifies.
 - **A model-written statement that returned nothing was the day's cached answer** (Phase P0). The question → SQL
   cache stored every statement that ran, whatever it returned, so an empty or NULL result was replayed for the rest
   of the day (8 Oct 2026: the closing-balance question failed again nine minutes later from the cache), and the

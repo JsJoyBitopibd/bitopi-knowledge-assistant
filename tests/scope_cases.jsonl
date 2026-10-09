@@ -32,3 +32,6 @@
 {"id": "s32", "as": "tal", "kind": "answer", "q": "How many export orders per factory are shipping this month?", "forbid_factories": ["RHL", "BGL", "KTL", "CKDL"]}
 {"id": "s33", "as": "tal", "kind": "answer", "q": "How many suppliers are in the supplier data table dbo.SupplierData?", "expect_no_rows": true}
 {"id": "s34", "as": "tal", "kind": "answer", "q": "What is the TAL cutting room approval rule, and what are the next TAL PCDs?", "forbid_sources": ["rhl_cutting_sop.pdf", "hr_salary_policy.pdf"], "forbid_text": ["RHL-CUT-552", "HR-PAY-901"]}
+{"id": "s35", "as": "tal", "kind": "data", "q": "please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami", "expect_no_rows": true}
+{"id": "s36", "as": "tal", "kind": "data", "q": "Which stores hold item 1178108?", "subset_of_all": true}
+{"id": "s37", "as": "all", "kind": "data", "q": "please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami", "expect_rows": true, "control": true}

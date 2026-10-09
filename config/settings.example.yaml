@@ -5,6 +5,7 @@ paths:
   catalog_dir: config/catalog
   fixed_tools: config/fixed_tools.yaml
   agents_dir: config/agents         # domain agents (Phase K, docs/AGENTS_DESIGN.md)
+  reference_dir: config/reference   # entity dictionaries: companies, store aliases, metrics (Phase P1)
   golden_set: tests/golden.jsonl
   scopes_file: config/scopes.yaml   # AD group -> what its members may see (copy scopes.example.yaml)
   users_file: config/users.yaml     # local sign-in users, auth.provider: local only (copy users.example.yaml)
@@ -60,9 +61,11 @@ data:
   sql_retries: 1
   result_cache_ttl_seconds: 180   # SQL result cache; hits keep their original as-of time; 0 = off
   schema_rag: true                # show generated SQL the discovered tables a question needs (Phase C5)
-  schema_rag_k: 6                 # tables selected per database (+ up to 6 foreign-key neighbours)
+  schema_rag_k: 6                 # tables selected per database (+ up to 6 foreign-key neighbours); a catalog may set its own
+  schema_rag_max_tables: 14       # at most this many tables per database in the prompt, neighbours included (P1)
   big_table_rows: 1000000         # raw tables above this need a WHERE clause (guard)
   max_databases_per_question: 2   # catalogs shown to the SQL model per question, ranked by data/db_router.py (J1)
+  max_databases_per_question_max: 3   # one more when the next catalog ties the last pick on keywords (P1)
   sql_cache_ttl_seconds: 86400    # question -> generated SQL replayed within the day (J2); 0 = off
 
 llm:

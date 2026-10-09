@@ -4,8 +4,9 @@ title: Sourcing agent
 description: Fabric, trims and accessories purchase orders, suppliers, planned and actual in-house dates, goods receipts.
 stage: 1
 catalogs: [BitopiSplint, Inventory]
-keywords: [fabric, fabrics, trims, accessories, supplier, suppliers, purchase order, purchase orders, grn,
-           goods receipt, goods received, in-house, inhouse, material, materials, yarn]
+keywords: [fabric, fabrics, trims, accessories, supplier, suppliers, purchase order, purchase orders,
+           in-house, inhouse, material, materials, yarn]
+# grn / goods receipt moved to the Inventory agent (Phase P1): a question about receipts of an item is a store question
 charter: agents/sourcing
 # The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
 where: 'Sourcing data I can read is the ERP''s purchase orders and goods receipts, and the receipts on this server are not current; the store or the sourcing team has today''s position.'

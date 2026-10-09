@@ -121,14 +121,32 @@ the guard allows exactly the catalog's offered tables. Three fields matter for s
 use for this data — the router scores them) and `exclude_tables` (dated copies, backups, scratch tables).
 `connection_database` is described in section 1.
 
+Three more optional keys (Phase P1, `config/catalog/Inventory.yaml` shows all three): `synonyms:` maps a phrase
+staff use to the phrases the catalog knows (`closing balance: [closing stock, stock balance]`) and is appended to
+the question before the router and the schema index score it; `table_notes:` gives a one-line description to a
+discovered table whose JSON description is empty (the SQL prompt and the schema index both see it);
+`schema_rag_k:` sets how many tables the schema index selects for this database (a catalog with no foreign keys
+needs more candidates). `config/reference/entities.yaml` holds the group's companies (code, name, short name,
+aliases) and store aliases; a fixed tool's `type: entity` parameter turns "companyid=02" or "misami" into the
+bound parameter `'02'`, never question text (`src/ragbot/data/entities.py`).
+
 **Which database a question goes to** (`src/ragbot/data/db_router.py`). Before any SQL is written the
 catalogs are ranked, with no model call, on: hand-written keywords found in the question as whole words
 (3 points each) and curated view/column names (1); how much of a discovered table's own name the
 question mentions (up to 2); and, once most catalogs have schema vectors, the closest table vector
-(2 for the best database, 1 for the next). The SQL model is shown the best
-`data.max_databases_per_question` (default 2) and still names its choice with `DATABASE:`. A question
-in nobody's vocabulary goes to the curated catalogs (tie-break) and, if no rows come back, falls through
-to the documents as before. `python scripts/index_schema.py --try "<question>"` prints the ranking.
+(2 for the best database, 1 for the next). The question is scored with its compound tokens split on real
+column names (`companyid` → company id), the catalog's synonyms added and, for a pasted SQL statement, its
+reserved words removed ("ORDER BY" is not the word "order"). Ties go to the database whose table names the
+question uses, then to more keyword hits. The SQL model is shown the best `data.max_databases_per_question`
+(default 2) — one more when the next catalog ties the last pick on keywords (`data.max_databases_per_question_max`)
+— and still names its choice with `DATABASE:`. A question in nobody's vocabulary goes to the curated catalogs
+(tie-break) and, if no rows come back, falls through to the documents as before.
+`python scripts/index_schema.py --try "<question>"` prints the ranking.
+
+**A question that is itself a SQL statement** (it starts with SELECT or WITH) runs as written
+(`tools.run_pasted`): the same guard, scope and row cap as a model-written statement, against the catalog that
+offers the most of the tables it names; bare table names are qualified with `dbo.` and `TOP (200)` is added. It
+is never rewritten and never scored on its words. No catalog offers its tables → "System doesn't have the data."
 
 ## 3. Fixed tools — `config/fixed_tools.yaml`
 

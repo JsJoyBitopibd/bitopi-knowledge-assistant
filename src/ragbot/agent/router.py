@@ -33,8 +33,13 @@ _DOC_HINT = re.compile(r"\b(sop|policy|procedure|who approves|rule|comment sheet
 # A count/list request ("how many …", "list …", "which …") in a database's own vocabulary — the
 # catalogs' hand-written `keywords:` (GRN, voucher, attendance, recipe …) — is a data question and needs
 # no routing call (Phase J4: ~1.4 s saved on about half the questions). Document nouns still win.
-_LIST_CUE = re.compile(r"^\s*(how many|how much|count|number of|total|list|show|which|give me|"
+_LIST_CUE = re.compile(r"^\s*(?:(?:please|kindly|pls|can you|could you)\s+)*(how many|how much|count|number of|total|list|"
+                       r"show|which|give me|find|get|fetch|"
                        r"what (is|are|was|were) the (total|number|count|list|latest|last|current))\b", re.I)
+# A pasted SQL statement is a database question whatever words it holds (P1: "ORDER BY" used to send one to the
+# order agent and another database); data/tools.py runs it as written, under the guard, against the catalog that
+# offers its tables.
+_STATEMENT = re.compile(r"^\s*(select|with)\b", re.I)
 # keywords too common in document questions to decide on their own
 _GENERIC = {"file", "unit", "size", "color", "colour", "ship", "line", "lines", "plan", "card", "device", "user",
             "users", "menu", "task", "tasks"}
@@ -62,6 +67,8 @@ def route(question: str, user: str = "") -> str:
     """Cheap regex first for the obvious cases; small model only when the signals are mixed or absent."""
     if _WRITE.search(question):
         return "refuse"
+    if _STATEMENT.search(question):
+        return "data"
     d, p = bool(_DATA_HINT.search(question)), bool(_DOC_HINT.search(question))
     if d and p:
         return "both"

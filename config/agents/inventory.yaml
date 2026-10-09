@@ -1,0 +1,17 @@
+# Inventory / Store agent (Phase P1, 2026-10-09): the group's store ledger in the Inventory database.
+name: inventory
+title: Inventory / Store agent
+description: Store stock — goods receipts (GRN), issues, the stock balance of an item per company and store, the item and store masters.
+stage: 1
+catalogs: [Inventory]
+keywords: [stock, stocks, closing balance, stock balance, balance, stock in hand, stock position, store, stores,
+           store name, grn, grns, grnid, goods receipt, goods receipts, goods received, issue, issues, issued, issueid,
+           item code, itemcode, inventory, warehouse, maintenance store, central store, general store,
+           non production, nonproduction, non-production]
+charter: agents/inventory
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'Store data I can read is the ERP store ledger — receipts into and issues from each store, per item and company — and the item and store masters; the receipts on this server stop on 22 Aug 2026, so the store has today''s position.'
+status: >-
+  Stage 1: stock balance, receipts, issues, stores holding an item and the item record answer from fixed tools with
+  no model call. A store named in the question is not yet a filter (P2 adds spelling correction from the recorded
+  store names); until then every store of the item is listed.

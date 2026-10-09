@@ -25,7 +25,7 @@ from ..models import QueryResult
 from ..ttl_cache import TTLCache
 from .cache import cached_run
 from .catalog import Catalog, catalog_stamp, load_catalogs
-from .db_router import keyword_score, pick_catalogs
+from .db_router import _STATEMENT, keyword_score, pick_catalogs
 from .guard import GuardError, guard
 from .schema_usage import log_generation
 from .virtual import rewrite_virtual
@@ -315,6 +315,14 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             if spec.get("type") == "measures":
                 params[name] = _measures(question, spec)
                 continue
+            if spec.get("type") == "entity":
+                # P1: a company named by code ("companyid=02") or by name/alias ("misami") becomes a bound parameter
+                # from config/reference/entities.yaml — never the question's text. '' (the default) means "any".
+                from .entities import company_from_question
+                c = company_from_question(question) if spec.get("entity", "company") == "company" else None
+                params[name] = c.code if c else spec.get("default", "")
+                params[f"{name}_label"] = spec.get("label", "at company {code}").format(code=c.code) if c else ""
+                continue
             groups = spec.get("from_group", [])
             groups = groups if isinstance(groups, list) else [groups]
             # m.re.groups, not m.lastindex: with nested groups ("(FR-(\d{2}-\d+))") lastindex is the outer one
@@ -477,7 +485,8 @@ def _schema_selection(question: str, cats: dict[str, Catalog],
         return {}
     from .schema_index import select_tables
     k = int(s.get("data.schema_rag_k", 6))
-    return {name: select_tables(question, c, k, qvec) for name, c in cats.items() if c.offered_tables}
+    cap = int(s.get("data.schema_rag_max_tables", 14))
+    return {name: select_tables(question, c, k, qvec, max_total=cap) for name, c in cats.items() if c.offered_tables}
 
 
 def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope) -> str:
@@ -634,6 +643,64 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                        error=last_err, databases_considered=considered, agent=agent)
 
 
+def _qualify_bare_tables(sql: str, cat: Catalog) -> str:
+    """`FROM GRNChild a JOIN GRNMaster b` -> `FROM dbo.GRNChild a JOIN dbo.GRNMaster b` when the catalog offers
+    dbo.<name>: staff paste statements the way SSMS accepts them, the guard wants the schema said. Only the word
+    after FROM/JOIN is touched; nothing else in the statement changes."""
+    try:
+        tree = parse_one(sql, read=cat.dialect)
+        bare = {t.name for t in tree.find_all(exp.Table) if not t.db and cat.table(f"dbo.{t.name}")}
+    except Exception:
+        return sql
+    for name in bare:
+        sql = re.sub(rf"(\b(?:from|join)\s+)(?<![.\w]){re.escape(name)}\b", rf"\1dbo.{name}", sql, flags=re.I)
+    return sql
+
+
+def run_pasted(statement: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
+               scope: Scope) -> QueryResult:
+    """A question that IS a SQL statement (P1) runs as written — under the same guard, scope and row cap as a
+    model-written one — against the catalog that offers the most of the tables it names. On 8 Oct 2026 two pasted
+    statements were scored on their words ("ORDER BY" -> the order agent), rewritten by the model and run on
+    other databases. No catalog offers the tables -> an error result, which the orchestrator answers not-found."""
+    s = settings()
+    sql = statement.strip().rstrip(";").strip()
+    ranked = sorted(((len(_views_in(_qualify_bare_tables(sql, c), c)), n) for n, c in cats.items()), reverse=True)
+    considered = [n for k, n in ranked if k > 0]
+    if not considered:
+        return QueryResult(database="", engine="sqlserver", views=[], sql=sql, columns=[], rows=[], tool="pasted",
+                           error="no catalog offers the tables the statement names", databases_considered=[])
+    cat = cats[considered[0]]
+    sql = _qualify_bare_tables(sql, cat)
+    max_rows = int(s["data.max_rows"])
+    if cat.dialect == "tsql" and re.match(r"^\s*select\b", sql, re.I) \
+            and not re.match(r"^\s*select\s+(?:distinct\s+)?top\b", sql, re.I):
+        # the guard inserts TOP itself unless the statement has ORDER BY, where it asks the model to add it;
+        # a pasted statement has no model to ask, so the row cap is put on it here
+        sql = re.sub(r"^\s*select\s+(distinct\s+)?", lambda m: f"SELECT {m.group(1) or ''}TOP ({max_rows}) ", sql,
+                     count=1, flags=re.I)
+    try:
+        safe = _guard_for(sql, cat, max_rows, scope)
+        sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
+        views += [n for n in _views_in(safe, cat) if not cat.view(n)]
+        params = _extract_params(safe, cat)
+        cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env, display_sql=safe,
+                                       tool="pasted", user=user, refresh=refresh, scope_key=scope.key(),
+                                       database=getattr(cat, "connection_database", None))
+        log_generation(user=user, kind="pasted", considered=considered, database_used=cat.database, rows=len(rows),
+                       raw_reply=sql)
+        return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=safe, sql_executed=sql_exec,
+                           params=params, tool="pasted", columns=cols, rows=rows, key_columns=_keys_for(views, cat),
+                           as_of=as_of, databases_considered=considered)
+    except Exception as e:
+        err = f"{e.__class__.__name__}: {e}"
+        log_generation(user=user, kind="guard" if isinstance(e, GuardError) else "error", considered=considered,
+                       database_used=cat.database, guard_error=err if isinstance(e, GuardError) else "",
+                       db_error="" if isinstance(e, GuardError) else err, raw_reply=sql)
+        return QueryResult(database=cat.database, engine=cat.engine, views=[], sql=sql, columns=[], rows=[],
+                           tool="pasted", error=err[:300], databases_considered=considered)
+
+
 def _with_agent_catalog(question: str, picked: dict[str, Catalog], cats: dict[str, Catalog], agent: Any,
                         qvec: Optional[list[float]]) -> dict[str, Catalog]:
     """Make sure the SQL model sees at least one of the agent's databases: when the ranking picked none,
@@ -657,6 +724,8 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
         cats = load_catalogs()
         if not cats:
             return []
+        if _STATEMENT.search(question):
+            return [run_pasted(question, cats, user, refresh, scope=scope)]
         hit = match_fixed_tool(question, load_fixed_tools())
         if hit:
             tool, params = hit

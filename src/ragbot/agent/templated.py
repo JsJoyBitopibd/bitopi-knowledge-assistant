@@ -31,8 +31,12 @@ def fmt(v: Any) -> str:
     if isinstance(v, date):
         return v.isoformat()
     if isinstance(v, Decimal):
-        v = v.normalize() if v == v.to_integral() else v
-        return format(v, "f")
+        if v == v.to_integral():
+            return format(v.normalize(), "f")               # 13.0000000000 -> 13, 0E-10 -> 0
+        s = format(v, "f")
+        if "." in s and -v.as_tuple().exponent > 4:          # a numeric(26,10) ledger sum: 12.1250000000 -> 12.125
+            s = s.rstrip("0").rstrip(".")                    # (money written as 12.50 keeps its two decimals)
+        return s
     return str(v).replace("|", "/").replace("\n", " ").strip()
 
 
@@ -40,9 +44,11 @@ def _fill(template: str, r: QueryResult, **extra: Any) -> Optional[str]:
     vals = {k: fmt(v) for k, v in r.params.items()}
     vals.update({k: fmt(v) if not isinstance(v, str) else v for k, v in extra.items()})
     try:
-        return template.format(**vals)
+        out = template.format(**vals)
     except (KeyError, IndexError, ValueError):
         return None   # a template naming a parameter this match did not produce: use the generic text
+    # an optional part ("{company_label}" is "" when no company was named) must not leave a double space
+    return re.sub(r" {2,}", " ", out).strip()
 
 
 def follow_ups(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "", limit: int = 3) -> list[str]:

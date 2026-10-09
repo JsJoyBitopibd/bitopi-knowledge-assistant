@@ -9,3 +9,9 @@
 {"q": "Show the minutes of the last PPM meeting", "db": "Production", "accept": ["PPM.PPMMeetingMinutes"]}
 {"q": "Which PPM meetings were rescheduled?", "db": "Production", "accept": ["PPM.PPMMeetingRescheduleLog"]}
 {"q": "Merchandiser approval status for PPM", "db": "Production", "accept": ["PPM.MerchandiserApproval"]}
+{"q": "please find the closing balance of 1178108 this item code for nonproduction item and companyid=02 and store name maintenance store of misami", "db": "Inventory", "accept": ["dbo.InventoryStock", "dbo.StockChild", "dbo.GRNChild", "dbo.IssueChild", "dbo.vw_StockTrans"]}
+{"q": "grn id and issue id of item code 1178108 for company 02", "db": "Inventory", "accept": ["dbo.GRNChild", "dbo.IssueChild", "dbo.GRNMaster", "dbo.IssueMaster", "dbo.IssueGRN"]}
+{"q": "non production items of company 02", "db": "Inventory", "accept": ["dbo.NonProductionItemMapping", "dbo.vw_NonProductionGRNValue", "dbo.vw_NonProductionIssueValue"]}
+{"q": "which companies are in the inventory system", "db": "Inventory", "accept": ["dbo.vwCompany_Info"]}
+{"q": "stock ledger transactions of an item", "db": "Inventory", "accept": ["dbo.StockMaster", "dbo.StockChild", "dbo.vw_StockTrans"]}
+{"q": "issues from the maintenance store this month", "db": "Inventory", "accept": ["dbo.IssueMaster", "dbo.IssueChild", "dbo.VWIssue", "dbo.UserDefined"]}

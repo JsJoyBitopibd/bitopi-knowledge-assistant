@@ -13,6 +13,10 @@ connection_database: SystemManager
 keywords:
 - system manager
 - systemmanager
+- company
+- company id
+- company code
+- company name
 - user
 - users
 - login

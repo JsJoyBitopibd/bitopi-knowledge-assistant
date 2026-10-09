@@ -1186,3 +1186,136 @@
       ExportOrderStatus, ShipmentStatus, Factory, Merchandiser
     FROM rag.vw_ExportOrder
     WHERE ExportOrderID = @eo
+
+# ---------------------------------------------------------------- Inventory (Phase P1, 2026-10-09)
+# The store ledger: stock balance per item, company and store; receipts; issues; the item and store masters.
+# `type: entity` params (company) come from config/reference/entities.yaml — "companyid=02" or "misami" become
+# the bound parameter '02', never the question's text; '' means every company. A store named in the question is
+# NOT a filter yet (P2 adds the value index that corrects spellings): every store of the item is listed, so the one
+# asked for is among the rows with its balance.
+- name: stock_balance_by_item
+  agent: inventory
+  database: Inventory
+  example: 'please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami'
+  follow_ups:
+    - 'Goods receipts of item {item} {company_label}'
+    - 'Issues of item {item} {company_label}'
+    - 'Which stores hold item {item}?'
+  description: Stock balance (closing balance, stock in hand) of one item per company and store — receipts minus issues in the store ledger, in the item's base unit.
+  answer_list: 'Stock balance of item {item} {company_label} by store — receipts minus issues in the store ledger, in the base unit ({n} row(s))'
+  match: '(?i)(?=.*\b(?:closing\s+balance|stock\s+balance|balance|closing\s+stock|opening\s+stock|current\s+stock|stock\s+(?:position|in\s+hand|on\s+hand|level)|available\s+(?:qty|quantity|stock)|how\s+much\b.*\b(?:left|remaining|in\s+stock|do\s+we\s+have))\b)(?=.*\b(\d{6,8})\b)'
+  unless: '(?i)\b(?:ledger\s+balance|account|accounts|voucher|vouchers|payable|receivable|bank|cash|loan|lc|bblc|trial\s+balance)\b|\b[A-Z]{2,4}-\d{2}-\d{2,5}\b'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CompanyID, CompanyName, StoreName, ItemCode, ItemName, ItemCategory, StoreGroup, NonProductionItem,
+      BaseUOM, ReceivedQty, IssuedQty, ClosingBalance, LastTransaction
+    FROM rag.vw_StockBalance
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY CompanyID, StoreName
+
+- name: grn_issue_by_item
+  agent: inventory
+  database: Inventory
+  example: 'can you find grnid and issueid of itemcode=1178108 and companyid=02'
+  follow_ups:
+    - 'Stock balance of item {item} {company_label}'
+    - 'Which stores hold item {item}?'
+  description: Every receipt (GRN) and issue of one item in the store ledger, oldest first, with the document ids.
+  answer_list: 'Receipts and issues of item {item} {company_label} in the store ledger ({n} row(s))'
+  match: '(?i)(?=.*\b(?:grn|grns|grnid|grn\s*id|receipts?|received)\b)(?=.*\b(?:issue|issues|issued|issueid|issue\s*id)\b)(?=.*\b(\d{6,8})\b)'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      Movement, DocumentID, MovementDate, CompanyID, StoreName, IssuedTo, Cause, ItemCode, ItemName, UOM, Qty, BaseUOM, BaseQty
+    FROM rag.vw_StockMovement
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY MovementDate, Movement DESC
+
+- name: grn_by_item
+  agent: inventory
+  database: Inventory
+  example: 'goods receipts of item 1178108 at company 02'
+  follow_ups:
+    - 'Stock balance of item {item} {company_label}'
+    - 'Issues of item {item} {company_label}'
+  description: Goods receipts (GRN) of one item, newest first, with store, supplier code, purchase order and quantities.
+  answer_list: 'Goods receipts of item {item} {company_label} ({n} row(s), newest first)'
+  match: '(?i)(?=.*\b(?:grn|grns|grnid|grn\s*id|goods\s+receipts?|goods\s+received|receipts?|received)\b)(?=.*\b(\d{6,8})\b)'
+  unless: '(?i)\b(?:issue|issues|issued|issueid)\b'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      GRNID, GRNDate, CompanyID, StoreName, ReceiveType, SupplierCode, POID, ItemCode, ItemName, UOM, GRNQty, BaseUOM, BaseQty
+    FROM rag.vw_GoodsReceipt
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY GRNDate DESC
+
+- name: issues_by_item
+  agent: inventory
+  database: Inventory
+  example: 'issues of item 1178108 at company 02'
+  follow_ups:
+    - 'Stock balance of item {item} {company_label}'
+    - 'Goods receipts of item {item} {company_label}'
+  description: Store issues of one item, newest first, with the store issued from, where it went, the cause and quantities.
+  answer_list: 'Issues of item {item} {company_label} ({n} row(s), newest first)'
+  match: '(?i)(?=.*\b(?:issue|issues|issued|issueid|issue\s*id)\b)(?=.*\b(\d{6,8})\b)'
+  unless: '(?i)\b(?:grn|grns|grnid|receipts?|received)\b'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      IssueID, IssueDate, CompanyID, StoreName, IssuedTo, IssueCause, RequisitionSlipNo, ItemCode, ItemName, UOM, IssueQty, BaseUOM, BaseQty
+    FROM rag.vw_StockIssue
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY IssueDate DESC
+
+- name: stores_holding_item
+  agent: inventory
+  database: Inventory
+  example: 'Which stores hold item 1178108?'
+  follow_ups:
+    - 'Stock balance of item {item}'
+    - 'Goods receipts of item {item}'
+  description: The stores (per company) where one item has a non-zero balance.
+  answer_list: 'Stores holding item {item} — balance in the base unit ({n} row(s))'
+  match: '(?i)\b(?:which|what)\s+stores?\b.*\b(\d{6,8})\b|\bstores?\s+(?:hold|holding|have|having|with|stocking|keep|keeping)\b.*\b(\d{6,8})\b'
+  params:
+    item: { from_group: [1, 2] }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CompanyID, CompanyName, StoreName, ItemCode, ItemName, BaseUOM, ClosingBalance, LastTransaction
+    FROM rag.vw_StockBalance
+    WHERE ItemCode = @item AND ClosingBalance <> 0
+    ORDER BY CompanyID, StoreName
+
+- name: item_by_code
+  agent: inventory
+  database: Inventory
+  example: 'What is item 1178108?'
+  follow_ups:
+    - 'Stock balance of item {item}'
+    - 'Which stores hold item {item}?'
+  description: One item's master record — name, unit, category, group, store group, production / non-production flag.
+  answer_list: 'Item {item} in the item master'
+  match: '(?i)^\s*(?:what\s+is|which\s+item\s+is|describe|details?\s+of|info(?:rmation)?\s+(?:on|about))\s+(?:the\s+)?item\s*(?:code\s*)?(\d{6,8})\b\??\s*$|^\s*item\s*(?:code)?\s*[:=]?\s*(\d{6,8})\s*\??\s*$'
+  params:
+    item: { from_group: [1, 2] }
+  sql: |
+    SELECT TOP (5)
+      ItemCode, ItemName, UOM, ItemCategory, ItemGroup, ItemSubGroup, StoreGroup, ProductionItem, NonProductionItem, FixedAsset, Inactive, ReOrderLevel
+    FROM rag.vw_Item
+    WHERE ItemCode = @item

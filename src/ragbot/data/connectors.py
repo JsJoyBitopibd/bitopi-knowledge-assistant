@@ -136,6 +136,21 @@ def _is_link_error(e: Exception) -> bool:
     return state.startswith("08")
 
 
+def _bind_varchar(cur: Any, args: list[Any]) -> None:
+    """Bind ASCII string parameters as VARCHAR. pyodbc sends a Python str as NVARCHAR; every code column in these
+    databases is VARCHAR, and `varchar_column = nvarchar_parameter` converts the COLUMN side, which defeats index
+    seeks and predicate push-down: the stock-balance view answered `ItemCode = '1178108'` in 1.2 s and
+    `ItemCode = @item` timed out at 45 s (checked live 2026-10-09). A non-ASCII value (Bangla) keeps the default."""
+    if not args or not any(isinstance(a, str) for a in args):
+        return
+    try:
+        import pyodbc
+        sizes = [(pyodbc.SQL_VARCHAR, max(len(a), 1), 0) if isinstance(a, str) and a.isascii() else None for a in args]
+        cur.setinputsizes(sizes)
+    except Exception:
+        pass           # an old driver or a fake cursor: the default binding still works, only slower
+
+
 def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVER_CONN", display_sql: str = "",
                   tool: str = "generated", user: str = "", timeout: Optional[int] = None,
                   scope: str = "", database: Optional[str] = None) -> tuple[list[str], list[list[Any]]]:
@@ -153,6 +168,7 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
             cn, reused = pool.acquire()
             cn.timeout = timeout
             cur = cn.cursor()
+            _bind_varchar(cur, args)
             cur.execute(q, args)
             cols = [d[0] for d in cur.description] if cur.description else []
             # fetchmany: never pull more than max_rows across the network, whatever the statement returns

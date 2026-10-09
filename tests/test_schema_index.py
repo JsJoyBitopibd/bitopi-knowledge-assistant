@@ -38,6 +38,38 @@ def _hash_vec(text, dim=256):
     return v / (np.linalg.norm(v) or 1)
 
 
+def test_column_words_rank_the_table_whose_columns_the_question_names():
+    """P1: 'closing balance of item code for company id and store name' names four columns of one table."""
+    stock = _t("dbo.InventoryStock", ["CompanyID", "LocationName", "ItemCode", "ItemName", "ClosingStock"])
+    other = _t("dbo.ItemMaster", ["ItemCode", "ItemName", "UOM"])
+    cat = Catalog("Demo", "tsql", "X", [], [], tables=[stock, other, _t("dbo.Unrelated", ["X", "Y"])])
+    idx = si.build(cat, embed=False)
+    assert idx.col_words[0] >= {"company", "id", "location", "name", "item", "code", "closing", "stock"}
+    got = si._column_scores("closing stock of an item code for a company id and location name", idx.names, idx.col_words)
+    assert got[0] == "dbo.InventoryStock" and "dbo.Unrelated" not in got     # one shared word is no evidence
+    assert si.select_tables("closing stock of an item code for a company id and location name", cat, 1)[0] == "dbo.InventoryStock"
+
+
+def test_table_notes_reach_the_index_and_its_cache_key(tmp_path, monkeypatch):
+    cat = Catalog("Demo", "tsql", "X", [], [], tables=[_t("dbo.T1", ["A"]), _t("dbo.T2", ["B"]), _t("dbo.T3", ["C"])])
+    first = si.get_index(cat)
+    cat.table_notes = {"dbo.t2": "the stock ledger"}
+    cat.tables[1].description = "the stock ledger"             # what _load_catalogs does with a note
+    monkeypatch.setattr(si, "_RECHECK_SECONDS", 0.0)
+    second = si.get_index(cat)
+    assert second is not first                                   # the note changed the key: rebuilt
+    assert second.search("stock ledger", 1) == ["dbo.T2"]
+
+
+def test_a_catalog_may_set_its_own_k_and_the_total_is_capped():
+    tables = [_t(f"dbo.Stock{i}", ["ItemCode", "Qty"]) for i in range(12)]
+    cat = Catalog("Demo", "tsql", "X", [], [], tables=tables)
+    assert len(si.select_tables("stock item code qty", cat, 3)) == 3
+    cat.schema_rag_k = 10
+    assert len(si.select_tables("stock item code qty", cat, 3)) == 10
+    assert len(si.select_tables("stock item code qty", cat, 3, max_total=4)) == 4
+
+
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     si._CACHE.clear()

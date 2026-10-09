@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import date
@@ -115,10 +116,28 @@ class Catalog:
     # question names that factory and keeps it out when the question names another one (data/db_router.py).
     factory: str | None = None
     label: str = ""                  # the name users know the system by ("VistaQ"), for plain-language replies
+    # Phase P1. `synonyms:` {phrase: [phrase, ...]}: words staff use that the catalog's keywords, table and column
+    # names do not ("closing balance" -> "closing stock"); appended to the question before the router and the
+    # schema index score it. `table_notes:` {schema.table: text}: a one-line description for a discovered table
+    # whose JSON description is empty (most of them) — merged into Table.description at load, so the SQL prompt
+    # and the schema index both see it. `schema_rag_k:` tables selected per question for this database (default
+    # data.schema_rag_k): a catalog with no curated views and no foreign keys needs more candidates.
+    synonyms: dict[str, list[str]] = field(default_factory=dict)
+    table_notes: dict[str, str] = field(default_factory=dict)
+    schema_rag_k: int | None = None
 
     @property
     def display_name(self) -> str:
         return self.label or self.database
+
+    def expand(self, question: str) -> str:
+        """The question plus the synonyms of every phrase of `synonyms:` it contains as whole words."""
+        if not self.synonyms:
+            return question
+        padded = " " + re.sub(r"[^a-z0-9&]+", " ", question.lower()).strip() + " "
+        extra = [s for phrase, syns in self.synonyms.items()
+                 if " " + re.sub(r"[^a-z0-9&]+", " ", phrase.lower()).strip() + " " in padded for s in syns]
+        return question + (" " + " ".join(dict.fromkeys(extra)) if extra else "")
 
     def hints_for(self, table: str) -> list[Hint]:
         low = table.lower()
@@ -266,11 +285,23 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
             if len(str(h.get("target", "")).split(".")) != 3 or not h.get("column") or not h.get("tables"):
                 raise RuntimeError(f"{f.name}: a hint needs column, target (schema.table.column) and tables: {h}")
             hints.append(Hint(h["column"], h["target"], list(h["tables"]), h.get("note", "")))
+        synonyms = d.get("synonyms") or {}
+        if not isinstance(synonyms, dict) or any(not isinstance(v, list) or not all(isinstance(s, str) for s in v)
+                                                 for v in synonyms.values()):
+            raise RuntimeError(f"{f.name}: synonyms must map a phrase to a list of phrases")
+        notes = {str(k).lower(): str(v).strip() for k, v in (d.get("table_notes") or {}).items()}
+        tables = _load_discovered(folder, d["database"])
+        for t in tables:
+            if not t.description and t.name.lower() in notes:
+                t.description = notes[t.name.lower()]
         cats[d["database"]] = Catalog(d["database"], d["dialect"], d["connection_env"], d.get("rules", []),
                                       views, d.get("examples", []), d.get("description", ""), d.get("keywords", []),
-                                      tables=_load_discovered(folder, d["database"]),
+                                      tables=tables,
                                       exclude_tables=d.get("exclude_tables", []), hints=hints,
                                       connection_database=d.get("connection_database") or None,
                                       factory=str(d["factory"]).strip().upper() if d.get("factory") else None,
-                                      label=str(d.get("label") or "").strip())
+                                      label=str(d.get("label") or "").strip(),
+                                      synonyms={str(k): [str(s) for s in v] for k, v in synonyms.items()},
+                                      table_notes=notes,
+                                      schema_rag_k=int(d["schema_rag_k"]) if d.get("schema_rag_k") else None)
     return cats

@@ -78,7 +78,12 @@ def _quote(c: Chunk, limit: int = 300) -> str:
 
 
 def _norm_num(s: str) -> str:
-    return s.replace(",", "").rstrip(".")
+    """'1,200' -> '1200'; '12.1250000000' and '12.125' -> '12.125'; '13.0' -> '13' (the same number however a
+    row or the templated text writes it — the answer and the pool are normalised alike)."""
+    s = s.replace(",", "")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
 
 
 def verify(answer: str, chunks: list[Chunk], results: list[QueryResult], not_found_text: str) -> tuple[bool, list[str]]:

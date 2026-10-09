@@ -170,8 +170,11 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             # model call cannot answer it, and would only hide the reason behind a generic not-found.
             out.text, out.not_found = nf + " " + prompt("scope_denied").strip(), True
             yield Final(_log(out, user, scope)); return
-        if r == "data" and not _has_rows(results) and not chunks:
-            # data route found nothing usable: fall back to documents once (a PDF may hold it)
+        if r == "data" and not _has_rows(results) and not chunks and not _tool_answered(results):
+            # data route found nothing usable: fall back to documents once (a PDF may hold it). Not when a fixed
+            # tool or a pasted statement ran: the question is a data question by construction (it matched a tool's
+            # pattern), and the PDFs hold no stock balances — the search cost 54 s on this VM for "item 9999999"
+            # and ended in a model-written not-found instead of the plain "I checked … and found no records" (P1).
             yield Stage("searching", "Searching documents…")
             chunks = retrieve(q, where=where, scope=scope)[:top]
 
@@ -225,6 +228,11 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _tool_answered(results: list[QueryResult]) -> bool:
+    """Did a fixed tool or a pasted statement run (whatever it returned)? Such a question needs no documents fallback."""
+    return any(x.tool != "generated" for x in results)
 
 
 def _has_rows(results: list[QueryResult]) -> bool:

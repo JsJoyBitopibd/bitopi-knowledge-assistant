@@ -115,21 +115,43 @@ def json_sha(cat: Catalog) -> str:
     return sha
 
 
+def _column_scores(question: str, names: list[str], col_words: list[frozenset[str]]) -> list[str]:
+    """Tables ranked by how many distinct question words are words of their columns (P1): "closing balance of
+    item code for company id and store name" names CompanyID, LocationName, ItemCode and ClosingStock of
+    dbo.InventoryStock. Three hits at least — one or two shared words ('date', 'id', 'style') say nothing and at two
+    the list crowded out the right table for 'fabric booking summary for a style' (2026-10-09) — then the table
+    with fewer columns first, so a wide table does not win on bulk."""
+    qw = {w for w in words(_with_singulars(question)) if w not in _STOP and len(w) >= 2}
+    scored = []
+    for n, cw in zip(names, col_words):
+        hit = len(qw & cw)
+        if hit >= 3:
+            scored.append((hit, -len(cw), n))
+    scored.sort(reverse=True)
+    return [n for *_, n in scored]
+
+
 @dataclass
 class SchemaIndex:
     names: list[str]
     keyword: KeywordIndex
     vectors: Optional[np.ndarray] = None     # rows aligned with names, unit length
     name_words: list[list[str]] = field(default_factory=list)   # words of each name, for _name_scores
+    col_words: list[frozenset[str]] = field(default_factory=list)   # words of each table's column names (P1)
 
     def __post_init__(self) -> None:
         if not self.name_words:
             self.name_words = [_name_words(n) for n in self.names]
+        if not self.col_words:
+            self.col_words = [frozenset() for _ in self.names]
 
     def search(self, question: str, k: int, qvec: Optional[list[float]] = None) -> list[str]:
         pool = max(k * 4, 30)
         sparse = [n for n, _ in self.keyword.search(_with_singulars(question), pool)]
         lists = [sparse, _name_matches(question, self.names, pool, self.name_words)]
+        cols = _column_scores(question, self.names, self.col_words)[:pool]
+        if cols:
+            lists.append(cols)
         if self.vectors is not None and qvec is not None and len(self.names):
             scores = self.vectors @ np.asarray(qvec, dtype=np.float32)
             top = np.argsort(-scores)[:pool]
@@ -154,7 +176,8 @@ def build(cat: Catalog, embed: bool = True) -> SchemaIndex:
     tables = cat.offered_tables
     names = [t.name for t in tables]
     docs = [table_document(t) for t in tables]
-    idx = SchemaIndex(names, KeywordIndex(names, [_with_singulars(d) for d in docs]))
+    col_words = [frozenset(w for c in t.columns if not c.get("sensitive") for w in words(c["name"])) for t in tables]
+    idx = SchemaIndex(names, KeywordIndex(names, [_with_singulars(d) for d in docs]), col_words=col_words)
     if embed and docs:
         from ..embed import EMBED_MODEL, get_embedder
         vecs = np.asarray(get_embedder().embed(docs), dtype=np.float32)
@@ -183,7 +206,9 @@ def get_index(cat: Catalog) -> SchemaIndex:
         if hit and now - _CHECKED.get(cat.database, 0.0) < _RECHECK_SECONDS:
             return hit[1]
     p = vectors_path(cat.database)
-    key = (json_sha(cat), p.stat().st_mtime_ns if p.exists() else 0)
+    # the catalog's table_notes reach the BM25 documents through Table.description: an edited note must rebuild
+    # the in-memory index too, not only the prompt (the vectors are keyed on the JSON sha and stay valid)
+    key = (json_sha(cat), p.stat().st_mtime_ns if p.exists() else 0, hash(tuple(sorted(cat.table_notes.items()))))
     with _LOCK:
         _CHECKED[cat.database] = now
         hit = _CACHE.get(cat.database)
@@ -223,13 +248,18 @@ def fk_neighbours(names: list[str], cat: Catalog) -> list[str]:
 
 
 def select_tables(question: str, cat: Catalog, k: int = 8, qvec: Optional[list[float]] = None,
-                  max_extra: int = 6) -> list[str]:
-    """The discovered tables to show the SQL model for this question: top-k by hybrid search, plus up
-    to `max_extra` FK neighbours. [] when the catalog has no discovered tier."""
+                  max_extra: int = 6, max_total: Optional[int] = None) -> list[str]:
+    """The discovered tables to show the SQL model for this question: top-k by hybrid search (the catalog's own
+    `schema_rag_k` when it sets one), plus up to `max_extra` FK neighbours, at most `max_total` in all. The
+    question is searched with its compound tokens split and the catalog's synonyms added (db_router.prepared).
+    [] when the catalog has no discovered tier."""
     if not cat.offered_tables:
         return []
-    hits = get_index(cat).search(question, k, qvec)
-    return hits + fk_neighbours(hits, cat)[:max_extra]
+    from .db_router import prepared
+    k = cat.schema_rag_k or k
+    hits = get_index(cat).search(prepared(question, cat), k, qvec)
+    out = hits + fk_neighbours(hits, cat)[:max_extra]
+    return out[:max_total] if max_total else out
 
 
 def join_hints(names: list[str], cat: Catalog) -> list[str]:

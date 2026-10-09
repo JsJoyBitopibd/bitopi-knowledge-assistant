@@ -41,6 +41,14 @@ def test_document_nouns_still_win(cats, monkeypatch):
     assert router.route("Which SOP covers GRN approval?") == "documents"     # 'sop' is a document noun
 
 
+def test_find_get_fetch_are_list_cues_even_after_please(cats, monkeypatch):
+    """P1: 'please find the closing balance …' used to pay a routing call (1.09 s on 8 Oct 2026)."""
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    assert router.route("please find the GRN of item 1178108") == "data"
+    assert router.route("Can you get the stock of fabric roll 12?") == "data"
+    assert router.route("fetch the vouchers of September") == "data"
+
+
 def test_generic_words_and_statements_still_ask_the_model(cats, monkeypatch):
     small = SaysData()
     monkeypatch.setattr(router, "get_small_chat", lambda: small)
