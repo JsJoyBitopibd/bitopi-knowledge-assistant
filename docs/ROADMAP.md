@@ -673,3 +673,60 @@ stages and gates are tracked in `docs/PROGRESS.md` "Phase P".
 - Gate per stage: `pytest`; `scope_check.py` 0 leaks; data/both eval no drop > 5 points; the two 8 Oct
   questions through `scripts/ask.py`; `latency.py --group sql` p50 within 0.5 s of 5.98 s; P3 ends with the
   full golden set and `v1.13.0`.
+
+# Phase Q — questions understood the way staff ask them (after Phase P)
+
+Asked for on 2026-10-11, after three questions in the app. "What style is running on TAL line 2102?" was
+answered "System doesn't have the data." twice (13.2 s, then 26.0 s). "TAL line wise production summary of
+today with style showing" was answered the same way after 45.3 s, while the identical question for *all*
+factories answered in 8.3 s. The owner asked for the chat to be centred on every screen, for the assistant to
+understand that TAL is a factory and 2102 a line, for it to join line → style → buyer by itself, and for all
+of this across every database, accurately and in time.
+
+The logs gave four causes, none of them about missing data:
+
+1. **Nothing read the question's nouns.** "TAL" and "line 2102" reached the SQL model as plain words. It wrote
+   the right query on the right view with `Line = 2102` — and `Line` holds `dbo.Workspace.WorkspaceName`, so
+   SQL Server cast every workspace name and failed on 'Remi Holdings Ltd.' (22018/245). Its one retry moved to
+   another database and hit the same thing on 'Pilot 1'.
+2. **A factory outside the user's scope was silent.** The first ask ran with the Factory pill on BGL, so every
+   view was filtered to BGL and a TAL question could only return nothing. Fixed tools say so; generated SQL did
+   not.
+3. **A failed query fell through to the documents.** `orchestrator.py` dropped errored results before asking
+   "did a tool run?", so a 30 s timeout or a type error was followed by a 10 s document rerank and an
+   answer-model call that could only repeat the not-found. `data/errors.py:friendly_db` was never called.
+4. **The factory-filtered dashboard was pathologically slow**, and no tool could answer a question about one
+   named line at all — the shared `unless` handed every such question to the model by design.
+
+What was built, in the order it was built (`docs/PROGRESS.md` "Phase Q" carries the evidence per task):
+
+- **U3 centred chat.** The thread and the Sources rail are one block capped at 1,120 px and centred, with the
+  designer's own proportions; below ~1,100 px the rail wraps under the thread and spans its width; the phone
+  keeps its 16 px gutters and the 300 px bubble. Stylesheet only.
+- **Q5 a failed query says why.** The error list and "did a tool run" are read before errored results are
+  dropped. A data question whose query failed, and which named a record or matched a tool, is answered with the
+  reason and Refresh data — no document search, no model call. `error_kind` stays empty so the action row and
+  the chips survive.
+- **Q4 fast factory filter.** The two dashboard tools drop the `(@factory = '' OR …)` catch-all that SQL Server
+  planned so badly; they read every factory and keep the asked one in Python. Only parameters a statement uses
+  are bound, so one cached result serves every factory of a scope (10-minute TTL, the read time always shown).
+- **Q3 a named line is answered from the plan.** Four tools take the line, factory or style as a parameter:
+  the style running on a line, that line's quality, the lines a style runs on, and every line's planned style.
+  `rag.vw_PlanDay` gains StyleName, Color, FileNo and OrderQty; the per-line dashboard names each line's buyer
+  and style; the catalog gains the plan vocabulary, table notes and the rule that Line is text. The `VISTAQ`
+  prototype catalog is out of routing.
+- **Q1/Q6 the records a question names.** One parser (`data/entities.py`) reads factory, line, unit, style,
+  EO/PO/file and company, with no model call: it feeds the tools' parameters, a "Records the question names"
+  block in the SQL prompt, the scope refusal for generated SQL, the router (a named line or unit needs no
+  routing call) and the agent tie-break.
+- **Q2 typed literals.** Curated views declare what their columns hold and raw tables take it from the
+  database; a bare number compared to a text column is quoted before the guard runs again, and once more after
+  a conversion error — with no model call. The retry message carries the column kinds. The SQL retry and the
+  empty-result repair share one budget of two extra calls.
+- **Q7 joins that exist.** A bare `Id` primary key no longer proposes `A.Id = B.Id` for every pair; a generic
+  key proposes the column naming the table it points at, a distinctive key keeps the same-name rule, and a
+  declared foreign key is not repeated. The table covering a question's records is selected.
+
+Deferred on purpose, with the reason recorded in PROGRESS: the static sqlglot type resolver and a `--live`
+types file for every catalog's views (the declared kinds cover the hot path, the aggressive pass covers the
+rest), and 2-hop join paths with `relations:` between curated views (the acceptance questions reach a tool).

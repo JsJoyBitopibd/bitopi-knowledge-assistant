@@ -446,7 +446,10 @@ def source_card_html(ref: Any) -> str:
         quote = f'<blockquote class="ka-quote">“{esc(ref.quote)}”</blockquote>' if ref.quote else ""
         return (f'<div class="ka-src-head"><span class="ka-src-n">{n}</span><span class="ka-src-kind">Document</span></div>'
                 f'<span class="ka-src-name">{esc(ref.source)}</span>{_dl(rows)}{quote}')
-    params = " · ".join(f"{k} {v}" for k, v in (ref.params or {}).items())
+    # `*_label` parameters exist only to fill an answer's wording ("TAL ", "at company 02"); the card shows
+    # what the query filtered on, so they would read as duplicates of the value beside them.
+    params = " · ".join(f"{k} {v}" for k, v in (ref.params or {}).items()
+                        if not str(k).endswith("_label") and v not in (None, ""))
     rows = [("As of", f"{ref.as_of:%d %b %Y %H:%M}" if ref.as_of else "", False),
             ("Rows", f"{ref.row_count:,}" if ref.row_count is not None else "", False),
             ("Filter", params, False),

@@ -233,3 +233,15 @@ def test_full_rows_replaces_a_preview_only():
     assert view.full_rows(cols, result, [(cols, result)]) is None                     # already complete
     note = "Line.\n\nOnly the first rows are shown here; the query returned 200 in total."
     assert view.PREVIEW_NOTE.sub("", note) == "Line."
+
+
+def test_the_source_card_shows_the_filter_not_the_wording_helpers():
+    """Phase Q: a tool's `*_label` parameters fill an answer's sentence ("TAL "), and repeating them on the
+    card read as "factory TAL · factory_label TAL"."""
+    from ragbot.models import Reference
+    ref = Reference(marker="D1", kind="data", database="VistaQ_Default_RHL", views=["rag.vw_PlanDay"],
+                    params={"window": "today", "factory": "TAL", "factory_label": "TAL", "line": "2102",
+                            "line_label": "2102", "buyer": ""})
+    html = view.source_card_html(ref)
+    assert "factory TAL" in html and "factory_label" not in html and "line_label" not in html
+    assert "buyer" not in html          # an empty parameter is not a filter
