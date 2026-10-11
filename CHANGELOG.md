@@ -16,6 +16,12 @@ each phase is in `docs/ROADMAP.md`.
   what happened ("The query took longer than the time allowed. The records may still be in VistaQ; press Refresh
   data to try again."), keeps the Refresh button and the suggested questions, and costs no model call. A question
   that names no database record (a policy count, for instance) still falls back to the documents as before.
+- **The production dashboard answers for one factory again** (Phase Q, Q4). Asking it for TAL ran the same five
+  joined views with `(@factory = '' OR Factory = @factory)` in each subquery, which SQL Server planned far worse
+  than the plain all-factory query: 8.1 seconds for every factory, a 30-second timeout for TAL. The statement now
+  reads every factory once and the asked one is kept in Python, so the two questions share one cached result:
+  measured after the change, all factories 5.2 s and TAL 0.04 s. The dashboard's figures are unchanged, and the
+  card still shows the time the rows were read.
 - A DISTINCT lookup run by the empty-result repair could be reported as the user's own query ("I checked
   PlanningTNA and found no matching records"); it is evidence about the data, not the question asked.
 

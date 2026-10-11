@@ -396,6 +396,12 @@
     window: { from_group: 1, type: date_window, default: 'today' }
     factory: { from_group: 2, upper: true, default: '' }
   heavy: true
+  # The statement reads every factory; the asked one is kept in Python (data/tools.py _apply_filter). Measured
+  # 11 Oct 2026: all factories 8.1 s, the same statement with (@factory = '' OR Factory = @factory) in its five
+  # subqueries timed out at 30 s. One cached result now serves every factory of a scope.
+  filter:
+    rows: { column: Factory, param: factory }
+  cache_ttl_seconds: 600
   sql: |
     SELECT TOP (200)
       CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
@@ -419,33 +425,33 @@
         SUM(pd.Manpower * pd.PlanHours) AS PlanManHours
       FROM rag.vw_PlanDay pd
       LEFT JOIN rag.vw_LineDayManHours lm ON lm.Factory = pd.Factory AND lm.Line = pd.Line AND lm.WorkDate = pd.PlanDate
-      WHERE pd.Factory IS NOT NULL AND (@factory = '' OR pd.Factory = @factory) AND pd.PlanDate >= @from AND pd.PlanDate < @to
+      WHERE pd.Factory IS NOT NULL AND pd.PlanDate >= @from AND pd.PlanDate < @to
       GROUP BY pd.Factory, pd.Line
       HAVING SUM(pd.PlanHours) > 0
     ) AS p
     LEFT JOIN (
       SELECT Factory, Line, SUM(OutputPcs) AS OutputPcs, SUM(SAH) AS SAH
       FROM rag.vw_PlanOutputDay
-      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND OutputDate >= @from AND OutputDate < @to
+      WHERE Factory IS NOT NULL AND OutputDate >= @from AND OutputDate < @to
       GROUP BY Factory, Line
     ) AS o ON o.Factory = p.Factory AND o.Line = p.Line
     LEFT JOIN (
       SELECT Factory, Line, SUM(ManHours) AS ManHours
       FROM rag.vw_LineDayManHours
-      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND WorkDate >= @from AND WorkDate < @to
+      WHERE Factory IS NOT NULL AND WorkDate >= @from AND WorkDate < @to
       GROUP BY Factory, Line
     ) AS mh ON mh.Factory = p.Factory AND mh.Line = p.Line
     LEFT JOIN (
       SELECT Factory, Line, SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
         SUM(Rectified) AS Rectified, SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
       FROM rag.vw_LineDayQuality
-      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+      WHERE Factory IS NOT NULL AND InspectionDate >= @from AND InspectionDate < @to
       GROUP BY Factory, Line
     ) AS q ON q.Factory = p.Factory AND q.Line = p.Line
     LEFT JOIN (
       SELECT Factory, Line, SUM(CutQty) - SUM(OutputQty) AS WIP
       FROM rag.vw_CombinationFlowDay
-      WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND FlowDate < @to
+      WHERE Factory IS NOT NULL AND FlowDate < @to
         AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
       GROUP BY Factory, Line
     ) AS w ON w.Factory = p.Factory AND w.Line = p.Line
@@ -467,6 +473,11 @@
     window: { from_group: 1, type: date_window, default: 'today' }
     factory: { from_group: 2, upper: true, default: '' }
   heavy: true
+  # As production_by_line_window: read every factory, then keep the asked factory's column (the metric list is
+  # one row per figure with a column per factory, so '' keeps all four).
+  filter:
+    columns: { keep: ['Date', 'Metric', '{factory}'] }
+  cache_ttl_seconds: 600
   sql: |
     SELECT TOP (30)
       CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
@@ -489,20 +500,20 @@
           SUM(pd.Manpower * pd.PlanHours) AS PlanManHours
         FROM rag.vw_PlanDay pd
         LEFT JOIN rag.vw_LineDayManHours lm ON lm.Factory = pd.Factory AND lm.Line = pd.Line AND lm.WorkDate = pd.PlanDate
-        WHERE pd.Factory IS NOT NULL AND (@factory = '' OR pd.Factory = @factory) AND pd.PlanDate >= @from AND pd.PlanDate < @to
+        WHERE pd.Factory IS NOT NULL AND pd.PlanDate >= @from AND pd.PlanDate < @to
         GROUP BY ROLLUP(pd.Factory)
       ) AS p
       LEFT JOIN (
         SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory,
           SUM(OutputPcs) AS OutputPcs, SUM(SAH) AS SAH
         FROM rag.vw_PlanOutputDay
-        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND OutputDate >= @from AND OutputDate < @to
+        WHERE Factory IS NOT NULL AND OutputDate >= @from AND OutputDate < @to
         GROUP BY ROLLUP(Factory)
       ) AS o ON o.Factory = p.Factory
       LEFT JOIN (
         SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory, SUM(ManHours) AS ManHours
         FROM rag.vw_LineDayManHours
-        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND WorkDate >= @from AND WorkDate < @to
+        WHERE Factory IS NOT NULL AND WorkDate >= @from AND WorkDate < @to
         GROUP BY ROLLUP(Factory)
       ) AS mh ON mh.Factory = p.Factory
       LEFT JOIN (
@@ -510,13 +521,13 @@
           SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs, SUM(Rectified) AS Rectified,
           SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
         FROM rag.vw_LineDayQuality
-        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+        WHERE Factory IS NOT NULL AND InspectionDate >= @from AND InspectionDate < @to
         GROUP BY ROLLUP(Factory)
       ) AS q ON q.Factory = p.Factory
       LEFT JOIN (
         SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory, SUM(CutQty) - SUM(OutputQty) AS WIP
         FROM rag.vw_CombinationFlowDay
-        WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory) AND FlowDate < @to
+        WHERE Factory IS NOT NULL AND FlowDate < @to
           AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
         GROUP BY ROLLUP(Factory)
       ) AS w ON w.Factory = p.Factory

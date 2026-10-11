@@ -400,6 +400,50 @@ def _from_aggregate(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, 
                        key_columns=_keys_for(views, cat), as_of=as_of)
 
 
+def _params_in(sql: str, params: dict[str, Any], dialect: str) -> dict[str, Any]:
+    """Only the parameters the statement actually references. A parameter the SQL no longer uses must not
+    reach the result cache's key, or the same rows would be read once per factory (Phase Q, Q4)."""
+    marker = "@" if dialect == "tsql" else ":"
+    return {k: v for k, v in params.items() if re.search(rf"{re.escape(marker)}{re.escape(str(k))}\b", sql)}
+
+
+def _apply_filter(tool: dict[str, Any], params: dict[str, Any], columns: list[str],
+                  rows: list[list[Any]]) -> tuple[list[str], list[list[Any]]]:
+    """A tool's `filter:` narrows a result the database returned for every factory (Phase Q, Q4).
+
+    `(@factory = '' OR Factory = @factory)` inside five subqueries of the production dashboard gave SQL Server
+    a far worse plan than the plain all-factory query: measured 11 Oct 2026, the all-factory run took 8.1 s and
+    the same statement with `@factory = 'TAL'` hit the 30 s timeout. Reading every factory once and keeping the
+    asked one here is faster, and one cached result then serves every factory of that scope.
+
+    `rows:` keeps the rows whose column equals the parameter; `columns:` keeps the listed columns (a `{param}`
+    placeholder names one). An empty parameter means "every factory": nothing is filtered.
+    """
+    spec = tool.get("filter") or {}
+    if not spec:
+        return columns, rows
+    cols, out = list(columns), [list(r) for r in rows]
+    rowspec = spec.get("rows") or {}
+    if rowspec:
+        want = str(params.get(rowspec.get("param", "factory"), "") or "").strip()
+        if want:
+            column = rowspec["column"]
+            if column not in cols:
+                # never silently hand back every factory's rows for a question about one
+                raise KeyError(f"{tool['name']}: filter column {column!r} is not in the result")
+            i = cols.index(column)
+            out = [r for r in out if str(r[i]).strip().upper() == want.upper()]
+    colspec = spec.get("columns") or {}
+    if colspec:
+        keep = [str(c).format(**{k: str(v or "") for k, v in params.items()}) for c in colspec.get("keep", [])]
+        if all(keep):                      # a placeholder that resolved to "" means "show them all"
+            picked = [c for c in keep if c in cols]
+            if picked:
+                idx = [cols.index(c) for c in picked]
+                cols, out = picked, [[r[i] for i in idx] for r in out]
+    return cols, out
+
+
 def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog], user: str = "",
                    refresh: bool = False, *, scope: Scope) -> QueryResult:
     cat = cats[tool["database"]]
@@ -419,9 +463,14 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
         # `heavy: true` in fixed_tools.yaml: a known-slow query (e.g. over the 4M-row, unindexed
         # dbo.ExportOrderBack) gets the longer timeout tier instead of failing at the default.
         timeout = int(settings().get("data.timeout_seconds_heavy", 30)) if tool.get("heavy") else None
-        cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env, display_sql=sql,
+        # Only the parameters the statement uses are bound and keyed; the result keeps the full set, so the
+        # templated lead, the [D#] card and the citation check still see the factory that was asked for.
+        bound = _params_in(sql, params, cat.dialect)
+        cols, rows, as_of = cached_run(cat.engine, sql_exec, bound, conn_env=cat.connection_env, display_sql=sql,
                                        tool=tool["name"], user=user, refresh=refresh, timeout=timeout,
-                                       scope_key=scope.key(), database=getattr(cat, "connection_database", None))
+                                       scope_key=scope.key(), database=getattr(cat, "connection_database", None),
+                                       ttl=tool.get("cache_ttl_seconds"))
+        cols, rows = _apply_filter(tool, params, cols, rows)
         return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=sql, sql_executed=sql_exec,
                            params=params, tool=tool["name"], columns=cols, rows=rows, key_columns=_keys_for(views, cat),
                            as_of=as_of)

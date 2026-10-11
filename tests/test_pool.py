@@ -118,8 +118,8 @@ def test_heavy_fixed_tool_gets_longer_timeout(monkeypatch):
 
     monkeypatch.setattr(tools, "cached_run", fake_cached_run)
     monkeypatch.setattr(tools, "rewrite_virtual", lambda sql, cat, scope=None: (sql, []))
-    cat = types.SimpleNamespace(engine="sqlserver", connection_env="SQLSERVER_CONN_TEST", database="DB",
-                                view=lambda n: None)
+    cat = types.SimpleNamespace(engine="sqlserver", dialect="tsql", connection_env="SQLSERVER_CONN_TEST",
+                                database="DB", view=lambda n: None)
     base = {"database": "DB", "sql": "SELECT 1", "name": "t"}
     tools.run_fixed_tool({**base, "heavy": True}, {}, {"DB": cat}, scope=Scope.unrestricted())
     assert seen["timeout"] == 30

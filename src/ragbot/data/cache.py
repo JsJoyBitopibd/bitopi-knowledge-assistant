@@ -28,9 +28,14 @@ _CACHE = TTLCache(maxsize=256)
 def cached_run(engine: str, sql_exec: str, params: dict[str, Any], *, conn_env: str, display_sql: str,
                tool: str = "generated", user: str = "", refresh: bool = False,
                timeout: Optional[int] = None, scope_key: str = "",
-               database: Optional[str] = None) -> tuple[list[str], list[list[Any]], datetime]:
-    """connectors.run() behind the cache. Returns (columns, rows, as_of)."""
-    ttl = int(settings().get("data.result_cache_ttl_seconds", 180))
+               database: Optional[str] = None, ttl: Optional[int] = None) -> tuple[list[str], list[list[Any]], datetime]:
+    """connectors.run() behind the cache. Returns (columns, rows, as_of).
+
+    `ttl` overrides data.result_cache_ttl_seconds for one statement (a fixed tool's `cache_ttl_seconds`):
+    the production dashboard reads VistaQ's whole day and costs seconds, so it is worth keeping longer than
+    a cheap lookup — the answer card always shows the time the rows were read, and Refresh data bypasses this.
+    """
+    ttl = int(settings().get("data.result_cache_ttl_seconds", 180)) if ttl is None else int(ttl)
     key = (engine, conn_env, database or "", sql_exec, json.dumps(params, default=str, sort_keys=True), scope_key)
     if ttl > 0 and not refresh:
         hit = _CACHE.get(key)
