@@ -16,6 +16,13 @@ each phase is in `docs/ROADMAP.md`.
   what happened ("The query took longer than the time allowed. The records may still be in VistaQ; press Refresh
   data to try again."), keeps the Refresh button and the suggested questions, and costs no model call. A question
   that names no database record (a policy count, for instance) still falls back to the documents as before.
+- **The joins offered to the model are the ones that exist** (Phase Q, Q7). Where a table's primary key is just
+  "Id" — which is every table in VistaQ — the assistant proposed joining each table to every other on that key,
+  dozens of joins that are simply false, under a heading that tells the model it may use them. It now proposes
+  a join only where one table has a column naming the other (ProductionPlan.StyleId to Style.Id), keeps the
+  existing rule where a key is distinctive (ExportOrder.FileRefID to FileRef.FileRefID), and stays quiet where
+  the database already declares a foreign key. The table that holds the records a question names is also chosen
+  now: "which style is running on TAL line 2102" picks the production plan, which it did not before.
 - **A number compared to a text column is quoted before the query runs** (Phase Q, Q2). Line, unit, style, item
   and company codes are stored as text even when they look like numbers, and SQL Server answers
   `Line = 2102` by converting the whole column, which fails on the first value that is not a number. Every

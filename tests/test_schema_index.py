@@ -1,5 +1,6 @@
 """C3: schema index — keyword and hybrid selection, FK expansion, stale vectors ignored, join hints.
 Offline: a hashing embedder (bag of words) stands in for bge-m3."""
+import re
 import hashlib
 from types import SimpleNamespace as NS
 
@@ -128,3 +129,52 @@ def test_table_name_matches_rank_above_column_matches():
     noisy = [_t(f"dbo.Order{i}", ["OrderID", "BuyerName", "BuyerCode"]) for i in range(12)]
     cat = Catalog("Demo3", "tsql", "E", [], [], tables=[*noisy, _t("dbo.tblBuyerMaster", ["BuyerMasterID", "Buyer"])])
     assert si.select_tables("list all buyers", cat, k=3)[0] == "dbo.tblBuyerMaster"
+
+
+# ---- Phase Q: join hints that are true, and the table a question is really about ----------------------------
+def _vistaq_like():
+    """Every table has a primary key named Id and a column named Id — the shape that produced 66 false hints."""
+    from ragbot.data.catalog import Catalog, Table
+    def t(name, cols, pk="Id", fks=()):
+        return Table(name, "table", 100, "", [pk],
+                     [{"name": c, "type": "int"} for c in cols], list(fks))
+    tables = [
+        t("dbo.ProductionPlan", ["Id", "WorkspaceLineId", "BuyerId", "StyleId", "PlanDate", "DayTarget"]),
+        t("dbo.Style", ["Id", "StyleNumber", "BuyerId"]),
+        t("dbo.Buyer", ["Id", "BuyerName"]),
+        t("dbo.Workspace", ["Id", "WorkspaceName", "ParentId", "ShortName"]),
+        t("dbo.StyleClosingTracker", ["Id", "StyleId", "WorkspaceLineId"]),
+    ]
+    return Catalog("VistaQ", "tsql", "X", [], [], tables=tables)
+
+
+def test_a_bare_id_key_never_joins_id_to_id():
+    cat = _vistaq_like()
+    names = [t.name for t in cat.tables]
+    hints = si.join_hints(names, cat)
+    assert not [h for h in hints if re.search(r"\.Id = dbo\.\w+\.Id$", h)], hints
+    assert "dbo.ProductionPlan.StyleId = dbo.Style.Id" in hints
+    assert "dbo.ProductionPlan.BuyerId = dbo.Buyer.Id" in hints
+    assert "dbo.Style.BuyerId = dbo.Buyer.Id" in hints
+    assert "dbo.ProductionPlan.WorkspaceLineId = dbo.Workspace.Id" in hints
+
+
+def test_a_declared_foreign_key_is_not_repeated_as_a_hint():
+    from ragbot.data.catalog import Catalog, Table
+    plan = Table("dbo.ProductionPlan", "table", 10, "", ["Id"],
+                 [{"name": "Id", "type": "int"}, {"name": "StyleId", "type": "int"}],
+                 [{"columns": ["StyleId"], "ref_table": "dbo.Style", "ref_columns": ["Id"]}])
+    style = Table("dbo.Style", "table", 10, "", ["Id"], [{"name": "Id", "type": "int"}])
+    cat = Catalog("V", "tsql", "X", [], [], tables=[plan, style])
+    assert si.join_hints(["dbo.ProductionPlan", "dbo.Style"], cat) == []   # Table.render prints it as "Joins:"
+
+
+def test_the_table_that_covers_the_questions_records_is_selected():
+    """The style/line question selected twelve tables on 11 Oct and not dbo.ProductionPlan, which has all of
+    factory, line, style and buyer."""
+    cat = _vistaq_like()
+    chosen = si.select_tables("What style is running on TAL line 2102?", cat, k=3)
+    assert "dbo.ProductionPlan" in chosen
+    # a question naming no record is ranked exactly as before
+    assert si.select_tables("how many buyers are there", cat, k=3) == \
+        si.select_tables("how many buyers are there", cat, k=3)

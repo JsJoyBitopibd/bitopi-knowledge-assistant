@@ -145,13 +145,17 @@ class SchemaIndex:
         if not self.col_words:
             self.col_words = [frozenset() for _ in self.names]
 
-    def search(self, question: str, k: int, qvec: Optional[list[float]] = None) -> list[str]:
+    def search(self, question: str, k: int, qvec: Optional[list[float]] = None,
+               kinds: Optional[set[str]] = None) -> list[str]:
         pool = max(k * 4, 30)
         sparse = [n for n, _ in self.keyword.search(_with_singulars(question), pool)]
         lists = [sparse, _name_matches(question, self.names, pool, self.name_words)]
         cols = _column_scores(question, self.names, self.col_words)[:pool]
         if cols:
             lists.append(cols)
+        ents = _entity_scores(kinds or set(), self.names, self.col_words)[:pool] if kinds else []
+        if ents:
+            lists.append(ents)
         if self.vectors is not None and qvec is not None and len(self.names):
             scores = self.vectors @ np.asarray(qvec, dtype=np.float32)
             top = np.argsort(-scores)[:pool]
@@ -247,6 +251,38 @@ def fk_neighbours(names: list[str], cat: Catalog) -> list[str]:
     return [n for n in dict.fromkeys(out) if n.lower() not in want]
 
 
+# Which column words carry each kind of record a question can name (Phase Q). A table that covers two or more
+# of the kinds in the question is the table that question is about: "What style is running on TAL line 2102?"
+# names a factory, a line and a style, and dbo.ProductionPlan has all three — it was not selected at all on
+# 11 Oct (logs/schema_select.csv), while twelve tables with one of the words were.
+_ENTITY_WORDS: dict[str, frozenset[str]] = {
+    "factory": frozenset({"factory", "factories"}),
+    "line": frozenset({"line"}),
+    "unit": frozenset({"unit", "building", "block"}),
+    "style": frozenset({"style"}),
+    "buyer": frozenset({"buyer", "customer", "brand"}),
+    "po": frozenset({"po", "purchase"}),
+    "eo": frozenset({"export"}),
+    "file": frozenset({"file", "fileref"}),
+    "item": frozenset({"item"}),
+    "company": frozenset({"company"}),
+}
+
+
+def _entity_scores(kinds: set[str], names: list[str], col_words: list[frozenset[str]]) -> list[str]:
+    """Tables ranked by how many of the question's record kinds their column names cover."""
+    wanted = {k: _ENTITY_WORDS[k] for k in kinds if k in _ENTITY_WORDS}
+    if len(wanted) < 2:
+        return []
+    scored = []
+    for n, cw in zip(names, col_words):
+        covered = sum(1 for words_ in wanted.values() if cw & words_)
+        if covered >= 2:
+            scored.append((covered, "date" in cw, -len(cw), n))
+    scored.sort(reverse=True)
+    return [n for *_, n in scored]
+
+
 def select_tables(question: str, cat: Catalog, k: int = 8, qvec: Optional[list[float]] = None,
                   max_extra: int = 6, max_total: Optional[int] = None) -> list[str]:
     """The discovered tables to show the SQL model for this question: top-k by hybrid search (the catalog's own
@@ -257,28 +293,77 @@ def select_tables(question: str, cat: Catalog, k: int = 8, qvec: Optional[list[f
         return []
     from .db_router import prepared
     k = cat.schema_rag_k or k
-    hits = get_index(cat).search(prepared(question, cat), k, qvec)
+    try:
+        from .entities import question_entities
+        kinds = question_entities(question).kinds()
+    except Exception:
+        kinds = set()
+    hits = get_index(cat).search(prepared(question, cat), k, qvec, kinds=kinds)
     out = hits + fk_neighbours(hits, cat)[:max_extra]
     return out[:max_total] if max_total else out
 
 
+# A primary key named only "Id" (or Code, No, Key) says nothing about which table it belongs to. Every table
+# in VistaQ has one, and every table has an `Id` column, so the old same-name rule proposed `dbo.Style.Id =
+# dbo.Buyer.Id` for all 66 pairs of a 12-table selection — joins that are simply false, offered to the model
+# under a heading that licenses them ("Join only along a listed key … or a Likely joins line").
+_GENERIC_KEY = frozenset({"id", "code", "no", "key", "sl", "slno", "serial", "rowid", "uid", "guid"})
+
+
+def _fk_pairs(cat: Catalog) -> set[tuple[str, str]]:
+    """Table pairs that already have a declared foreign key — Table.render() prints those as "Joins:"."""
+    out: set[tuple[str, str]] = set()
+    for t in cat.tables:
+        for fk in t.foreign_keys:
+            a, b = t.name.lower(), str(fk.get("ref_table", "")).lower()
+            out.add((a, b))
+            out.add((b, a))
+    return out
+
+
+def _singulars(name: str) -> list[str]:
+    """dbo.Styles -> ['Styles', 'Style']; dbo.VqBuyers -> ['VqBuyers', 'VqBuyer', 'Buyers', 'Buyer']."""
+    bare = name.split(".")[-1]
+    out = [bare]
+    for n in list(out):
+        if n.lower().endswith("ies"):
+            out.append(n[:-3] + "y")
+        elif n.lower().endswith("s") and not n.lower().endswith("ss"):
+            out.append(n[:-1])
+    for n in list(out):
+        for prefix in ("tbl", "Vq"):
+            if n.lower().startswith(prefix.lower()) and len(n) > len(prefix) + 2:
+                out.append(n[len(prefix):])
+    return list(dict.fromkeys(out))
+
+
 def join_hints(names: list[str], cat: Catalog) -> list[str]:
     """Likely join conditions between selected tables that have no declared foreign key: the catalog's
-    code-column hints (a Buyer code -> Contact_Master.ContactID, with where the name is), then a column of
-    one table with the same name as another table's single-column primary key (e.g. BuyerID)."""
+    code-column hints (a Buyer code -> Contact_Master.ContactID, with where the name is), then either a column
+    named exactly like another table's distinctive primary key (dbo.ExportOrder.FileRefID = dbo.FileRef.FileRefID)
+    or, when that key is a bare `Id`, a column that names the table it points at (dbo.ProductionPlan.StyleId =
+    dbo.Style.Id). Never `a.Id = b.Id`."""
     tabs = [t for t in (cat.table(n) for n in names) if t]
     selected = {t.name.lower() for t in tabs}
     hints = [f"{t.name}.{h.column} = {h.target}" + (f"  ({h.note})" if h.note else "")
              for t in tabs for h in cat.hints_for(t.name) if h.target_table.lower() in selected]
+    declared = _fk_pairs(cat)
     for b in tabs:
         if len(b.primary_key) != 1:
             continue
         key = b.primary_key[0]
         if not re.search(r"(id|code|no)$", key, re.IGNORECASE):
             continue
+        generic = key.lower() in _GENERIC_KEY
+        targets = [re.compile(rf"^(?:{re.escape(s)})\w*?{re.escape(key)}$", re.I) for s in _singulars(b.name)]
         for a in tabs:
-            if a is b:
-                continue
-            if any(c["name"].lower() == key.lower() for c in a.columns):
-                hints.append(f"{a.name}.{key} = {b.name}.{key}")
+            if a is b or (a.name.lower(), b.name.lower()) in declared:
+                continue        # the declared foreign key is already rendered on the table itself
+            for c in a.columns:
+                name = c["name"]
+                if generic:
+                    if any(p.match(name) for p in targets):
+                        hints.append(f"{a.name}.{name} = {b.name}.{key}")
+                elif name.lower() == key.lower():
+                    hints.append(f"{a.name}.{key} = {b.name}.{key}")
     return list(dict.fromkeys(hints))
