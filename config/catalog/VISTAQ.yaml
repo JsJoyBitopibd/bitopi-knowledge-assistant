@@ -7,6 +7,13 @@
 database: VISTAQ
 description: 'VistaQ quality and production app: styles, QC inspections and defect details, defect types, cutting
   outputs, production plans, lines, buyers, manpower amendments.'
+# Phase Q (2026-10-11): kept out of routing. This is a small, separate build — 30 tables, 138 production plans,
+# 481 inspections, no foreign keys, no curated views, and columns (SourcePrMasterId, ExportOrderId) that read
+# like a new integration under development — while the live QC and production data for all three factories is in
+# VistaQ_Default_RHL. Its keywords (style, buyers, production plan, dhu, cutting output) competed with that
+# catalog for the same questions. It is still loaded: a pasted statement against its tables runs, and
+# db_ping / check_catalog still cover it. One line to turn back on when it becomes the live system.
+routable: false
 dialect: tsql
 connection_env: SQLSERVER_CONN_PRODUCTION
 connection_database: VISTAQ

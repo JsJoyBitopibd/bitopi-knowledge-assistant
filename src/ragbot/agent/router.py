@@ -55,6 +55,8 @@ def _keyword_data(question: str) -> bool:
         return False
     q = question.lower()
     for cat in cats.values():
+        if not cat.routable:      # a prototype catalog's vocabulary must not route a question (Phase Q)
+            continue
         for w in cat.keywords:
             w = w.lower()
             # 3+ letters: 'grn', 'tna', 'pcd' are specific; two-letter codes ('po', 'ot') are not

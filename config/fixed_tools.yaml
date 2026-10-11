@@ -406,7 +406,7 @@
     SELECT TOP (200)
       CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
         ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
-      p.Factory, p.Unit, p.Line, p.Styles, p.Planned, CAST(ROUND(p.RTT, 0) AS int) AS RTT,
+      p.Factory, p.Unit, p.Line, st.Styles, p.Styles AS StyleCount, p.Planned, CAST(ROUND(p.RTT, 0) AS int) AS RTT,
       ISNULL(o.OutputPcs, 0) AS SewingOutput, ISNULL(o.OutputPcs, 0) - CAST(ROUND(p.RTT, 0) AS int) AS VarianceVsRTT,
       w.WIP,
       CAST(100.0 * o.SAH / NULLIF(mh.ManHours, 0) AS decimal(6,2)) AS EfficiencyPct,
@@ -455,6 +455,15 @@
         AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
       GROUP BY Factory, Line
     ) AS w ON w.Factory = p.Factory AND w.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, STRING_AGG(Label, ', ') WITHIN GROUP (ORDER BY Label) AS Styles
+      FROM (
+        SELECT DISTINCT Factory, Line, ISNULL(Buyer, '?') + ' / ' + ISNULL(Style, '?') AS Label
+        FROM rag.vw_PlanDay
+        WHERE Factory IS NOT NULL AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+      ) AS d
+      GROUP BY Factory, Line
+    ) AS st ON st.Factory = p.Factory AND st.Line = p.Line
     ORDER BY p.Factory, p.Line
 
 - name: production_dashboard_window
@@ -1072,6 +1081,126 @@
     WHERE (@factory = '' OR Factory = @factory) AND CuttingDate >= @from AND CuttingDate < @to
     GROUP BY Factory
     ORDER BY Factory
+
+# ---- a named sewing line (Phase Q) --------------------------------------------------------------------------
+# The shared `*vq_unless` hands every question naming a line number to the model, because the tools above cannot
+# filter one line. These four take the line as a parameter instead (data/entities.py reads "line 2102",
+# "line no. 2102", "L-2102", "2102 line"), so "What style is running on TAL line 2102?" is answered from the
+# plan with no model call. Their own unless keeps the qualifiers they still cannot apply (a QC stage, day-wise).
+- name: running_style_by_line
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'What style is running on TAL line 2102?'
+  follow_ups:
+    - 'DHU of {factory_label} line {line} {window}'
+    - 'Show the production dashboard {window} line wise'
+  description: The style (and its buyer) planned on one sewing line for a day, live from VistaQ's production plan — the owner's "which style is running on this line".
+  answer_list: 'Style running on {factory_label} line {line} {window}, live from VistaQ ({n} plan(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|.*\bL-\d{2,4}\b|.*\b\d{3,4}\s+lines?\b)(?=.*\b(?:styles?|buyers?|orders?|running|runs?|ran|sewing|making|producing|planned|plan)\b)'
+  unless: &vq_unless_line '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b|\bhour(?:ly|s)?\b)'
+  requires: ['(?i)\b(?:styles?|buyers?|orders?|running|runs?|ran|sewing|making|producing|planned|plan)\b']
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { type: factory, default: '' }
+    line: { type: line }
+  sql: |
+    SELECT TOP (50)
+      CONVERT(varchar(10), PlanDate, 23) AS [Date], Factory, Line, Buyer, Style
+    FROM rag.vw_PlanDay
+    WHERE (@factory = '' OR Factory = @factory) AND Line = @line
+      AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+    ORDER BY Factory, Buyer, Style
+
+- name: quality_by_line_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'DHU of TAL line 2102 today'
+  follow_ups:
+    - 'What style is running on {factory_label} line {line} {window}?'
+    - 'Show me the defect summary {window} line wise'
+  description: One sewing line's quality for a period from VistaQ — the figures asked for, per buyer and style on that line.
+  answer_list: 'Quality of {factory_label} line {line} {window}, live from VistaQ ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|.*\bL-\d{2,4}\b|.*\b\d{3,4}\s+lines?\b)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected)\b)'
+  unless: *vq_unless_line
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { type: factory, default: '' }
+    line: { type: line }
+    measures: &vq_measures_line
+      type: measures
+      default: [checked, defects, dhu]
+      columns:
+        checked: SUM(Checked) AS Checked
+        defects: SUM(Defects) AS Defects
+        dhu: CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU
+        ftp_pct: CAST(100.0 * SUM(Passed) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS FTPPct
+        ftp_qty: SUM(Passed) AS Passed
+        defective: SUM(DefectivePcs) AS DefectivePcs
+        defective_pct: CAST(100.0 * SUM(DefectivePcs) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DefectivePct
+        rectified: SUM(Rectified) AS Rectified
+        rectified_pct: CAST(100.0 * SUM(Rectified) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RectifiedPct
+        rejected: SUM(Rejected) AS Rejected
+        reject_pct: CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct
+        output: SUM(EndlineOutput) AS EndlineOutput
+  sql: |
+    SELECT TOP (100)
+      CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
+        ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
+      Factory, Line, Buyer, Style, {measures}
+    FROM rag.vw_PlanQualityDay
+    WHERE (@factory = '' OR Factory = @factory) AND Line = @line
+      AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Line, Buyer, Style
+    HAVING SUM(Checked) > 0
+    ORDER BY Factory, Line, Buyer, Style
+
+- name: lines_running_style
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Which lines are running style 71245 today?'
+  follow_ups:
+    - 'Show the production dashboard {window} line wise'
+  description: The sewing lines a style (or a buyer) is planned on for a day, live from VistaQ's production plan.
+  answer_list: 'Lines running {style_label} {buyer_label} {window}, live from VistaQ ({n} line(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:lines?|where)\b)(?=.*\b(?:running|runs?|ran|sewing|making|producing|planned)\b)(?=.*\bstyles?\s*(?:no\.?|number|#|code)?\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9/._-]*\d)'
+  unless: *vq_unless_line
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { type: factory, default: '' }
+    style: { type: style, label: 'style {value}', else_label: '' }
+    buyer: { type: value, entity: buyer, default: '', label: 'for {value}', else_label: '' }
+  sql: |
+    SELECT TOP (100)
+      CONVERT(varchar(10), PlanDate, 23) AS [Date], Factory, Unit, Line, Buyer, Style, DayTarget
+    FROM rag.vw_PlanDay
+    WHERE (@factory = '' OR Factory = @factory) AND Style = @style
+      AND (@buyer = '' OR Buyer = @buyer)
+      AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+    ORDER BY Factory, Line
+
+- name: line_plan_by_factory_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Line wise style of today'
+  follow_ups:
+    - 'Show the production dashboard {window} line wise'
+    - 'Which lines are above the DHU target {window}?'
+  description: Every sewing line's planned style and buyer for a day, live from VistaQ's production plan — one row per plan, with the day target.
+  answer_list: 'Styles planned by line {window}, live from VistaQ ({n} plan(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\b(?:lines?[\s-]?wise|(?:by|per|for)\s+(?:each\s+|every\s+)?lines?|each\s+line|every\s+line|line\s+by\s+line|lines)\b)(?=.*\b(?:styles?|buyers?|plan|planned|running)\b)'
+  # a named line (or two) is not this tool's shape — it answers for every line; running_style_by_line takes one,
+  # and a question naming two goes to the model, which can write the filter
+  unless: '(?i:\bdashboard\b|\b(?:efficiency|sah|smv|man[\s-]?hours?|wip|rtt|dhu|defects?|defective|rejects?|rejected|ftp|first[\s-]?pass|rectified|quality|qc|checked|inspected|cutting|output|production\s+summary)\b|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\bhour(?:ly|s)?\b|\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|\bL-\d{2,4}\b|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d+\b)'
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  sql: |
+    SELECT TOP (200)
+      CONVERT(varchar(10), PlanDate, 23) AS [Date], Factory, Unit, Line, Buyer, Style, DayTarget, PlanHours
+    FROM rag.vw_PlanDay
+    WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory)
+      AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+    ORDER BY Factory, Line, Buyer, Style
 
 - name: buyer_list
   agent: order

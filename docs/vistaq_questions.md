@@ -19,7 +19,7 @@ answered for a different day than the one asked. Every table starts with a **Dat
 or "first to last day" for a longer period. The heading names the period too ("on 6 Oct 2026").
 
 Name a factory (RHL, TAL, BGL) to see only that factory; a user limited to some factories only ever sees those.
-Asking "day wise", "daily" or "per day", or naming a QC stage, line, unit, PO, style or buyer, gets SQL written for
+Asking "day wise", "daily" or "per day", or naming a QC stage, unit, PO or buyer, gets SQL written for
 that question, because the built-in answers cannot apply those filters.
 
 | Ask | You get |
@@ -39,6 +39,10 @@ that question, because the built-in answers cannot apply those filters.
 | Show the QC results by stage today · stage wise QC for BGL yesterday | Checked, passed, defective, rejected and re-checked pieces at each QC stage |
 | How many corrective actions were raised this week? · Show RHL CAPA last week | Corrective actions (CAPA) per factory, or the list with line, buyer, style, defect and DHU |
 | What was the cutting output today? · How many pieces were cut in TAL yesterday? | Pieces cut per factory |
+| What style is running on TAL line 2102? · on TAL in line 2102, which style is running? · what is running on TAL L-2102 | The style and buyer planned on that line that day: date, factory, line, buyer, style |
+| DHU of TAL line 2102 today · Show me the defect summary for line 2322 today | That one line's quality figures, per buyer and style on the line |
+| Which lines are running style 71245 today? | The lines that style is planned on, with buyer and day target |
+| Line wise style of today · line wise style of TAL today | Every line's planned style and buyer, with the day target |
 
 Other VistaQ questions (a particular PO, a particular defect on one line, an hour of the day) are answered too, with
 SQL the model writes over the same views. That takes 3-8 s.

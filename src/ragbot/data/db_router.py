@@ -152,8 +152,10 @@ def value_hits(question: str, cats: dict[str, Catalog]) -> dict[str, int]:
 
 
 def evidence(question: str, cats: dict[str, Catalog], qvec: Optional[list[float]] = None) -> list[Evidence]:
-    """Every catalog scored, best first."""
+    """Every routable catalog scored, best first (`routable: false` keeps a prototype or a retired copy out of
+    the ranking without unloading it)."""
     from .schema_index import get_index   # lazy: numpy + the index build are not needed by the fixed-tool path
+    cats = {n: c for n, c in cats.items() if c.routable}
     out: list[Evidence] = []
     values = value_hits(question, cats)
     for name, cat in cats.items():
@@ -188,6 +190,7 @@ def pick_catalogs(question: str, cats: dict[str, Catalog], qvec: Optional[list[f
     catalog has at least as many keyword hits as the last pick and trails it by no more than TIE_MARGIN."""
     s = settings()
     k = k or int(s.get("data.max_databases_per_question", 2))
+    cats = {n: c for n, c in cats.items() if c.routable}
     if len(cats) <= k:
         return dict(cats)
     ev = evidence(question, cats, qvec)

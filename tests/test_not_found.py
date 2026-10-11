@@ -148,11 +148,14 @@ def test_vistaq_questions_reach_their_tools_with_period_and_factory():
 
 def test_a_qualifier_the_tool_cannot_apply_goes_to_the_model():
     """Found in the app 2026-10-07: "Which buyer had the most defects at Waist QC yesterday?" was answered by
-    defects_by_buyer_window over every QC stage. A stage, line, unit, PO, style or named buyer skips the tools."""
+    defects_by_buyer_window over every QC stage. A stage, unit, PO, style or named buyer skips the tools.
+
+    A named LINE no longer does: Phase Q added tools that take the line as a parameter, so
+    "Show me the defect summary for line 2322 today" is answered from the plan instead of being handed to the
+    SQL model, which wrote `Line = 2322` against a text column and failed (tests/test_line_tools.py)."""
     ts = tools.load_fixed_tools()
     vistaq = {t["name"] for t in ts if t["database"] == "VistaQ_Default_RHL"}
     for q in ["Which buyer had the most defects at Waist QC yesterday?",
-              "Show me the defect summary for line 2322 today",
               "Which lines have the highest DHU in Unit 03?",
               "Show the defect summary for H&M this week",
               "How many pieces were rejected at Output QC today?",

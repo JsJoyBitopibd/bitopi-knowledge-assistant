@@ -328,6 +328,24 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
                 params[f"{name}_label"] = (spec.get("label", "in {value}").format(value=hit.value) if hit
                                            else spec.get("else_label", ""))
                 continue
+            if spec.get("type") in ("factory", "line", "unit", "style"):
+                # Phase Q: the factory, line, unit or style the question names, read once by
+                # data/entities.py:question_entities — "TAL line 2102", "line no. 2102", "tarasima L-2102".
+                # Two of a kind ("lines 2102 and 2103") is not this tool's shape: the model writes the filter.
+                from .entities import question_entities
+                kind = spec["type"]
+                ents = question_entities(question)
+                found = {"factory": ents.factories, "line": ents.lines, "unit": ents.units,
+                         "style": ents.styles}[kind]
+                raw = found[0] if len(found) == 1 else (None if found else spec.get("default"))
+                if raw is None:
+                    break
+                params[name] = str(raw).upper() if spec.get("upper", kind == "factory") else raw
+                # no trailing space in a label: templated._fill strips string parameters, so a template writes
+                # "{factory_label} line {line}" and the empty case's double space is collapsed there
+                params[f"{name}_label"] = (spec.get("label", "{value}").format(value=params[name]) if found
+                                           else spec.get("else_label", ""))
+                continue
             if spec.get("type") == "entity":
                 # P1: a company named by code ("companyid=02") or by name/alias ("misami") becomes a bound parameter
                 # from config/reference/entities.yaml — never the question's text. '' (the default) means "any".
@@ -608,7 +626,7 @@ def siblings_of(cat: Catalog, cats: dict[str, Catalog]) -> dict[str, Catalog]:
     mine = server_of(cat.connection_env)
     out: dict[str, Catalog] = {}
     for other in cats.values():
-        if other is cat or other.dialect != "tsql":
+        if other is cat or other.dialect != "tsql" or not other.routable:
             continue
         same_line = other.connection_env == cat.connection_env
         if same_line or (mine and server_of(other.connection_env) == mine):
@@ -653,8 +671,10 @@ def _extract_params(sql: str, cat: Catalog) -> dict[str, Any]:
 
 
 def _pick_catalog(question: str, cats: dict[str, Catalog]) -> Catalog:
-    """Fallback when the model's reply names no database: the best keyword match (db_router)."""
-    return max(cats.values(), key=lambda c: keyword_score(question, c))
+    """Fallback when the model's reply names no database: the best keyword match (db_router), among the
+    routable catalogs when there are any."""
+    pool = [c for c in cats.values() if c.routable] or list(cats.values())
+    return max(pool, key=lambda c: keyword_score(question, c))
 
 
 # Question -> (database, guarded SQL) the model wrote for it (J2). A repeated question — the same one

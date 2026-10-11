@@ -59,6 +59,59 @@ keywords:
 - cut quantity
 - defect
 - inspection
+# Phase Q: VistaQ also holds the production plan (which style runs on which line, with the day target), and the
+# words staff use for it were missing — "What style is running on TAL line 2102?" scored nothing here.
+- production
+- production plan
+- plan
+- plans
+- planned
+- running
+- running style
+- style running
+- which style
+- what style
+- line plan
+- day target
+- target
+- manpower
+- smv
+- efficiency
+- wip
+- sah
+- man hours
+- sewing output
+- dashboard
+- style
+- styles
+- buyer
+- buyers
+synonyms:
+  running: [production plan, plan]
+  running style: [production plan, style]
+  line plan: [production plan]
+  which line: [line]
+# One-line descriptions for the raw tables the model is shown (the discovery JSON has none for this database).
+table_notes:
+  dbo.ProductionPlan: >-
+    the daily line plan — one row per line, day, buyer, style and colour: WorkspaceLineId is the line
+    (dbo.Workspace), BuyerId the buyer, StyleId the style, PlanDate the day, WorkingHours 0 means the style is
+    not running that day, DayTarget the planned pieces, OrderQty the order, FileId the ERP file (FR number),
+    PO is always 'TBA', PlanCombinationKey ties the plan to its cutting and QC rows; IsActive = 1 is live.
+  dbo.Workspace: >-
+    the factory tree: WorkspaceLevel 1 = factory (ShortName TAL, RHL, BGL), 2 = unit, 3 = sewing line;
+    WorkspaceName is the line number stored as text (e.g. '2102'); ParentId points up the tree.
+  dbo.Style: style master — StyleNumber is the style code staff quote, StyleName its name, BuyerId its buyer.
+  dbo.Buyer: buyer master — BuyerName and BuyerCode.
+  dbo.StyleChangeLog: >-
+    every style change on a line: which plan (ProductionPlanId, StyleId, BuyerId) ran on WorkspaceLineId on
+    PlanDate, from StartTime to EndTime.
+  dbo.QualityInspection: >-
+    88 million QC checks — always filter on InspectionDateOnly and prefer the rag.* views.
+  dbo.QualityInspectionDefect: one row per defect found (DefectId to dbo.Defect); filter on InspectionDefectDateOnly.
+  dbo.CuttingOutput: pieces cut per plan and day.
+  dbo.LineWiseSessionPlan: a line's working sessions for a day (where man hours come from).
+  dbo.StyleClosingTracker: styles closed on a line — not the style running now.
 hints:
   - column: WorkspaceLineId
     target: dbo.Workspace.Id
@@ -116,6 +169,12 @@ rules:
   RejectPct = 100.0 * SUM(Rejected) / SUM(Checked); FirstPassPct = 100.0 * SUM(Passed) / SUM(Checked). Never average
   the DHU column.'
 - A line is named by Factory and Line together (line numbers are per factory).
+- 'Line and Unit are text, not numbers: compare Line = ''2102'', never Line = 2102 — the column holds the
+  workspace name, and comparing it to a number makes SQL Server cast every name and fail.'
+- 'The style running on a line on a day = rag.vw_PlanDay rows for that Factory, Line and PlanDate with
+  PlanHours > 0 (0 means the style is not running that day); show Factory, Line, Buyer and Style.'
+- 'Pieces output per style = rag.vw_PlanOutputDay (OutputPcs); join it to rag.vw_PlanDay on Factory, Line,
+  Combination and PlanDate = OutputDate when the buyer or the day target is also wanted.'
 - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
 - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
   doesn't have the data."
@@ -345,10 +404,14 @@ views:
     columns:
       Factory: factory short name (RHL, TAL, BGL)
       Unit: unit or block of the line
-      Line: sewing line number
+      Line: sewing line number, stored as text — compare it as Line = '2102', never Line = 2102
       PlanDate: day the plan is for
       Buyer: buyer name
-      Style: style number
+      Style: style number (text, as VistaQ records it)
+      StyleName: the style's name, when the style master has one
+      Color: colour of the plan
+      FileNo: order file (FR number) = the ERP's FileRefID; its export orders and POs are in the ERP
+      OrderQty: pieces ordered for this plan
       SMV: standard minutes per piece
       Manpower: planned operators + helpers + ironmen
       PlanHours: planned working hours (0 = the style is not running that day)
@@ -359,6 +422,7 @@ views:
       SELECT
         CASE WHEN l.Id = p.WorkspaceLineId THEN f.ShortName END AS Factory, u.WorkspaceName AS Unit,
         l.WorkspaceName AS Line, CAST(p.PlanDate AS date) AS PlanDate, b.BuyerName AS Buyer, s.StyleNumber AS Style,
+        s.StyleName, p.ColorName AS Color, p.FileId AS FileNo, p.OrderQty,
         p.SMV, ISNULL(p.Operator, 0) + ISNULL(p.Helper, 0) + ISNULL(p.IronMan, 0) AS Manpower,
         ISNULL(p.WorkingHours, 0) AS PlanHours, ISNULL(p.DayTarget, 0) AS DayTarget, p.PlanEfficiency,
         p.PlanCombinationKey AS Combination

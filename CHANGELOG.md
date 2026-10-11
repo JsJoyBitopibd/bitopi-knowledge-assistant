@@ -16,6 +16,19 @@ each phase is in `docs/ROADMAP.md`.
   what happened ("The query took longer than the time allowed. The records may still be in VistaQ; press Refresh
   data to try again."), keeps the Refresh button and the suggested questions, and costs no model call. A question
   that names no database record (a policy count, for instance) still falls back to the documents as before.
+- **"What style is running on TAL line 2102?" is answered from the production plan** (Phase Q, Q3), in a tenth of
+  a second and with no AI call, as date, factory, line, buyer and style — the columns the question asks for.
+  Every VistaQ answer used to hand any question naming a line number to the SQL model, which wrote `Line = 2102`
+  against a column that holds text and failed. Four built-in answers now take the line, factory or style as a
+  parameter: the style running on a line, that line's quality figures, the lines a style is running on, and every
+  line's planned style for a day. The per-line production dashboard also names each line's buyer and style
+  instead of only counting them, so "with style showing" is answered.
+- `rag.vw_PlanDay` gains StyleName, Color, FileNo (the ERP file) and OrderQty; the VistaQ catalog gains the words
+  staff use for the plan (running, production plan, day target, line plan, efficiency), notes for its raw tables,
+  and the rule that Line and Unit are text.
+- The `VISTAQ` database on the production server — a 30-table prototype with 138 plans and no views — is no longer
+  ranked for questions (`routable: false`); the live system for all three factories is `VistaQ_Default_RHL`. It
+  stays loaded, so a pasted statement against it still runs.
 - **The production dashboard answers for one factory again** (Phase Q, Q4). Asking it for TAL ran the same five
   joined views with `(@factory = '' OR Factory = @factory)` in each subquery, which SQL Server planned far worse
   than the plain all-factory query: 8.1 seconds for every factory, a 30-second timeout for TAL. The statement now

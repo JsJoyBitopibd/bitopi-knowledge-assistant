@@ -125,6 +125,10 @@ class Catalog:
     synonyms: dict[str, list[str]] = field(default_factory=dict)
     table_notes: dict[str, str] = field(default_factory=dict)
     schema_rag_k: int | None = None
+    # Phase Q. `routable: false`: a catalog that is loaded (a pasted statement may read it, db_ping and
+    # check_catalog cover it) but never ranked for a question — a prototype or a retired copy whose keywords
+    # would otherwise compete with the live system's.
+    routable: bool = True
 
     @property
     def display_name(self) -> str:
@@ -303,5 +307,6 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                                       label=str(d.get("label") or "").strip(),
                                       synonyms={str(k): [str(s) for s in v] for k, v in synonyms.items()},
                                       table_notes=notes,
-                                      schema_rag_k=int(d["schema_rag_k"]) if d.get("schema_rag_k") else None)
+                                      schema_rag_k=int(d["schema_rag_k"]) if d.get("schema_rag_k") else None,
+                                      routable=bool(d.get("routable", True)))
     return cats
