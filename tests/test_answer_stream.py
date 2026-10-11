@@ -215,3 +215,64 @@ def test_a_fixed_tool_zero_is_still_an_answer(wire, monkeypatch):
         columns=["Meetings"], rows=[[0]])])
     evs = list(orch.answer_stream("how many meetings", scope=Scope.unrestricted()))
     assert not evs[-1].answer.not_found and "0" in evs[-1].answer.text
+
+
+# ---- Phase Q: a query that FAILED (not one that returned nothing) ------------------------------------------
+_HYT00 = "('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]Query timeout expired (0) (SQLExecDirectW)')"
+_CAST = ("DataError: ('22018', \"[22018] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Conversion failed "
+         "when converting the nvarchar value 'Remi Holdings Ltd.' to data type int. (245) (SQLExecDirectW)\")")
+
+
+def _failed(tool, error, database="VistaQ_Default_RHL", **kw):
+    from ragbot.models import QueryResult
+    return QueryResult(database=database, engine="sqlserver", views=[], sql="SELECT 1", tool=tool,
+                       columns=[], rows=[], error=error, **kw)
+
+
+def test_a_timed_out_fixed_tool_says_what_happened_and_never_searches_the_documents(wire, monkeypatch):
+    """The 11 Oct 2026 TAL dashboard question: the tool timed out at 30 s, then a 10 s document search and an
+    answer-model call produced a generic not-found — 45.3 s in all. Now the reason is the answer."""
+    import ragbot.data.tools as tools
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve",
+                        lambda q, where=None, scope=None: pytest.fail("a failed tool must not search the documents"))
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [
+        _failed("production_by_line_window", _HYT00, params={"window": "today", "factory": "TAL"})])
+    a = orch.answer("TAL line wise production summary of today with style showing", scope=Scope.unrestricted())
+    assert a.not_found and a.usage.calls == 0 and a.error_kind == ""
+    assert a.text == ("System doesn't have the data. The query took longer than the time allowed. "
+                      "The records may still be in VistaQ; press Refresh data to try again.")
+    assert any("HYT00" in w for w in a.warnings)
+
+
+def test_a_failed_query_on_a_question_that_names_a_line_skips_the_documents(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve",
+                        lambda q, where=None, scope=None: pytest.fail("the documents hold no line plans"))
+    monkeypatch.setattr(tools, "answer_from_data",
+                        lambda q, user="", refresh=False, scope=None: [_failed("generated", _CAST)])
+    a = orch.answer("What style is running on TAL line 2102?", scope=Scope.unrestricted())
+    assert a.not_found and a.usage.calls == 0
+    assert a.text.startswith("System doesn't have the data. The query could not match a number in the question")
+
+
+def test_a_failed_query_without_a_named_record_still_falls_back_to_the_documents(wire, monkeypatch):
+    """The router sends policy questions phrased as counts to the database; a PDF may still answer them."""
+    import ragbot.data.tools as tools
+    wire("data", [GOOD])
+    monkeypatch.setattr(tools, "answer_from_data",
+                        lambda q, user="", refresh=False, scope=None: [_failed("generated", _CAST, database="FM")])
+    evs = list(orch.answer_stream("how many licences does the Group have?", scope=Scope.unrestricted()))
+    names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
+    assert names.count("Stage:searching") == 1 and evs[-1].answer.text == GOOD
+
+
+def test_a_guard_refusal_is_not_a_database_failure_so_the_agent_sentence_speaks(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [
+        _failed("generated", "GuardError: forbidden token 'update'")])
+    a = orch.answer("What style is running on TAL line 2102?", scope=Scope.unrestricted())
+    assert a.not_found and "Refresh data" not in a.text and "time allowed" not in a.text

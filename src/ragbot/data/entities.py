@@ -89,3 +89,113 @@ def company_from_question(question: str, ents: Optional[Entities] = None) -> Opt
         if any(n and len(n) >= 3 and _word_re(n).search(question) for n in names) and c not in found:
             found.append(c)
     return found[0] if len(found) == 1 else None
+
+
+# ---------------------------------------------------------------- what a question names (Phase Q)
+# One reading of a question's nouns, shared by the router (is this a database question?), the fixed tools
+# (`type: factory|line|unit|style` parameters), the orchestrator (a factory outside the scope; a failed query
+# on a question that names a record) and the SQL prompt. Pure regex over a closed vocabulary — no model call,
+# no database call. On 2026-10-11 "What style is running on TAL line 2102?" was understood by none of them.
+_EO_CODE = re.compile(r"(?<![\w-])([A-Z]{2,4})-(\d{2,4}-\d{2,5}(?:-\d+)?)(?![\w-])", re.I)
+_PO_CODE = re.compile(r"\b(?:PO|Export\s*PO|Buyer\s*PO)\b\s*(?:number|no\.?|#)?\s*:?\s*"
+                      r"((?=[A-Z0-9/_-]*\d)[A-Z0-9][A-Z0-9/_-]{2,30})\b", re.I)
+# "line 2102", "line no. 2102", "L-2102", "2102 line", and a list: "lines 2102 and 2103"
+_LINE = re.compile(r"\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*(\d{2,4}(?:\s*(?:,|and|&|\+)\s*\d{2,4})*)(?![\w-])"
+                   r"|\bL-(\d{2,4})(?![\w-])"
+                   r"|(?<![\w-])(\d{3,4})\s+lines?\b", re.I)
+_NUMS = re.compile(r"\d{2,4}")
+_UNIT = re.compile(r"\b(?:units?|blocks?)\s*(?:no\.?|#)?\s*[-:]?\s*(\d{1,2})(?![\w-])", re.I)
+_STYLE = re.compile(r"\bstyles?\s*(?:no\.?|number|#|code)?\s*[:#-]?\s*"
+                    r"((?=[A-Za-z0-9/._-]*\d)[A-Za-z0-9][A-Za-z0-9/._-]{1,30})(?![\w-])", re.I)
+_ALL_FACTORIES = re.compile(r"\ball\s+(?:the\s+)?factor(?:y|ies)\b|\bevery\s+factor(?:y|ies)\b"
+                            r"|\ball\s+(?:the\s+)?units?\b|\bgroup[\s-]wide\b", re.I)
+
+
+@dataclass(frozen=True)
+class QuestionEntities:
+    """The records a question names. Empty tuples when it names none."""
+    factories: tuple[str, ...] = ()
+    all_factories: bool = False
+    lines: tuple[str, ...] = ()
+    units: tuple[str, ...] = ()
+    styles: tuple[str, ...] = ()
+    eos: tuple[str, ...] = ()
+    pos: tuple[str, ...] = ()
+    files: tuple[str, ...] = ()
+    company: Optional[Company] = None
+
+    @property
+    def names_a_record(self) -> bool:
+        """True when the question names something only a database holds — a line, a unit, a style, an export
+        order, a PO or a file. A factory alone is NOT one of these: "What is the TAL holiday policy?" is a
+        document question, and a factory name says nothing about where the answer lives."""
+        return bool(self.lines or self.units or self.styles or self.eos or self.pos or self.files)
+
+    def kinds(self) -> set[str]:
+        return {k for k, v in (("factory", self.factories), ("line", self.lines), ("unit", self.units),
+                               ("style", self.styles), ("eo", self.eos), ("po", self.pos), ("file", self.files),
+                               ("company", (self.company,) if self.company else ())) if v}
+
+
+def _first_groups(pattern: re.Pattern, text: str, split_numbers: bool = False) -> tuple[str, ...]:
+    """The first non-empty group of every match, in order, without repeats. `split_numbers` reads a written
+    list ("lines 2102 and 2103") as each of its numbers."""
+    out: list[str] = []
+    for m in pattern.finditer(text):
+        v = next((g for g in m.groups() if g), None)
+        if not v:
+            continue
+        for one in (_NUMS.findall(v) if split_numbers else [v]):
+            if one not in out:
+                out.append(one)
+    return tuple(out)
+
+
+def _names_company_itself(text: str, c: Company) -> bool:
+    """Whether the question really names this company — by code ("companyid=02", "company 02") or by its full
+    name or an alias — and not only by its short name, which for TAL/RHL/BGL is also the factory code."""
+    for m in [*_CODE_JOINED.finditer(text), *_CODE.finditer(text)]:
+        if str(m.group(1)).zfill(2) == c.code:
+            return True
+    return any(n and len(n) >= 3 and _word_re(n).search(text) for n in (c.name, *c.aliases))
+
+
+@lru_cache(maxsize=512)
+def _parse(question: str, codes: tuple[str, ...]) -> QuestionEntities:
+    ents = load_entities()
+    # Identifiers first, and blanked out of the working text afterwards: "TAL-26-1985-1" is an export order,
+    # not the TAL factory, and "FR-26-1985" is a file (the fixed tools guard the same way, fixed_tools.yaml).
+    eos: list[str] = []
+    files: list[str] = []
+    for m in _EO_CODE.finditer(question):
+        code = m.group(0)
+        (files if m.group(1).upper() == "FR" else eos).append(code)
+    pos = [m.group(1) for m in _PO_CODE.finditer(question)]
+    rest = _EO_CODE.sub(" ", question)
+    rest = _PO_CODE.sub(" ", rest)
+
+    factories: list[str] = []
+    for c in codes:
+        if c and re.search(rf"(?<![\w/-]){re.escape(c)}(?![\w/-])", rest, re.I):
+            factories.append(c.upper())
+    company = company_from_question(rest, ents)
+    if company is not None and company.factory and company.factory not in factories:
+        factories.append(company.factory)       # "tarasima line 2102", "closing balance at Remi Holdings"
+    if company is not None and company.factory in factories and not _names_company_itself(rest, company):
+        # The word was the factory code (TAL, RHL, BGL), which is also that company's short name. A VistaQ or
+        # planning question names a factory, not a company; claiming both put a useless "CompanyID '06'" line
+        # in every TAL prompt. A question that really names the company ("company 02", "tarasima") keeps it.
+        company = None
+    return QuestionEntities(
+        factories=tuple(factories), all_factories=bool(_ALL_FACTORIES.search(rest)),
+        lines=_first_groups(_LINE, rest, split_numbers=True), units=_first_groups(_UNIT, rest),
+        styles=_first_groups(_STYLE, rest), eos=tuple(dict.fromkeys(eos)), pos=tuple(dict.fromkeys(pos)),
+        files=tuple(dict.fromkeys(files)), company=company)
+
+
+def question_entities(question: str, codes: Optional[list[str]] = None) -> QuestionEntities:
+    """What this question names (factories, lines, units, styles, export orders, POs, files, a company).
+    `codes` defaults to settings scope.factory_codes. Cached: every caller parses the same question."""
+    if codes is None:
+        codes = [str(c) for c in (settings().get("scope.factory_codes", []) or [])]
+    return _parse(question or "", tuple(codes))

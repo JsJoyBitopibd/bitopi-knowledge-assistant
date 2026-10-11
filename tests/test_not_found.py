@@ -273,3 +273,15 @@ def test_every_grouped_vistaq_answer_shows_its_date():
 def test_empty_sentence_for_a_written_date():
     assert not_found.empty([_empty(window="on 6 Oct 2026")]).startswith(
         "I checked VistaQ on 6 Oct 2026 and found no matching records")
+
+
+def test_a_lookup_that_found_nothing_is_not_reported_as_the_users_query():
+    """P2 runs DISTINCT lookups to repair a blank result; an empty lookup is evidence about the data, not the
+    question the user asked, so it must not produce "I checked <system> and found no matching records"."""
+    lookup = QueryResult(database="PlanningTNA", engine="sqlserver", views=["APP.vw_X"], tool="lookup",
+                         sql="SELECT DISTINCT TOP (20) [FactoryID] FROM APP.vw_X", columns=["FactoryID"], rows=[])
+    generated = QueryResult(database="PlanningTNA", engine="sqlserver", views=["APP.vw_X"], tool="generated",
+                            sql="SELECT 1", columns=["StyleName"], rows=[], filters={"FactoryID": "TAL"},
+                            checked=True)
+    assert not_found.empty([generated, lookup]) is None
+    assert not_found.empty_filter([generated, lookup]).startswith("I checked PlanningTNA for 'TAL'")

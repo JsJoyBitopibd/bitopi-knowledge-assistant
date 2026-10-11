@@ -65,7 +65,10 @@ def _label(database: str) -> str:
 def empty(results: Sequence[QueryResult]) -> Optional[str]:
     """The sentence for a fixed-tool query that ran and found nothing, or None. A model-written query's empty
     result is left to general(): it more often means the SQL missed than that the records are not there."""
-    r = next((x for x in results if not x.error and not x.denied and not x.rows and x.tool != "generated"), None)
+    # "lookup" is a DISTINCT probe the empty-result repair ran (P2), not the user's question: an empty one
+    # must not be reported as "I checked <system> and found no matching records" (seen live 2026-10-11).
+    r = next((x for x in results if not x.error and not x.denied and not x.rows
+              and x.tool not in ("generated", "lookup")), None)
     if r is None:
         return None
     window = str(r.params.get("window") or "")
@@ -85,6 +88,20 @@ def empty_filter(results: Sequence[QueryResult]) -> Optional[str]:
         return None
     filters = ", ".join(f"'{v}'" for v in dict.fromkeys(r.filters.values()))
     return prompt("not_found_empty_filter").strip().format(source=_label(r.database), filters=filters)
+
+
+_DB_ERROR = re.compile(r"\('[0-9A-Z]{5}'|timeout|timed out", re.I)
+
+
+def failed(results: Sequence[QueryResult]) -> Optional[str]:
+    """Phase Q: the query itself failed (a timeout, a type conversion) rather than returning nothing. Say what
+    happened in one sentence and point at Refresh data, instead of searching the documents for production rows
+    they do not hold. A guard refusal is not a database failure: None, so the agent's `where:` sentence speaks."""
+    from ..data.errors import friendly_db
+    r = next((x for x in results if x.error and not x.denied and _DB_ERROR.search(x.error)), None)
+    if r is None:
+        return None
+    return prompt("not_found_db_error").strip().format(reason=friendly_db(r.error), source=_label(r.database))
 
 
 def general(question: str) -> str:

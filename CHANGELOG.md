@@ -8,6 +8,17 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Fixed
+- **A database query that fails no longer searches the documents and calls the model** (Phase Q, Q5). An errored
+  result was dropped before the "did a fixed tool run?" check, so a query that timed out or hit a type error was
+  followed by a 10-second document search and an answer-model call that could only say "System doesn't have the
+  data." — 45 seconds for the TAL dashboard question on 11 Oct, 26 for the line-2102 one. The reply now names
+  what happened ("The query took longer than the time allowed. The records may still be in VistaQ; press Refresh
+  data to try again."), keeps the Refresh button and the suggested questions, and costs no model call. A question
+  that names no database record (a policy count, for instance) still falls back to the documents as before.
+- A DISTINCT lookup run by the empty-result repair could be reported as the user's own query ("I checked
+  PlanningTNA and found no matching records"); it is evidence about the data, not the question asked.
+
 ### Changed
 - **The conversation is centred on every screen** (Phase Q, U3). The thread and the Sources rail are one block
   capped at 1,120 px and centred in the page, instead of spreading from the sidebar to the window edge: on a

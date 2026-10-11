@@ -168,14 +168,31 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         # a failed query is not a source: never let the model cite an error message
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
         denied = any(x.denied for x in results)
+        # Read before the errored results are dropped (Phase Q). A fixed tool that timed out is still proof
+        # that this is a database question — it matched a tool's pattern — and the error itself is what the
+        # user needs to be told. Until 2026-10-11 `_tool_answered` was evaluated after the drop, so a 30 s
+        # timeout was followed by a 10 s document search and an answer-model call, 45 s to say nothing.
+        failed = [x for x in results if x.error and not x.denied]
+        tool_ran = _tool_answered(results)
+        checked = any(x.checked for x in results)
         results = [x for x in results if not x.error]
         if r == "data" and denied and not _has_rows(results):
             # The question names a factory outside the user's scope: say so now. A document search and a
             # model call cannot answer it, and would only hide the reason behind a generic not-found.
             out.text, out.not_found = nf + " " + prompt("scope_denied").strip(), True
             yield Final(_log(out, user, scope)); return
-        if r == "data" and not _has_rows(results) and not chunks and not _tool_answered(results) \
-                and not any(x.checked for x in results):
+        if r == "data" and failed and not _has_rows(results) \
+                and (tool_ran or checked or _names_a_record(q)):
+            # The query failed (a timeout, a type conversion). The PDFs hold no production rows, so a document
+            # search and an answer-model call would only hide the reason behind a generic not-found: say what
+            # happened and offer Refresh data. `error_kind` stays empty on purpose — the UI renders an
+            # error_kind turn as a warning box without the action row, which would take Refresh and the chips
+            # away (app.py answer_body).
+            out.text = nf + " " + (not_found.failed(failed) or not_found.general(q))
+            out.not_found = True
+            out.follow_ups = not_found.suggestions(q, results)
+            yield Final(_log(out, user, scope)); return
+        if r == "data" and not _has_rows(results) and not chunks and not tool_ran and not checked:
             # data route found nothing usable: fall back to documents once (a PDF may hold it). Not when a fixed
             # tool or a pasted statement ran: the question is a data question by construction (it matched a tool's
             # pattern), and the PDFs hold no stock balances — the search cost 54 s on this VM for "item 9999999"
@@ -235,6 +252,17 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _names_a_record(question: str) -> bool:
+    """Does the question name something only a database holds — a line, a unit, a style, an export order, a PO
+    or a file (data/entities.py)? A factory alone does not: "What is the TAL holiday policy?" is a document
+    question. Used to decide whether a failed query may still be rescued by the documents."""
+    try:
+        from ..data.entities import question_entities      # lazy: the data package pulls in the SQL libraries
+        return question_entities(question).names_a_record
+    except Exception:
+        return False
 
 
 def _tool_answered(results: list[QueryResult]) -> bool:
