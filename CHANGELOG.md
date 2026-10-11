@@ -8,6 +8,14 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Changed
+- **The conversation is centred on every screen** (Phase Q, U3). The thread and the Sources rail are one block
+  capped at 1,120 px and centred in the page, instead of spreading from the sidebar to the window edge: on a
+  1,920 px screen the margins are now equal (250 px each side) and the thread keeps the designer's proportions
+  (thread 776 px, rail 280 px). Below about 1,100 px the rail drops under the thread and spans its full width;
+  on a phone the page keeps its 16 px gutters, the user bubble its 300 px cap, and nothing scrolls sideways.
+  Stylesheet only — no change to any answer, table or button.
+
 ### Added
 - **Phase P3 — questions that span two databases.** Every combination is decided in `docs/DATA_ACCESS.md` §5a:
   the 18 catalogs on the production instance, the two VistaQ catalogs on their own host. Three mechanisms:

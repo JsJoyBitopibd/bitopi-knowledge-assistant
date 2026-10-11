@@ -162,12 +162,18 @@
 .ka-head span { font-size: 13px; color: var(--muted); }
 .st-key-convo_head button { min-height: 40px; border-color: var(--line-strong); }
 
-/* thread + Sources rail: side by side while both fit (thread 400 px, rail 280 px), else the rail drops below */
+/* thread + Sources rail (screen 2). The pair is centred as one block on wide screens — the designer's mock is
+   1440 px wide and sets no max-width, so without this the thread spreads to the window edge and the conversation
+   sits left of centre. 1120 px = thread ~760 + gap + rail ~300, the same optical centre as the 1040 px home.
+   Side by side while both fit; below ~1100 px Streamlit wraps the rail under the thread (design 03 is the phone). */
+.st-key-convo_body { max-width: 1120px; margin: 0 auto; }
 .st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
 .st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
-  flex: 2.6 1 0 !important; width: auto !important; min-width: min(400px, 100%); }
+  flex: 999 1 520px !important; width: auto !important; min-width: min(520px, 100%); }
 .st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
-  flex: 1 1 0 !important; width: auto !important; min-width: min(280px, 100%); }
+  flex: 1 1 280px !important; width: auto !important; min-width: min(280px, 100%); max-width: 360px; }
+/* the header band stays full-bleed; only its content lines up with the thread below it */
+.st-key-convo_head > [data-testid="stLayoutWrapper"] { max-width: 1120px; margin: 0 auto; }
 
 .ka-user { display: flex; justify-content: flex-end; }
 .ka-user-bubble { max-width: 560px; padding: 14px 18px; border-radius: 14px 14px 4px 14px; background: var(--side);
@@ -263,9 +269,16 @@ th[aria-sort] .ka-sort { color: var(--ink); }
   font-size: 12px; color: var(--ink-2); }
 
 /* ── narrow windows: the rail drops under the thread (Streamlit stacks the columns) ─────────────────────── */
+@media (max-width: 1100px) {
+  /* wrapped under the thread: the rail is a full-width band, not a 360 px column stranded on the left */
+  .st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+    max-width: none; }
+}
 @media (max-width: 640px) {
   [data-testid="stMainBlockContainer"] { padding: 3rem 1rem 2rem; }
   .st-key-convo_head { margin: -0.5rem -1rem 0.5rem; padding: 12px 1rem; width: calc(100% + 2rem); }
+  .st-key-convo_body, .st-key-convo_head > [data-testid="stLayoutWrapper"] { max-width: none; }
+  .ka-user-bubble { max-width: 300px; }          /* design screen 03 (mobile chat) */
   .ka-greeting h1 { font-size: 28px; }
   .ka-kpi-value { font-size: 36px; }
 }
