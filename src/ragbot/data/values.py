@@ -244,7 +244,7 @@ def resolve(question: str, scope: Scope, entity: str, entries: Optional[list[Val
 
 
 def known_values_lines(question: str, scope: Scope, catalogs: list[str], limit: int = 10,
-                       entries: Optional[list[ValueEntry]] = None) -> list[str]:
+                       entries: Optional[list[ValueEntry]] = None, with_company: Optional[bool] = None) -> list[str]:
     """The 'Known values' lines for the SQL prompt: the question's words that are recorded names in the
     catalogs shown, with the column to filter on — never more than `limit`, nothing the user may not see."""
     out: list[str] = []
@@ -259,7 +259,9 @@ def known_values_lines(question: str, scope: Scope, catalogs: list[str], limit: 
         out.append(line)
         if len(out) >= limit:
             break
-    company = company_from_question(question, load_entities())
+    # Phase Q: only where a shown catalog has a company column. "TAL" is also company 06's short name, so every
+    # VistaQ or planning question used to carry a pointless "CompanyID '06' (TARASIMA APPARELS LTD.)" line.
+    company = company_from_question(question, load_entities()) if with_company is not False else None
     if company is not None and len(out) < limit:
         out.append(f"the company named in the question = CompanyID '{company.code}' ({company.name})")
     return out

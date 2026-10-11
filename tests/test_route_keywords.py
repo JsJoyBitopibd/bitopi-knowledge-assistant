@@ -54,3 +54,27 @@ def test_generic_words_and_statements_still_ask_the_model(cats, monkeypatch):
     monkeypatch.setattr(router, "get_small_chat", lambda: small)
     assert router.route("List all file") == "data" and small.calls == 1        # 'file' is too generic to decide
     assert router.route("Tell me about vouchers") == "data" and small.calls == 2   # no count/list cue
+
+
+
+
+def test_a_named_line_or_a_running_question_is_data_without_the_model(cats, monkeypatch):
+    """Phase Q: no PDF records which style a sewing line runs today, so these need no routing call."""
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    for q in ["What style is running on TAL line 2102?", "DHU of line 2322 yesterday",
+              "output of unit 03 today", "which style is running on line 2102"]:
+        assert router.route(q) == "data", q
+
+
+def test_a_document_noun_still_wins_over_a_line_number(cats, monkeypatch):
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    assert router.route("Which SOP covers line 2102 balancing?") == "documents"
+    assert router.route("What is the TAL holiday policy?") == "documents"
+
+
+def test_a_factory_with_database_vocabulary_is_data_but_a_factory_alone_asks_the_model(cats, monkeypatch):
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    assert router.route("TAL stock of fabric roll") == "data"
+    small = SaysData()
+    monkeypatch.setattr(router, "get_small_chat", lambda: small)
+    assert router.route("Tell me about TAL") == "data" and small.calls == 1

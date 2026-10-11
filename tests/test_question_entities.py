@@ -71,3 +71,34 @@ def test_a_factory_alone_is_not_a_record_so_a_policy_question_stays_a_policy_que
 
 def test_two_lines_are_both_read():
     assert _q("style running on lines 2102 and 2103").lines == ("2102", "2103")
+
+
+# ---- what the SQL model is told about those records ---------------------------------------------------------
+def _cat(name, views):
+    from ragbot.data.catalog import Catalog, View
+    return Catalog(database=name, dialect="tsql", connection_env="X", rules=[],
+                   views=[View(name=v, grain="", description="", key_columns=[], columns=cols)
+                          for v, cols in views.items()])
+
+
+def test_entity_lines_name_the_column_of_each_shown_view():
+    from ragbot.data.entities import entity_lines
+    cats = [_cat("VistaQ_Default_RHL", {"rag.vw_PlanDay": {"Factory": "", "Line": "", "Style": ""},
+                                        "rag.vw_PlanQualityDay": {"Factory": "", "Line": ""}}),
+            _cat("PlanningTNA", {"rag.vw_LineDailyOutput": {"Factory": "", "LineNumber": ""}})]
+    lines = entity_lines("What style is running on TAL line 2102?", cats)
+    joined = "\n".join(lines)
+    assert "line '2102' = Line in rag.vw_PlanDay, rag.vw_PlanQualityDay; LineNumber in rag.vw_LineDailyOutput" in joined
+    assert "factory 'TAL' = Factory in rag.vw_PlanDay" in joined
+
+
+def test_an_entity_with_no_column_in_the_views_says_so():
+    from ragbot.data.entities import entity_lines
+    lines = entity_lines("DHU of line 2102", [_cat("X", {"rag.vw_Q": {"Factory": "", "Defect": ""}})])
+    assert any("no column of the views shown" in ln for ln in lines)
+
+
+def test_the_company_line_is_only_for_catalogs_that_have_a_company_column():
+    from ragbot.data.entities import has_company_column
+    assert not has_company_column([_cat("VistaQ_Default_RHL", {"rag.vw_PlanDay": {"Factory": "", "Line": ""}})])
+    assert has_company_column([_cat("Inventory", {"rag.vw_StockBalance": {"CompanyID": "", "ItemCode": ""}})])

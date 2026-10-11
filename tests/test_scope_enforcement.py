@@ -251,3 +251,45 @@ def test_a_denied_question_says_not_found_and_why(monkeypatch):
     monkeypatch.setattr(orch, "_log", lambda a, user, scope=None: a)
     a = orch.answer("How many RHL orders ship next week?", scope=TAL)
     assert a.not_found and a.text.startswith("System doesn't have the data.") and "access" in a.text
+
+
+def test_a_question_naming_only_another_factory_is_denied_before_any_query(monkeypatch):
+    """Phase Q: on 11 Oct a TAL question asked with the Factory pill on BGL ran two SQL calls, a document
+    search and an answer call to say nothing. A fixed tool already refused such a question; generated SQL now
+    does too, before anything is read."""
+    monkeypatch.setattr(tools, "generate_and_run", lambda *a, **k: pytest.fail("nothing may be queried"))
+    monkeypatch.setattr(tools, "cached_run", lambda *a, **k: pytest.fail("nothing may be read"))
+    monkeypatch.setattr(tools, "_query_vector", lambda q: pytest.fail("no embedding for a refused question"))
+    out = tools.answer_from_data("What style is running on RHL line 2102?",
+                                 scope=Scope(factories=frozenset({"TAL"})))
+    assert len(out) == 1 and out[0].denied and "RHL" in out[0].error
+
+
+def _no_generation(monkeypatch, seen):
+    """Stop before the SQL model: no embedder (it loads 2 GB), no catalog ranking, no generation."""
+    monkeypatch.setattr(tools, "match_fixed_tool", lambda q, t: None)
+    monkeypatch.setattr(tools, "_query_vector", lambda q: None)
+    monkeypatch.setattr(tools, "pick_catalogs", lambda q, c, v=None, k=None: {})
+    monkeypatch.setattr(tools, "generate_and_run", lambda q, *a, **k: seen.append(q) or _ok())
+
+
+def test_an_order_code_or_a_code_less_company_never_denies(monkeypatch):
+    seen = []
+    _no_generation(monkeypatch, seen)
+    for q in ["Show the DHU of EO TAL-26-1985-1 this week", "how much grease is left in the misami store"]:
+        out = tools.answer_from_data(q, scope=Scope(factories=frozenset({"RHL"})))
+        assert not out[0].denied, q
+    assert len(seen) == 2
+
+
+def test_a_question_naming_two_factories_one_of_them_mine_still_runs(monkeypatch):
+    seen = []
+    _no_generation(monkeypatch, seen)
+    out = tools.answer_from_data("compare TAL and RHL line 2102 today", scope=Scope(factories=frozenset({"TAL"})))
+    assert not out[0].denied and seen
+
+
+def _ok():
+    from ragbot.models import QueryResult
+    return QueryResult(database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1",
+                       columns=["n"], rows=[[1]])

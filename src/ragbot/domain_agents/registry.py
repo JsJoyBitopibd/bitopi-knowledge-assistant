@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import yaml
 
@@ -87,15 +87,25 @@ def keyword_hits(question: str, agent: Agent) -> int:
 
 
 def pick_agent(question: str, tool: Optional[dict[str, Any]] = None,
-               agents: Optional[dict[str, Agent]] = None) -> Optional[Agent]:
+               agents: Optional[dict[str, Agent]] = None,
+               prefer_catalogs: Sequence[str] = ()) -> Optional[Agent]:
     """The agent for a data question, without a model call: the fixed tool's `agent:` when a tool
-    matched, else the single agent whose keywords the question mentions most (None on a tie or none)."""
+    matched, else the single agent whose keywords the question mentions most (None on a tie or none).
+
+    `prefer_catalogs` (Phase Q) breaks a tie by the databases the router picked for this question: "What style
+    is running on TAL line 2102?" gives production ("line") and order ("style") one hit each, and the router
+    picked VistaQ, which only production owns — so its charter reaches the prompt instead of none.
+    """
     agents = load_agents() if agents is None else agents
     if tool is not None and tool.get("agent") in agents:
         return agents[tool["agent"]]
     scored = sorted(((keyword_hits(question, a), a.name) for a in agents.values()), reverse=True)
-    if not scored or scored[0][0] == 0 or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+    if not scored or scored[0][0] == 0:
         return None
+    if len(scored) > 1 and scored[1][0] == scored[0][0]:
+        tied = [agents[n] for hits, n in scored if hits == scored[0][0]]
+        owning = [a for a in tied if set(a.catalogs) & set(prefer_catalogs)]
+        return owning[0] if len(owning) == 1 else None
     return agents[scored[0][1]]
 
 

@@ -89,3 +89,13 @@ def test_the_running_style_question_picks_vistaq_and_order_questions_still_pick_
         pytest.skip("the real catalogs are not loaded here")
     assert evidence("What style is running on TAL line 2102?", cats)[0].database == "VistaQ_Default_RHL"
     assert evidence("Which TAL orders have a PCD next week?", cats)[0].database == "BitopiSplint"
+
+
+def test_a_question_that_also_asks_for_a_figure_goes_to_the_model():
+    """The plan tools return the style and its buyer. A question that also wants output, efficiency or a
+    quality rate is answered by the model over the same views, not half-answered here."""
+    for q in ["which styles ran on TAL line 2102 last week and how many pieces were output",
+              "what style is running on line 2102 and its efficiency today",
+              "which lines are running style 71245 and their output today"]:
+        name, _ = _match(q)
+        assert name not in ("running_style_by_line", "lines_running_style"), (q, name)

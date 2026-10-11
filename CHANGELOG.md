@@ -16,6 +16,16 @@ each phase is in `docs/ROADMAP.md`.
   what happened ("The query took longer than the time allowed. The records may still be in VistaQ; press Refresh
   data to try again."), keeps the Refresh button and the suggested questions, and costs no model call. A question
   that names no database record (a policy count, for instance) still falls back to the documents as before.
+- **The assistant reads the records a question names** (Phase Q, Q1/Q6). One parser now finds the factory, line,
+  unit, style, export order, PO, file and company in a question, with no AI call: "TAL" and "tarasima" are the
+  same factory, "TAL-26-1985-1" is an export order and not the TAL factory, and "line 2102", "line no. 2102",
+  "L-2102" and "2102 line" are all line 2102. The built-in answers take those as parameters, the SQL prompt is
+  told which column of each view holds them (and that a line number is text), a question naming only factories
+  the user may not see is refused before anything is read — generated SQL used to come back silently empty, as
+  it did on 11 Oct with the Factory pill on BGL — and a question with a line or unit number no longer pays for
+  a routing call. A keyword tie between two agents is broken by the databases the router picked.
+- The "Known values" company line is left out where no view in the shown databases has a company column: every
+  TAL question used to carry "CompanyID '06' (TARASIMA APPARELS LTD.)", which means nothing to VistaQ.
 - **"What style is running on TAL line 2102?" is answered from the production plan** (Phase Q, Q3), in a tenth of
   a second and with no AI call, as date, factory, line, buyer and style — the columns the question asks for.
   Every VistaQ answer used to hand any question naming a line number to the SQL model, which wrote `Line = 2102`

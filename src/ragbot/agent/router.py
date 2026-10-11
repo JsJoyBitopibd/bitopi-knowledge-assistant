@@ -48,6 +48,11 @@ _GENERIC = {"file", "unit", "size", "color", "colour", "ship", "line", "lines", 
 def _keyword_data(question: str) -> bool:
     if not _LIST_CUE.search(question):
         return False
+    return catalog_vocabulary_hit(question)
+
+
+def catalog_vocabulary_hit(question: str) -> bool:
+    """Does the question use a word one of the routable databases' catalogs claims (`keywords:`)?"""
     try:
         from ..data.catalog import load_catalogs   # lazy: the catalogs are optional for document-only pilots
         cats = load_catalogs()
@@ -65,6 +70,25 @@ def _keyword_data(question: str) -> bool:
     return False
 
 
+# Phase Q: a line or unit number, or "which style is running on …", is a database question whatever else the
+# sentence holds — no document in data/pdfs records which style a sewing line runs today. Document nouns still
+# win (they are checked first in route()). Deliberately narrow: "style" or "buyer" alone is not a cue.
+_LINE_CUE = re.compile(r"\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|\bL-\d{2,4}\b|\b\d{3,4}\s+lines?\b"
+                       r"|\bunits?\s*(?:no\.?|#)?\s*[-:]?\s*\d{1,2}\b", re.I)
+_RUNNING_CUE = re.compile(r"\b(?:what|which|whose)\b.{0,40}\b(?:styles?|buyers?|orders?)\b.{0,40}\brunning\b"
+                          r"|\brunning\b.{0,20}\b(?:on|in|at)\b.{0,20}\blines?\b", re.I)
+
+
+def _factory_with_vocabulary(question: str) -> bool:
+    """A factory code plus a word one of the databases owns ("TAL DHU today"). A factory alone is not a data
+    question: "What is the TAL holiday policy?" is answered from a PDF."""
+    try:
+        from ..data.entities import question_entities
+        return bool(question_entities(question).factories) and catalog_vocabulary_hit(question)
+    except Exception:
+        return False
+
+
 def route(question: str, user: str = "") -> str:
     """Cheap regex first for the obvious cases; small model only when the signals are mixed or absent."""
     if _WRITE.search(question):
@@ -79,6 +103,9 @@ def route(question: str, user: str = "") -> str:
         return "data"
     if p and not d:
         return "documents"
+    if not p and (_LINE_CUE.search(question) or _RUNNING_CUE.search(question)
+                  or _factory_with_vocabulary(question)):
+        return "data"            # Phase Q: a named line or "which style is running" needs no routing call
     if _keyword_data(question):
         return "data"
     max_tokens = int(settings().get("llm.max_tokens_route", 64))

@@ -301,8 +301,11 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             continue
         if any(not re.search(r, question) for r in tool.get("requires", [])):
             continue
-        if tool.get("unless") and re.search(tool["unless"], question):
-            continue      # a qualifier the tool's SQL cannot apply (a stage, a line, a PO …): the model writes it
+        # a qualifier the tool's SQL cannot apply (a stage, a PO, a figure it does not return): the model writes
+        # it. One pattern or a list of them; any match skips the tool.
+        skip = tool.get("unless")
+        if skip and any(re.search(p, question) for p in ([skip] if isinstance(skip, str) else skip)):
+            continue
         params: dict[str, Any] = {}
         for name, spec in tool.get("params", {}).items():
             if spec.get("type") == "group_by":
@@ -753,11 +756,21 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
     values_text = "(none)"
     if s.get("data.values.enabled", True):
         try:
+            from .entities import has_company_column
             from .values import known_values_lines
-            lines = known_values_lines(question, scope, list(cats))
+            lines = known_values_lines(question, scope, list(cats),
+                                       with_company=has_company_column(cats.values()))
             values_text = "\n".join(f"- {ln}" for ln in lines) if lines else "(none)"
         except Exception:
             values_text = "(none)"
+    # Phase Q: the records the question names and the column of the shown views that holds each, with its kind
+    entities_text = "(none)"
+    try:
+        from .entities import entity_lines
+        found = entity_lines(question, list(cats.values()))
+        entities_text = "\n".join(f"- {ln}" for ln in found) if found else "(none)"
+    except Exception:
+        entities_text = "(none)"
     # P3: when the picked catalogs share one SQL Server instance and the owner turned it on, a statement may read a
     # sibling database's listed tables as Database.schema.table (the guard checks each against its own catalog)
     cross_rule = "Never with a database prefix."
@@ -777,6 +790,7 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
               .replace("{catalogs}", catalogs_text)
               .replace("{tables}", tables_text or "(none selected for this question)")
               .replace("{values}", "Known values (recorded spellings of words in the question):\n" + values_text)
+              .replace("{entities}", "Records the question names (filter on these columns):\n" + entities_text)
               .replace("{today}", date.today().isoformat()))
     messages = [{"role": "user", "content": question}]
     fallback = _pick_catalog(question, cats)
@@ -982,6 +996,15 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
             return []
         if _STATEMENT.search(question):
             return [run_pasted(question, cats, user, refresh, scope=scope)]
+        # Phase Q: a question that names only factories this user may not see is refused here, for every data
+        # path. A fixed tool already did this (run_fixed_tool); model-written SQL just came back with no rows,
+        # so on 11 Oct a TAL question asked with the Factory pill on BGL spent two SQL calls, a document search
+        # and an answer call to say nothing. A mixed question ("TAL and RHL") still runs, filtered by the views.
+        from .entities import question_entities
+        named = question_entities(question).factories
+        if named and not scope.all_factories and not any(scope.allows_factory(f) for f in named):
+            return [QueryResult(database="", engine="sqlserver", views=[], sql="", columns=[], rows=[],
+                                denied=True, error=f"outside the user's scope: factory {', '.join(named)}")]
         hit = match_fixed_tool(question, load_fixed_tools())
         if hit:
             tool, params = hit
@@ -991,11 +1014,12 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
                 result.agent = a.name if a else ""
                 extra = run_companion(tool, result, cats, user, refresh, scope=scope)
                 return [result] + ([extra] if extra is not None else [])
-        agent = pick_agent(question)
         with trace.span("data.embed"):
             qvec = _query_vector(question)
         with trace.span("data.pick"):
             picked = pick_catalogs(question, cats, qvec)
+            # the catalogs are picked first so a keyword tie between two agents can be broken by them (Phase Q)
+            agent = pick_agent(question, prefer_catalogs=list(picked))
             if agent is not None:
                 picked = _with_agent_catalog(question, picked, cats, agent, qvec)
         r = generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec, agent=agent.name if agent else "")

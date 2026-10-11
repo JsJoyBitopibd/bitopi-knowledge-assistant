@@ -36,3 +36,7 @@
 {"id": "s36", "as": "tal", "kind": "data", "q": "Which stores hold item 1178108?", "subset_of_all": true}
 {"id": "s37", "as": "all", "kind": "data", "q": "please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami", "expect_rows": true, "control": true}
 {"id": "s38", "as": "tal", "kind": "data", "q": "GRN ids of item 1178108 for company 02 with the company name from the system manager", "expect_no_rows": true}
+{"id": "s39", "as": "tal", "kind": "data", "q": "What style is running on RHL line 2102?", "expect": {"denied": true}, "why": "Phase Q: a question naming only another factory is refused before any query, for generated SQL too"}
+{"id": "s40", "as": "rhl", "kind": "data", "q": "What style is running on TAL line 2102?", "expect": {"denied": true}, "why": "the mirror of s39"}
+{"id": "s41", "as": "tal", "kind": "data", "q": "Which style is running on line 2102 at Remi Holdings?", "expect": {"denied": true}, "why": "a company name with a factory code is that factory"}
+{"id": "s42", "as": "tal", "kind": "data", "q": "Line wise style of today", "expect": {"subset_of_all": true}, "why": "a TAL user sees only TAL's plans, never another factory's"}

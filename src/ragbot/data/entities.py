@@ -193,6 +193,56 @@ def _parse(question: str, codes: tuple[str, ...]) -> QuestionEntities:
         files=tuple(dict.fromkeys(files)), company=company)
 
 
+# Which curated-view column holds each kind of entity. A convention over the 30 views, not per-catalog config:
+# a view that breaks it simply gets no line (the model still has the view's own column descriptions).
+_ENTITY_COLUMNS: dict[str, re.Pattern] = {
+    "factory": re.compile(r"^factory(id)?$", re.I),
+    "unit": re.compile(r"^unit(name)?$", re.I),
+    "line": re.compile(r"^line(number|no|name)?$", re.I),
+    "style": re.compile(r"^style(number|no|code)?$", re.I),
+    "eo": re.compile(r"^exportorderid$", re.I),
+    "po": re.compile(r"^(po|pono|ponumber|exportpono)$", re.I),
+    "file": re.compile(r"^(fileno|filerefno|filerefid)$", re.I),
+    "company": re.compile(r"^company(id|name)?$", re.I),
+}
+
+
+def has_company_column(catalogs: Any) -> bool:
+    """Whether any of these catalogs' curated views carries a company column — the "Known values" company line
+    is noise for VistaQ or planning questions, where TAL is a factory and not company 06."""
+    return any(_ENTITY_COLUMNS["company"].match(c) for cat in catalogs for v in cat.views for c in v.columns)
+
+
+def entity_lines(question: str, catalogs: Any, limit: int = 8) -> list[str]:
+    """One line per entity the question names, saying which column of the views shown holds it and of what
+    kind, so the SQL model compares it correctly: "line '2102' = Line (text) in rag.vw_PlanDay, …"."""
+    ents = question_entities(question)
+    found = [("factory", ents.factories), ("line", ents.lines), ("unit", ents.units), ("style", ents.styles),
+             ("eo", ents.eos), ("po", ents.pos), ("file", ents.files)]
+    out: list[str] = []
+    for kind, values in found:
+        if not values:
+            continue
+        pat = _ENTITY_COLUMNS[kind]
+        by_column: dict[str, list[str]] = {}
+        for cat in catalogs:
+            for v in cat.views:
+                for col, _desc in v.columns.items():
+                    if pat.match(col):
+                        by_column.setdefault(col, [])
+                        if v.name not in by_column[col]:
+                            by_column[col].append(v.name)
+        value = ", ".join(f"'{x}'" for x in values)
+        if by_column:
+            where = "; ".join(f"{col} in {', '.join(views[:6])}" for col, views in by_column.items())
+            out.append(f"{kind} {value} = {where}")
+        else:
+            out.append(f"{kind} {value} = no column of the views shown; see the tables listed below")
+        if len(out) >= limit:
+            break
+    return out
+
+
 def question_entities(question: str, codes: Optional[list[str]] = None) -> QuestionEntities:
     """What this question names (factories, lines, units, styles, export orders, POs, files, a company).
     `codes` defaults to settings scope.factory_codes. Cached: every caller parses the same question."""

@@ -1097,7 +1097,12 @@
   description: The style (and its buyer) planned on one sewing line for a day, live from VistaQ's production plan — the owner's "which style is running on this line".
   answer_list: 'Style running on {factory_label} line {line} {window}, live from VistaQ ({n} plan(s))'
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|.*\bL-\d{2,4}\b|.*\b\d{3,4}\s+lines?\b)(?=.*\b(?:styles?|buyers?|orders?|running|runs?|ran|sewing|making|producing|planned|plan)\b)'
-  unless: &vq_unless_line '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b|\bhour(?:ly|s)?\b)'
+  # `unless:` may be one pattern or several; any match hands the question to the model. The second one here is
+  # a figure this tool does not return (output, efficiency, a quality rate): the question wants more than the
+  # plan's style and buyer, so the model writes it rather than this tool answering half of it.
+  unless:
+    - &vq_unless_line '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b|\bhour(?:ly|s)?\b)'
+    - &vq_unless_measure '(?i:\b(?:outputs?|produced|production|pieces|pcs|qty|quantity|efficiency|targets?|smv|manpower|wip|sah|man[\s-]?hours?|dhu|defects?|defective|rejects?|rejected|ftp|first[\s-]?pass|rectified|checked|inspected|cut|cutting)\b)'
   requires: ['(?i)\b(?:styles?|buyers?|orders?|running|runs?|ran|sewing|making|producing|planned|plan)\b']
   params:
     window: { from_group: 1, type: date_window, default: 'today' }
@@ -1163,7 +1168,7 @@
   description: The sewing lines a style (or a buyer) is planned on for a day, live from VistaQ's production plan.
   answer_list: 'Lines running {style_label} {buyer_label} {window}, live from VistaQ ({n} line(s))'
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:lines?|where)\b)(?=.*\b(?:running|runs?|ran|sewing|making|producing|planned)\b)(?=.*\bstyles?\s*(?:no\.?|number|#|code)?\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9/._-]*\d)'
-  unless: *vq_unless_line
+  unless: [*vq_unless_line, *vq_unless_measure]
   params:
     window: { from_group: 1, type: date_window, default: 'today' }
     factory: { type: factory, default: '' }

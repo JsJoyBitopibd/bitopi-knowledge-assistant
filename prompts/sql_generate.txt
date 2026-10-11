@@ -17,6 +17,8 @@ Choosing what to query:
 - Join only along a listed key, a listed "Joins:" line, or a "Likely joins" line.
 - When a "Known values" line gives the recorded spelling of a word in the question, filter on that recorded
   value and that column — never on the question's own spelling.
+- A "Records the question names" line says which column holds a factory, line, unit, style, order or file the
+  question names. A line or unit number is text: write Line = '2102', never Line = 2102.
 
 {agent}
 
@@ -25,5 +27,7 @@ Choosing what to query:
 {tables}
 
 {values}
+
+{entities}
 
 Today is {today}.

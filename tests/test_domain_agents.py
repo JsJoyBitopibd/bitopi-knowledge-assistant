@@ -195,3 +195,16 @@ def test_sql_prompt_carries_the_charter_only_with_an_agent():
     raw = prompt("sql_generate")
     assert "{agent}" in raw
     assert charter_text("") == ""   # no agent: the placeholder becomes an empty line
+
+
+def test_a_keyword_tie_is_broken_by_the_catalogs_the_router_picked():
+    """Phase Q: "What style is running on TAL line 2102?" gives production ("line") and order ("style") one hit
+    each. The router picked VistaQ, which only the production agent owns, so its charter reaches the prompt."""
+    from ragbot.domain_agents.registry import load_agents, pick_agent
+    agents = load_agents()
+    q = "What style is running on TAL line 2102?"
+    assert pick_agent(q, agents=agents) is None                       # a tie, as before
+    picked = pick_agent(q, agents=agents, prefer_catalogs=["VistaQ_Default_RHL", "PlanningTNA"])
+    assert picked is not None and picked.name == "production"
+    # a preference neither tied agent owns leaves the tie unbroken
+    assert pick_agent(q, agents=agents, prefer_catalogs=["HR"]) is None
