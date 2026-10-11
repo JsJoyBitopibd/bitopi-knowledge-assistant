@@ -180,6 +180,7 @@ rules:
   doesn't have the data."
 views:
   - name: rag.vw_LineDayQuality
+    column_kinds: { Factory: text, Unit: text, Line: text, InspectionDate: date }
     scope_column: Factory
     grain: one row per factory, sewing line and inspection day (all QC stages together)
     description: >
@@ -231,6 +232,7 @@ views:
       GROUP BY x.WorkspaceLineId, x.InspectionDate
 
   - name: rag.vw_QCDefect
+    column_kinds: { Factory: text, Unit: text, Line: text, DefectDate: date, Style: text, PO: text }
     scope_column: Factory
     grain: one row per defect found at a QC point
     description: >
@@ -269,6 +271,7 @@ views:
       LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
 
   - name: rag.vw_QCStageDay
+    column_kinds: { Factory: text, Unit: text, Line: text, InspectionDate: date }
     scope_column: Factory
     grain: one row per factory, line, inspection day and QC stage
     description: >
@@ -308,6 +311,7 @@ views:
       LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
 
   - name: rag.vw_CorrectiveAction
+    column_kinds: { Factory: text, Unit: text, Line: text, CAPDate: date, Deadline: date, Style: text }
     scope_column: Factory
     grain: one row per corrective action (CAPA) raised in VistaQ
     description: >
@@ -342,6 +346,7 @@ views:
       LEFT JOIN dbo.Defect df ON df.Id = ca.DefectId
 
   - name: rag.vw_CuttingDaily
+    column_kinds: { Factory: text, Unit: text, Line: text, CuttingDate: date, Style: text, PO: text }
     scope_column: Factory
     grain: one row per factory, line, day, buyer, style and PO cut
     description: >
@@ -374,6 +379,7 @@ views:
       LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
 
   - name: rag.vw_QCTarget
+    column_kinds: { Factory: text, EffectiveFrom: date }
     scope_column: Factory
     grain: one row per factory and target setting in VistaQ (the latest applies)
     description: >
@@ -394,6 +400,7 @@ views:
       WHERE f.WorkspaceLevel = 1 AND f.ShortName IS NOT NULL
   # ---- production (VistaQ's dashboard: planned, output, man hours, SAH, efficiency, WIP) ----
   - name: rag.vw_PlanDay
+    column_kinds: { Factory: text, Unit: text, Line: text, PlanDate: date, Style: text, StyleName: text, Color: text, FileNo: text, Combination: text }
     scope_column: Factory
     grain: one row per production plan and plan day (a line's style for that day)
     description: >
@@ -435,6 +442,7 @@ views:
       WHERE p.IsActive = 1
 
   - name: rag.vw_PlanOutputDay
+    column_kinds: { Factory: text, Unit: text, Line: text, OutputDate: date, Style: text, Combination: text }
     scope_column: Factory
     grain: one row per line, production plan and day with end-line output
     description: >
@@ -469,6 +477,7 @@ views:
       LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
 
   - name: rag.vw_LineDayManHours
+    column_kinds: { Factory: text, Unit: text, Line: text, WorkDate: date }
     scope_column: Factory
     grain: one row per line and working day
     description: >
@@ -527,6 +536,7 @@ views:
       GROUP BY x.WorkspaceLineId, x.WorkDate
 
   - name: rag.vw_CombinationFlowDay
+    column_kinds: { Factory: text, Line: text, Combination: text, FlowDate: date }
     scope_column: Factory
     grain: one row per plan combination, flow and day (cutting input or end-line output)
     description: >
@@ -565,6 +575,7 @@ views:
       LEFT JOIN dbo.Workspace f ON f.Id = u.ParentId
 
   - name: rag.vw_PlanQualityDay
+    column_kinds: { Factory: text, Unit: text, Line: text, InspectionDate: date, Style: text, Color: text, FileNo: text }
     scope_column: Factory
     grain: one row per factory, sewing line, inspection day and production plan (buyer, style, colour, file)
     description: >

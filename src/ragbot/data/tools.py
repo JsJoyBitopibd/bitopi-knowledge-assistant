@@ -659,6 +659,22 @@ def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope,
                  allowed_catalogs=allowed_catalogs)
 
 
+def _guard_and_fix(sql: str, cat: Catalog, max_rows: int, scope: Scope,
+                   siblings: Optional[dict[str, Catalog]] = None, *,
+                   mode: str = "known") -> tuple[str, list[str]]:
+    """Guard a model-written statement, then quote any bare number it compares to a text column (Phase Q,
+    data/typefix.py) and guard the result again — the fix only adds quotes, so it passes, and the guard is
+    never asked to trust text it has not seen."""
+    safe = _guard_for(sql, cat, max_rows, scope, siblings)
+    if not settings().get("data.typefix.enabled", True):
+        return safe, []
+    from . import typefix
+    fixed, notes = typefix.fix(safe, cat, mode=mode, siblings=siblings)
+    if not notes:
+        return safe, []
+    return _guard_for(fixed, cat, max_rows, scope, siblings), notes
+
+
 def _extract_params(sql: str, cat: Catalog) -> dict[str, Any]:
     """Resolve well-known date parameters; anything else must be a literal the model put in SQL."""
     today = date.today()
@@ -712,7 +728,7 @@ def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bo
     Raises GuardError / the database's error; a statement that reads no table is refused."""
     s = settings()
     siblings = siblings_of(cat, {c.database: c for c in (cats or {}).values()}) if cats else {}
-    safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope, siblings)
+    safe, _notes = _guard_and_fix(sql, cat, int(s["data.max_rows"]), scope, siblings)
     sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
     views += [n for n in _views_in(safe, cat, siblings) if not cat.view(n)]
     if not views:
@@ -819,7 +835,10 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
         siblings = siblings_of(cat, cats)        # same-server catalogs a three-part name may read (P3, opt-in)
         kind = "replay" if replay else ("retry" if attempt > (1 if cached else 0) else "generate")
         try:
-            safe = _guard_for(sql, cat, int(s["data.max_rows"]), scope, siblings)
+            safe, fixes = _guard_and_fix(sql, cat, int(s["data.max_rows"]), scope, siblings)
+            if fixes:
+                log_generation(kind="typefix", database_line=db_line, database_used=db_name,
+                               raw_reply="; ".join(fixes), **gen)
             sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
             views += [n for n in _views_in(safe, cat, siblings) if not cat.view(n)]   # raw tables, for the [D#] reference
             if not views:
@@ -832,9 +851,29 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                                    rows=[], error="the generated SQL reads no view or table (the model found none)",
                                    databases_considered=considered, agent=agent)
             params = _extract_params(safe, cat)
-            cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
-                                           display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
-                                           database=getattr(cat, "connection_database", None))
+            try:
+                cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
+                                               display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
+                                               database=getattr(cat, "connection_database", None))
+            except Exception as db_err:
+                # Phase Q: the statement compared a number to a column that holds text, and the server tried to
+                # cast the column. Quote the literals once more — this time on columns whose kind nothing
+                # records too — and run it again, with no model call. Only then is the model re-asked.
+                from . import typefix
+                if fixes or not typefix.is_conversion_error(str(db_err)):
+                    raise
+                safe2, fixes = _guard_and_fix(sql, cat, int(s["data.max_rows"]), scope, siblings, mode="aggressive")
+                if not fixes:
+                    raise
+                log_generation(kind="typefix", database_line=db_line, database_used=db_name,
+                               db_error=str(db_err)[:300], raw_reply="; ".join(fixes), **gen)
+                safe = safe2
+                sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
+                views += [n for n in _views_in(safe, cat, siblings) if not cat.view(n)]
+                params = _extract_params(safe, cat)
+                cols, rows, as_of = cached_run(cat.engine, sql_exec, params, conn_env=cat.connection_env,
+                                               display_sql=safe, user=user, refresh=refresh, scope_key=scope.key(),
+                                               database=getattr(cat, "connection_database", None))
             blank = is_blank_result(cols, rows)
             log_generation(kind=kind, database_line=db_line, database_used=db_name, fallback=bool(raw) and not db_line,
                            rows=0 if blank else len(rows), stop_reason=stop, raw_reply=raw or sql, **gen)
@@ -844,7 +883,7 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             if blank and not replay:
                 qr = _repair_blank(qr, question, cats, cat, raw or "", messages, system, chat, selected.get(db_name, []),
                                    scope=scope, user=user, refresh=refresh, started=t_start, considered=considered,
-                                   agent=agent)
+                                   agent=agent, extra_used=attempt)
                 blank = is_blank_result(qr.columns, qr.rows)
             if key is not None:
                 if replay and blank:
@@ -862,16 +901,20 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
             if replay:
                 _SQL.pop(key)             # a cached statement that no longer runs is dropped (schema change?)
                 continue                  # and the question is generated afresh
+            from . import typefix
+            kinds = typefix.kinds_line(sql, cat)
             messages += [{"role": "assistant", "content": raw},
-                         {"role": "user", "content": f"That query failed: {last_err}\n"
-                                                      "Return DATABASE: <name> on the first line, then the corrected SQL only."}]
+                         {"role": "user", "content": prompt("sql_retry_error")
+                             .replace("{error}", last_err)
+                             .replace("{kinds}", f"Column kinds of what the query read:\n{kinds}\n" if kinds else "")}]
     return QueryResult(database=fallback.database, engine=fallback.engine, views=[], sql="", columns=[], rows=[],
                        error=last_err, databases_considered=considered, agent=agent)
 
 
 def _repair_blank(qr: QueryResult, question: str, cats: dict[str, Catalog], cat: Catalog, raw: str,
                   messages: list[dict], system: str, chat: Any, shown_tables: list[str], *, scope: Scope, user: str,
-                  refresh: bool, started: float, considered: list[str], agent: str) -> QueryResult:
+                  refresh: bool, started: float, considered: list[str], agent: str,
+                  extra_used: int = 0) -> QueryResult:
     """P2.2: a model-written statement returned nothing — look the recorded values up, correct a misspelling, or
     re-ask once (data/empty_retry.py). The repaired result carries its lookups ([D2]…), the filters it tried and,
     on a correction, which literal became which recorded value. Off for the `both` route and by setting."""
@@ -898,7 +941,7 @@ def _repair_blank(qr: QueryResult, question: str, cats: dict[str, Catalog], cat:
     with trace.span("data.repair"):
         out = empty_retry.repair(question=question, cat=cat, scope_all=scope.all_factories, sql=qr.sql, result=qr,
                                  shown_tables=shown_tables, execute=executor(cat), ask=ask, started=started,
-                                 is_blank=lambda r: is_blank_result(r.columns, r.rows))
+                                 is_blank=lambda r: is_blank_result(r.columns, r.rows), extra_used=extra_used)
     result = out.result
     result.lookups = out.lookups
     if result.corrections:

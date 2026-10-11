@@ -93,6 +93,7 @@ rules:
 # factory daily summary, Feb 2026) have stopped.
 views:
 - name: rag.vw_LineDailyOutput
+  column_kinds: { Factory: text, Unit: text, LineNumber: text, Style: text, PONumber: text, ProductionDate: date }
   scope_column: Factory
   grain: one row per production day, line and style.
   description: >-

@@ -34,8 +34,9 @@ def offline(cats) -> int:
     for tool in tools:
         # a pattern that fails to compile breaks match_fixed_tool() for every question, not just
         # this tool's — re.search() is called unconditionally down the tool list.
+        unless = tool.get("unless")
         for key, pats in (("match", [tool.get("match")]), ("requires", tool.get("requires", [])),
-                          ("unless", [tool.get("unless")])):
+                          ("unless", [unless] if isinstance(unless, str) else (unless or []))):
             for pat in pats:
                 if not pat:
                     continue

@@ -16,6 +16,14 @@ each phase is in `docs/ROADMAP.md`.
   what happened ("The query took longer than the time allowed. The records may still be in VistaQ; press Refresh
   data to try again."), keeps the Refresh button and the suggested questions, and costs no model call. A question
   that names no database record (a policy count, for instance) still falls back to the documents as before.
+- **A number compared to a text column is quoted before the query runs** (Phase Q, Q2). Line, unit, style, item
+  and company codes are stored as text even when they look like numbers, and SQL Server answers
+  `Line = 2102` by converting the whole column, which fails on the first value that is not a number. Every
+  curated view can now declare what its columns hold, raw tables take it from the database's own types, and a
+  bare number compared to a text column is quoted before the statement is allowed to run. If the server still
+  reports a conversion error, the quoting is applied once more and the statement runs again — with no extra AI
+  call. Only then is the model asked, and it is now told what each column holds. The SQL retry and the
+  empty-result repair share one budget of two extra calls, as agreed, instead of two separate ones.
 - **The assistant reads the records a question names** (Phase Q, Q1/Q6). One parser now finds the factory, line,
   unit, style, export order, PO, file and company in a question, with no AI call: "TAL" and "tarasima" are the
   same factory, "TAL-26-1985-1" is an export order and not the TAL factory, and "line 2102", "line no. 2102",

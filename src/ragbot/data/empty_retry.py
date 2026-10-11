@@ -180,7 +180,7 @@ Executor = Callable[[str, str], QueryResult]
 
 def repair(*, question: str, cat: Catalog, scope_all: bool, sql: str, result: QueryResult, shown_tables: list[str],
            execute: Executor, ask: Callable[[str, int], tuple[str, Executor]],
-           started: float, is_blank: Callable[[QueryResult], bool]) -> Outcome:
+           started: float, is_blank: Callable[[QueryResult], bool], extra_used: int = 0) -> Outcome:
     """Try to turn a blank result into a rowed one within the bounds. `execute(sql, tool)` guards and runs a
     statement against the catalog the model first chose (raises on a guard or database error);
     `ask(instruction, rows_sent)` re-asks the model once with the conversation so far and returns the statement
@@ -197,7 +197,9 @@ def repair(*, question: str, cat: Catalog, scope_all: bool, sql: str, result: Qu
     result.checked = bool(shape.identifier_filters)
 
     def budget_left() -> bool:
-        return out.extra_calls < max_calls and (time.perf_counter() - started) < max_seconds
+        # Phase Q: the owner's cap is "at most 2 extra model calls" for the question, so a retry the SQL
+        # generator already spent (data.sql_retries) counts against the same budget, not a second one.
+        return out.extra_calls + extra_used < max_calls and (time.perf_counter() - started) < max_seconds
 
     candidates: dict[str, list[str]] = {}
     # (a) text literals: look the recorded values up, correct a misspelling without a model call

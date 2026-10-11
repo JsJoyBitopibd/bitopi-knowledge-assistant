@@ -31,6 +31,29 @@ from ..config import settings
 MAX_RENDERED_COLUMNS = 40
 
 
+# Phase Q. One vocabulary for what a column holds, so a statement can be checked before it runs
+# (data/typefix.py). Raw tables get theirs from the discovered SQL type; a curated view declares the ones that
+# matter in its YAML (`column_kinds:`) — a column whose values look like numbers but are stored as text.
+KINDS = ("text", "int", "decimal", "date", "datetime", "time", "bool", "binary")
+_SQL_TYPE_KIND = (
+    (("nvarchar", "varchar", "nchar", "char", "text", "ntext", "uniqueidentifier", "xml", "sysname"), "text"),
+    (("bigint", "smallint", "tinyint", "int"), "int"),
+    (("decimal", "numeric", "float", "real", "smallmoney", "money"), "decimal"),
+    (("datetimeoffset", "datetime2", "smalldatetime", "datetime", "timestamp"), "datetime"),
+    (("date",), "date"), (("time",), "time"), (("bit",), "bool"),
+    (("varbinary", "binary", "image"), "binary"),
+)
+
+
+def kind_of_sql_type(sql_type: str) -> str | None:
+    """'nvarchar(255)' -> 'text', 'int' -> 'int', 'datetime2' -> 'datetime'; None for anything unrecognised."""
+    t = (sql_type or "").split("(")[0].strip().lower()
+    for names, kind in _SQL_TYPE_KIND:
+        if t in names:
+            return kind
+    return None
+
+
 @dataclass
 class View:
     name: str
@@ -40,6 +63,7 @@ class View:
     columns: dict[str, str]
     definition: str | None = None  # T-SQL SELECT; excluded from render(); wrapped as CTE at execution
     scope_column: str | None = None  # column with the factory short name; per-user row scope filters on it
+    column_kinds: dict[str, str] = field(default_factory=dict)   # lower-case column -> KINDS (Phase Q)
 
 
 @dataclass
@@ -186,6 +210,29 @@ class Catalog:
         low = name.lower()
         return next((t for t in self.tables if t.name.lower() == low), None)
 
+    def column_kinds_of(self, obj: str) -> dict[str, str]:
+        """What each column of one view or table holds (Phase Q): a view's declared `column_kinds:`, or a
+        discovered table's columns mapped from their SQL types. {} when the object is unknown here."""
+        v = self.view(obj)
+        if v is not None:
+            return dict(v.column_kinds)
+        t = self.table(obj)
+        if t is None:
+            return {}
+        out = {}
+        for c in t.columns:
+            kind = kind_of_sql_type(str(c.get("type", "")))
+            if kind:
+                out[c["name"]] = kind
+        return out
+
+    def column_kind(self, obj: str, column: str) -> str | None:
+        """The kind of one column of one view or table, or None when nothing records it."""
+        if not obj or not column:
+            return None
+        low = column.lower()
+        return next((k for c, k in self.column_kinds_of(obj).items() if c.lower() == low), None)
+
     def render_selected(self, selected: Iterable[str], join_hints: Iterable[str] = ()) -> str:
         """The per-question part of the SQL prompt: the discovered tables a question selected (offered
         ones only) and likely join conditions. Kept apart from render() so the long static part of the
@@ -282,8 +329,14 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
             if scope and scope not in v.get("columns", {}):
                 # a scope filter on a column the view does not have would fail every restricted query
                 raise RuntimeError(f"{f.name} view {v['name']}: scope_column {scope!r} is not one of its columns")
+            kinds = {str(c): str(k).lower() for c, k in (v.get("column_kinds") or {}).items()}
+            for col, kind in kinds.items():
+                if col not in v.get("columns", {}):
+                    raise RuntimeError(f"{f.name} view {v['name']}: column_kinds names {col!r}, not one of its columns")
+                if kind not in KINDS:
+                    raise RuntimeError(f"{f.name} view {v['name']}: column_kinds {col}: {kind!r} is not one of {KINDS}")
             views.append(View(v["name"], v.get("grain", ""), v.get("description", ""), v.get("key_columns", []),
-                              v.get("columns", {}), definition=defn, scope_column=scope))
+                              v.get("columns", {}), definition=defn, scope_column=scope, column_kinds=kinds))
         hints = []
         for h in d.get("hints") or []:
             if len(str(h.get("target", "")).split(".")) != 3 or not h.get("column") or not h.get("tables"):

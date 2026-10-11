@@ -103,3 +103,56 @@ def test_schema_rag_off_shows_no_raw_tables(wired):
     chat, _ = wired(["DATABASE: Demo\nSELECT TOP (5) ExportOrderID FROM rag.vw_ExportOrder"], **{"data.schema_rag": False})
     tools.generate_and_run("How many suppliers are in the supplier data?", _cat(), scope=Scope.unrestricted())
     assert "=== Other tables in" not in chat.systems[0] and "(none selected for this question)" in chat.systems[0]
+
+
+# ---- Phase Q: typed literals on the generated path -----------------------------------------------------------
+def _typed_cat():
+    """A view that declares Line as text, and a raw table whose kind nothing records."""
+    from ragbot.data.catalog import Catalog, Table, View
+    plan = View("rag.vw_PlanDay", "one row per plan and day", "The plan.", ["Line"],
+                {"Factory": "", "Line": "", "Style": "", "PlanDate": "", "DayTarget": ""},
+                column_kinds={"Factory": "text", "Line": "text", "Style": "text", "PlanDate": "date",
+                              "DayTarget": "int"})
+    legacy = Table("dbo.Legacy", "table", 10, "", [], [{"name": "Note", "type": "sql_variant"}])
+    return {"Demo": Catalog("Demo", "tsql", "SQLSERVER_CONN_DEMO", ["Use TOP (n)."], [plan], tables=[legacy])}
+
+
+def test_a_declared_text_column_is_quoted_before_the_statement_ever_runs(wired):
+    """The 11 Oct failure, prevented: the model writes Line = 2102 and the server never sees it."""
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (10) Buyer, Style FROM rag.vw_PlanDay "
+                       "WHERE Factory = 'TAL' AND Line = 2102"])
+    r = tools.generate_and_run("What style is running on TAL line 2102?", _typed_cat(), scope=Scope.unrestricted())
+    assert r.error is None and len(ran) == 1 and len(chat.replies) == 0      # one statement, one model call
+    assert "Line = '2102'" in ran[0] and "Line = '2102'" in r.sql
+
+
+def test_a_conversion_error_is_repaired_once_with_no_model_call(wired, monkeypatch):
+    """When no kind is recorded, the server's 22018 is answered by quoting every unknown literal and running
+    again — still inside the first attempt, so the model is not asked a second time."""
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (10) Note FROM dbo.Legacy WHERE Note = 2102"])
+    calls = {"n": 0}
+
+    def flaky(engine, sql, params, **kw):
+        calls["n"] += 1
+        ran.append(sql)
+        if "Note = 2102" in sql:
+            raise Exception("DataError: ('22018', \"Conversion failed when converting the nvarchar value "
+                            "'Remi Holdings Ltd.' to data type int. (245)\")")
+        return ["Note"], [["ok"]], datetime.now()
+
+    monkeypatch.setattr(tools, "cached_run", flaky)
+    r = tools.generate_and_run("note 2102", _typed_cat(), scope=Scope.unrestricted())
+    assert r.error is None and r.rows == [["ok"]]
+    assert calls["n"] == 2 and len(chat.replies) == 0            # two statements, still one model call
+    assert "Note = '2102'" in r.sql
+
+
+def test_a_failure_that_is_not_a_conversion_still_reaches_the_model_with_the_column_kinds(wired, monkeypatch):
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (10) Style FROM rag.vw_PlanDay WHERE Line = '2102'",
+                       "DATABASE: Demo\nSELECT TOP (10) Style FROM rag.vw_PlanDay WHERE Line = '2102'"])
+    monkeypatch.setattr(tools, "cached_run",
+                        lambda *a, **k: (_ for _ in ()).throw(Exception("('HYT00', 'Query timeout expired (0)')")))
+    r = tools.generate_and_run("what style is on line 2102", _typed_cat(), scope=Scope.unrestricted())
+    assert r.error and "HYT00" in r.error
+    asked = [m["content"] for m in chat.messages_seen if m["role"] == "user"]
+    assert any("Column kinds of what the query read" in c and "Line (text)" in c for c in asked)
