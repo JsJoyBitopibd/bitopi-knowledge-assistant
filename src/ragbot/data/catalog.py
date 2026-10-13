@@ -27,6 +27,7 @@ from typing import Any, Iterable, Optional
 import yaml
 
 from ..config import settings
+from .sensitive import is_sensitive
 
 MAX_RENDERED_COLUMNS = 40
 
@@ -82,8 +83,12 @@ class Table:
     def sensitive_columns(self) -> set[str]:
         return {c["name"].lower() for c in self.columns if c.get("sensitive")}
 
-    def render(self) -> str:
-        """Compact prompt form: header, key/FK lines, then at most MAX_RENDERED_COLUMNS non-sensitive columns."""
+    def render(self, max_columns: int | None = None) -> str:
+        """Compact prompt form: header, key/FK lines, then at most `max_columns` non-sensitive columns
+        (default MAX_RENDERED_COLUMNS). A catalog may raise it (`max_rendered_columns:`, Phase R): once a
+        database's personal columns are open, a wide table like the 184-column monthly salary sheet would
+        otherwise lose the dimension columns a question needs."""
+        cap = max_columns or MAX_RENDERED_COLUMNS
         head = f"- {self.name}" + (f" ({self.rows:,} rows)" if self.rows is not None else f" ({self.kind})")
         if self.description:
             head += f" — {self.description}"
@@ -93,15 +98,15 @@ class Table:
         for fk in self.foreign_keys:
             out.append(f"    Joins: ({', '.join(fk['columns'])}) -> {fk['ref_table']}({', '.join(fk['ref_columns'])})")
         shown = [c for c in self.columns if not c.get("sensitive")]
-        for c in shown[:MAX_RENDERED_COLUMNS]:
+        for c in shown[:cap]:
             line = f"    {c['name']}: {c['type']}"
             if c.get("description"):
                 line += f" — {c['description']}"
             if c.get("samples"):
                 line += f" (values: {', '.join(c['samples'][:15])})"
             out.append(line)
-        if len(shown) > MAX_RENDERED_COLUMNS:
-            out.append(f"    … {len(shown) - MAX_RENDERED_COLUMNS} more columns not shown")
+        if len(shown) > cap:
+            out.append(f"    … {len(shown) - cap} more columns not shown")
         return "\n".join(out)
 
 
@@ -153,6 +158,17 @@ class Catalog:
     # check_catalog cover it) but never ranked for a question — a prototype or a retired copy whose keywords
     # would otherwise compete with the live system's.
     routable: bool = True
+    # Phase R. `sensitive_patterns:` replaces the global list (data/sensitive.py) for THIS database only.
+    # The HR databases are answered with `[password, pwd, token, secret]`: the owner opened their business and
+    # personal columns on 2026-10-13 and only credentials stay blocked. None = the global default, unchanged.
+    sensitive_patterns: tuple[str, ...] | None = None
+    max_rendered_columns: int | None = None   # Phase R: raise the 40-column prompt cap for a wide database
+
+    @property
+    def sensitive_pats(self) -> tuple[str, ...]:
+        """The patterns that decide what this database hides: its own, or the global default."""
+        from .sensitive import patterns
+        return self.sensitive_patterns if self.sensitive_patterns is not None else patterns()
 
     @property
     def display_name(self) -> str:
@@ -192,7 +208,7 @@ class Catalog:
         an empty base table (0 rows can answer nothing; views have no row count and stay).
         Memoised on the tables list: with twenty catalogs (~4,300 tables, ~25 patterns) this is read
         several times per question by the router, the guard and the schema index."""
-        stamp = (id(self.tables), len(self.tables), tuple(self.exclude_tables))
+        stamp = (id(self.tables), len(self.tables), tuple(self.exclude_tables), self.sensitive_patterns)
         memo = self.__dict__.get("_offered")
         if memo is None or memo[0] != stamp:
             offered = [t for t in self.tables if not t.sensitive and not self.excluded(t.name)
@@ -243,7 +259,7 @@ class Catalog:
             return ""
         out = [f"=== Other tables in {self.database} (raw tables: reference as schema.name; "
                f"prefer the rag.* views when they cover the question) ==="]
-        out += [t.render() for t in picked]
+        out += [t.render(self.max_rendered_columns) for t in picked]
         hints = list(join_hints)
         if hints:
             out.append("Likely joins (no declared foreign key):")
@@ -299,14 +315,29 @@ def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
     return dict(_load_catalogs(folder, catalog_stamp(folder)))   # copy: callers must not mutate the cached mapping
 
 
-def _load_discovered(folder: Path, database: str) -> list[Table]:
-    """config/catalog/discovered/<database>.json, or [] when discovery has not been run."""
+def _load_discovered(folder: Path, database: str, pats: tuple[str, ...] | None = None) -> list[Table]:
+    """config/catalog/discovered/<database>.json, or [] when discovery has not been run.
+
+    The JSON records what the GLOBAL rule says, decided once when discovery ran. A catalog that overrides the
+    rule (`sensitive_patterns:`, Phase R) has every table and column re-judged here, so the stored flags stay
+    truthful about the default while this database follows its own list — and a later discover_schema.py run
+    cannot silently re-close it. Everything downstream (offered_tables, Table.render, the schema index, the
+    router, the DENY generator) reads these flags, so nothing else has to know about the override.
+    """
     f = folder / "discovered" / f"{database}.json"
     if not f.exists():
         return []
     d = json.loads(f.read_text(encoding="utf-8"))
-    return [Table(t["name"], t.get("kind", "table"), t.get("rows"), t.get("description", ""), t.get("primary_key", []),
-                  t.get("columns", []), t.get("foreign_keys", []), bool(t.get("sensitive"))) for t in d.get("tables", [])]
+    out: list[Table] = []
+    for t in d.get("tables", []):
+        cols, sensitive = t.get("columns", []), bool(t.get("sensitive"))
+        if pats is not None:
+            name = t["name"].split(".")[-1]
+            sensitive = is_sensitive(name, pats)
+            cols = [{**c, "sensitive": is_sensitive(c.get("name", ""), pats)} for c in cols]
+        out.append(Table(t["name"], t.get("kind", "table"), t.get("rows"), t.get("description", ""),
+                         t.get("primary_key", []), cols, t.get("foreign_keys", []), sensitive))
+    return out
 
 
 @lru_cache(maxsize=4)
@@ -347,7 +378,15 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                                                  for v in synonyms.values()):
             raise RuntimeError(f"{f.name}: synonyms must map a phrase to a list of phrases")
         notes = {str(k).lower(): str(v).strip() for k, v in (d.get("table_notes") or {}).items()}
-        tables = _load_discovered(folder, d["database"])
+        # Phase R: this database's own sensitive-name list, if it declares one. Read explicitly and checked —
+        # an unknown key is silently ignored here, and a typo in this one would open a database by accident.
+        pats: tuple[str, ...] | None = None
+        if "sensitive_patterns" in d:
+            raw = d.get("sensitive_patterns")
+            if not isinstance(raw, list) or not raw or not all(isinstance(p, str) and p.strip() for p in raw):
+                raise RuntimeError(f"{f.name}: sensitive_patterns must be a non-empty list of words")
+            pats = tuple(p.strip().lower() for p in raw)
+        tables = _load_discovered(folder, d["database"], pats)
         for t in tables:
             if not t.description and t.name.lower() in notes:
                 t.description = notes[t.name.lower()]
@@ -361,5 +400,7 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                                       synonyms={str(k): [str(s) for s in v] for k, v in synonyms.items()},
                                       table_notes=notes,
                                       schema_rag_k=int(d["schema_rag_k"]) if d.get("schema_rag_k") else None,
-                                      routable=bool(d.get("routable", True)))
+                                      routable=bool(d.get("routable", True)), sensitive_patterns=pats,
+                                      max_rendered_columns=int(d["max_rendered_columns"])
+                                      if d.get("max_rendered_columns") else None)
     return cats

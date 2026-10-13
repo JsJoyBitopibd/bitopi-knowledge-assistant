@@ -171,6 +171,118 @@ checks:
     fix: information; this table appears retired — the agent uses the VistaQ copy instead
     sql: SELECT MAX(HourlyPdate) AS last_date FROM dbo.tblHourlyLineWiseProductionDetail
 
+  # ---- HR (Phase R, 2026-10-13: the people databases were opened, and the first question asked of them —
+  # "how many are present today?" — turned out to have no answer because every attendance source has stopped)
+  - name: hrms_attendance_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 2
+    what: Newest working day in the HRMS day-status table (presence and absence)
+    fix: HR/IT restart the attendance load; until then presence is answered for the newest day in the table, with that date
+    sql: SELECT MAX(WorkDate) AS last_date FROM dbo.DaywisePayHour
+
+  - name: hrms_punches_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 2
+    what: Newest working day in the raw punch table behind the day status
+    fix: HR/IT; this stops on the same day as dbo.DaywisePayHour, so the break is upstream of both
+    sql: SELECT MAX(WorkDate) AS last_date FROM dbo.DailyAttendance
+
+  - name: hwatt_punches_fresh
+    agent: hr
+    database: HWATT
+    kind: freshness
+    max_age_days: 2
+    what: Newest card read in the HWATT attendance devices
+    fix: information; this device system appears retired, and its last month is partial
+    sql: SELECT MAX(CardTime) AS last_date FROM dbo.KQZ_Card
+
+  - name: hrms_overtime_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 2
+    what: Newest working day with overtime hours
+    fix: HR/IT; overtime is derived from attendance and stops with it
+    sql: SELECT MAX(WorkDate) AS last_date FROM dbo.DaywiseOTHour
+
+  - name: hrms_active_staff_without_attendance
+    agent: hr
+    database: Hrms5Misami
+    kind: share
+    max_share: 0.05
+    what: Active employees with no attendance row on the newest working day in the table
+    fix: HR; an active employee who never appears cannot be counted present or absent
+    sql: |
+      SELECT
+        SUM(CASE WHEN d.EmployeeCode IS NULL THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.tblEmployee e
+      LEFT JOIN dbo.DaywisePayHour d
+        ON d.EmployeeCode = e.EmployeeCode
+       AND d.WorkDate = (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour)
+      WHERE e.EmployeeStatus = 'Active'
+
+  - name: hrms_unknown_day_status
+    agent: hr
+    database: Hrms5Misami
+    kind: count
+    max: null
+    what: Attendance rows in the last 60 loaded days whose DayStatus is not one of the codes the HR agent knows
+    fix: information; a new code means prompts/agents/hr.txt and the Hrms5Misami table note must learn it, or presence is counted wrong
+    sql: |
+      SELECT COUNT(*) AS n
+      FROM dbo.DaywisePayHour
+      WHERE WorkDate >= DATEADD(day, -60, (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour))
+        AND DayStatus NOT IN ('P', 'L', 'PW', 'PH', 'LW', 'LH', 'A', 'LV', 'MLV', 'W', 'H')
+
+  - name: hrms_overtime_barely_recorded
+    agent: hr
+    database: Hrms5Misami
+    kind: share
+    max_share: 0.5
+    what: Employees with no overtime row in the last 365 loaded days, out of those who had one in 2019
+    fix: HR/payroll say where overtime is recorded now; a total from this table is six people, not the workforce
+    sql: |
+      SELECT
+        SUM(CASE WHEN r.EmployeeCode IS NULL THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM (SELECT DISTINCT EmployeeCode FROM dbo.DaywiseOTHour
+            WHERE WorkDate >= '2019-01-01' AND WorkDate < '2020-01-01') o
+      LEFT JOIN (SELECT DISTINCT EmployeeCode FROM dbo.DaywiseOTHour
+                 WHERE WorkDate >= DATEADD(day, -365, (SELECT MAX(WorkDate) FROM dbo.DaywiseOTHour))) r
+        ON r.EmployeeCode = o.EmployeeCode
+
+  - name: hrms_attendance_covers_the_group
+    agent: hr
+    database: Hrms5Misami
+    kind: share
+    max_share: 0.2
+    what: Active employees on the group list with no attendance row on the newest working day in the table
+    fix: HR/IT; attendance here is one instance's population, so "how many are present" cannot be answered for the group
+    sql: |
+      SELECT
+        SUM(CASE WHEN d.EmployeeCode IS NULL THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.vwAllCompanyEmployeeList g
+      LEFT JOIN dbo.DaywisePayHour d
+        ON d.EmployeeCode = g.EmployeeCode
+       AND d.WorkDate = (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour)
+      WHERE g.EmployeeStatus = 'Active'
+
+  - name: hrms_salary_month_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 70
+    what: Newest salary month on the monthly salary sheet (dated to the first of that month)
+    fix: HR/payroll; a sheet is written when payroll is processed, so this passes at about 40 days and flags once a whole month is missing
+    sql: |
+      SELECT MAX(DATEFROMPARTS(YearNo, MonthNo, 1)) AS last_date FROM dbo.MonthWiseSalaryInfo
+
   # ---- Other (seen while building)
   - name: visitor_dates_missing
     agent: other

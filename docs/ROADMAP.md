@@ -730,3 +730,69 @@ What was built, in the order it was built (`docs/PROGRESS.md` "Phase Q" carries 
 Deferred on purpose, with the reason recorded in PROGRESS: the static sqlglot type resolver and a `--live`
 types file for every catalog's views (the declared kinds cover the hot path, the aggressive pass covers the
 rest), and 2-hop join paths with `relations:` between curated views (the acceptance questions reach a tool).
+
+## Phase R — the people databases, opened (unreleased)
+
+Asked for on 2026-10-13: *"Give the full permission of HR database also. After successful implementation of
+the project, we will set rule, who will get which permission."* Confirmed with the owner: all three people
+databases (`HR`, `Hrms5Misami`, `HWATT`) and every business and personal column, with **only credentials
+blocked** (password, pwd, token, secret).
+
+Two facts shaped the design. The catalog trusts the `"sensitive": true` flag the discovery JSON stores, not
+the function that wrote it, so re-deriving the flags at load carries the catalog, the schema index, the
+router, the prompt and the DENY generator with it. And the guard has no database identity: its column check
+is one pass over every `exp.Column` with no way to attribute a column to a table, so an opened catalog's
+looser list would apply to a sibling database's columns too.
+
+- **R1 per-catalog sensitivity.** `sensitive_patterns:` in a catalog file opens that database and no other,
+  reusing the `is_sensitive(name, pats)` escape hatch that already existed and that no caller passed.
+  `_load_discovered` re-derives the table and column flags when, and only when, a catalog overrides them, so
+  a later `discover_schema.py` run cannot re-close them. `guard()` takes the list; `_guard_for` passes
+  `allowed_catalogs=None` whenever a catalog has its own list, so an opened database is neither read nor read
+  through a three-part name. The `offered_tables` memo key and the schema-index cache key both carry the
+  pattern tuple, or a running process would keep serving the closed index. `max_rendered_columns:` because the
+  40-column render cap becomes binding once columns open (`MonthWiseSalaryInfoExt` has 184).
+  Absent the key, the other sixteen databases behave bit for bit as before — the proof is that the seven
+  guard, catalog and index test files stay green **and unedited**.
+- **R2 the catalogs answer well.** Permission is not an answer: two of the four lost questions were never
+  blocked by sensitivity at all. Schema vectors rebuilt (opening changes `offered_tables`, so the saved `.npz`
+  no longer matches and is silently discarded). The pay vocabulary added by hand, because `gen_catalog.py`
+  strips sensitive words when it writes keywords — so the database holding salaries never claimed the word
+  "salary". `table_notes` naming the authoritative table where several compete. Ten more `exclude_tables` for
+  the scratch and dated salary copies that opening revealed. An `employee` entity kind in the Phase Q parser.
+  A new HR agent, because "manpower" was owned by production.
+- **R3 audit.** `logs/sql.csv` gains the result's column **names**. `auth.open_groups` is left alone: adding
+  `KA-Admins` there would make every anonymous visitor an administrator in the same change that opens payroll.
+- **R4** scope cases `s39`–`s42` fixed (a nested `expect:` the checker never read, so they asserted nothing),
+  five HR cases added, golden and latency cases for the acceptance questions.
+- **R5** the reader-grants file regenerated. `grants.py` has no REVOKE path, so re-running it does not remove
+  DENYs already applied: the runbook step is the rollback's `DROP USER` for the three databases first.
+
+### What the data turned out to be
+
+Opening the databases was the smaller half. Every acceptance question needed the catalog to say what the data
+actually is, and four findings are now written into `table_notes`, the agent charter and `config/data_quality.yaml`:
+
+| Finding | Why it matters |
+|---|---|
+| `DayStatus` holds codes (P, L, A, LV, W, H, and the PW/PH/LW/LH pairs), not words | `DayStatus = 'present'` matched no row; presence is `IN ('P','L','PW','PH','LW','LH')`, late included |
+| Attendance stops on 2026-09-09; punch devices in July 2026; a third copy in 2022 | "Today" has no answer. The reply gives the newest day the data holds and names that date |
+| The HRMS master holds 992 active people; the group list holds 17,972 | A headcount from the wrong one is out by a factor of eighteen, under a correct citation |
+| Overtime: 992 employees in 2019, six in 2026 | A monthly total reads like a company figure and is five people, so the answer states the count |
+
+### Deferred, with the reason — Phase S, the per-user rule
+
+**Not built now because it could not deny anything.** `Scope` carries no groups, so a catalog's
+`restricted_to: [KA-HR]` cannot be evaluated at either enforcement point, and `scope_for_groups` **unions**
+group scopes, so a `databases: [HR]` key would be cancelled by the same user's membership in `KA-Managers`.
+A gate that cannot deny is worse than none. Doing it properly means a `Scope.databases` field with
+**intersection** semantics — the one place the union rule must not apply — folded into `Scope.key()` so a
+cached result never crosses it, plus sign-in switched on (`auth.provider` is `none` today, which makes every
+visitor the same shared user with an all-factory scope). Until then, **anyone who can reach the app can ask
+for any employee's salary**; that is the direct consequence of the owner's decision and it is recorded here
+rather than worked around.
+
+Also deferred: re-running discovery for the other sixteen databases. The JSONs were written at 10:03 on
+2026-10-04 and the patterns gained `medical, tax, bonus, increment, pay` at 17:17 the same day, so those
+databases offer the model tables the guard then refuses. Read-only, about a minute, and it changes what they
+offer — so it is a decision, not a chore.

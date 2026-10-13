@@ -156,16 +156,25 @@ def test_real_fixed_tools_do_not_crash_the_matcher():
 
 
 def test_real_fixed_tools_round_trip():
-    """Every fixed tool's SQL must pass the guard and rewrite against its declared catalog."""
+    """Every fixed tool's SQL must pass the guard and rewrite against its declared catalog.
+
+    Through _guard_for, the same wrapper production uses: it carries the catalog's offered tables, its
+    big-table WHERE rule and (Phase R) its own sensitive list, so an HR tool reading dbo.DaywisePayHour
+    is judged by the rule that database actually runs under rather than by the global default.
+    And a tool may read a discovered table, which rewrite_virtual (rag.* views only) never reports —
+    _views_in finds it, exactly as run_fixed_tool does for the [D#] card.
+    """
     import yaml
     from pathlib import Path
     from ragbot.data.catalog import load_catalogs
+    from ragbot.data.tools import _guard_for, _views_in
 
     cats = load_catalogs()
     tools = yaml.safe_load(Path("config/fixed_tools.yaml").read_text(encoding="utf-8"))
     for tool in tools:
         cat = cats[tool["database"]]
-        safe = guard(tool["sql"], cat.view_names, cat.dialect, 200)
+        safe = _guard_for(tool["sql"], cat, 200, Scope.unrestricted())
         sql_exec, views = rewrite_virtual(safe, cat, scope=Scope.unrestricted())
-        assert views, f"{tool['name']}: no views detected"
+        views += [n for n in _views_in(safe, cat) if not cat.view(n)]
+        assert views, f"{tool['name']}: no view or table detected"
         assert sqlglot.parse_one(sql_exec, read="tsql" if cat.dialect == "tsql" else "mysql")

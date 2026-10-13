@@ -102,3 +102,24 @@ def test_the_company_line_is_only_for_catalogs_that_have_a_company_column():
     from ragbot.data.entities import has_company_column
     assert not has_company_column([_cat("VistaQ_Default_RHL", {"rag.vw_PlanDay": {"Factory": "", "Line": ""}})])
     assert has_company_column([_cat("Inventory", {"rag.vw_StockBalance": {"CompanyID": "", "ItemCode": ""}})])
+
+
+# ---- Phase R: an employee identifier ------------------------------------------------------------------------
+@pytest.mark.parametrize("text,code", [
+    ("can you tell me the salary of employee id \"250109595\"", "250109595"),
+    ("employee 1023 attendance last week", "1023"),
+    ("emp id 1023 overtime", "1023"),
+    ("employee code 250109595", "250109595"),
+    ("staff id 44120 leave balance", "44120"),
+])
+def test_an_employee_identifier_is_read(text, code):
+    e = _q(text)
+    assert e.employees == (code,) and "employee" in e.kinds()
+    assert e.names_a_record            # so the router and the orchestrator treat it as a database question
+
+
+def test_a_plain_word_employee_names_nobody():
+    assert _q("how many employees are there in total?").employees == ()
+    assert _q("which employees are in the ERP and IT department?").employees == ()
+    # a line number is still a line, not an employee
+    assert _q("What style is running on TAL line 2102?").employees == ()

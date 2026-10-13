@@ -1,4 +1,6 @@
 That query failed: {error}
 Correct it against the same database (keep the DATABASE: line) unless the error says a table or column does not exist.
 {kinds}Compare a text column to a quoted literal (Line = '2102'), and a date column to quoted dates.
+"Incorrect syntax near the keyword X" means X is a reserved word you used as an alias: put it in the
+dialect's quotes (AS [RowCount] in T-SQL, AS `RowCount` in MySQL) rather than dropping the column.
 Return DATABASE: <name> on the first line, then the corrected SQL only.

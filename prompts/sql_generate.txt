@@ -13,6 +13,9 @@ Choosing what to query:
 - Use an "Other tables" entry only when no view covers the question. Reference it as schema.name
   (e.g. dbo.Supplier). {cross_db_rule}
 - On raw tables never write SELECT * — name the columns you need. COUNT(*) is fine.
+- Put every alias you invent in the dialect's quotes: AS [RowCount] in T-SQL, AS `RowCount` in MySQL.
+  Unquoted RowCount, Rows, Percent, Plan, File, Level, Key, Option, Rule, User and Order are reserved
+  words and the whole statement fails on them.
 - A table shown with more than 1,000,000 rows must be filtered with a WHERE clause.
 - Join only along a listed key, a listed "Joins:" line, or a "Likely joins" line.
 - When a "Known values" line gives the recorded spelling of a word in the question, filter on that recorded

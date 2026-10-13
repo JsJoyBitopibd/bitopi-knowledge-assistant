@@ -42,7 +42,7 @@ def cached_run(engine: str, sql_exec: str, params: dict[str, Any], *, conn_env: 
         if hit is not None:
             cols, rows, as_of = hit
             _log_sql(engine, f"cache:{tool}", display_sql, sql_exec, params, len(rows), 0, user=user, scope=scope_key,
-                     database=database or "")
+                     database=database or "", columns=list(cols))
             return list(cols), [list(r) for r in rows], as_of
     kw: dict[str, Any] = {"conn_env": conn_env, "display_sql": display_sql, "tool": tool, "user": user,
                           "scope": scope_key}

@@ -1471,3 +1471,42 @@
       ItemCode, ItemName, UOM, ItemCategory, ItemGroup, ItemSubGroup, StoreGroup, ProductionItem, NonProductionItem, FixedAsset, Inactive, ReOrderLevel
     FROM rag.vw_Item
     WHERE ItemCode = @item
+
+# ---------------------------------------------------------------- HR attendance (Phase R, 2026-10-13)
+# "What is the number of manpower present today?" had no answer for two reasons, both fixed here.
+# (1) DayStatus is a column of CODES (P, L, A, LV, W, H ...), so the model's DayStatus = 'present' matched
+#     no row at all; before that the router sent the question to VistaQ's PLANNED line manpower, which is a
+#     plan and not who came to work.
+# (2) Attendance is not live. The newest WorkDate in dbo.DaywisePayHour is 2026-09-09 and the HWATT punch
+#     log stopped in July 2026 (checked 2026-10-13; both are watched by config/data_quality.yaml now).
+# So the tool answers for the newest day the table holds and puts that date in the first column, where the
+# reader and the citation check both see it. It never claims to be today.
+- name: manpower_present_latest
+  agent: hr
+  database: Hrms5Misami
+  example: 'What is the number of manpower present today?'
+  # No follow-up chips: the one row already answers present, absent, on leave and off day, so every chip
+  # would re-run the same statement for the same numbers. "How many are on leave?" reaches this tool too.
+  description: Present, absent, on-leave and off-day head counts for the newest day in the HRMS attendance table, with that date.
+  answer_list: 'Attendance for the newest day the HRMS holds, shown as WorkDate. Nothing is loaded for today, and this covers only the employees the HRMS runs payroll for, not the whole group.'
+  match: '(?i)(?:\b(?:how\s+many|number\s+of|count\s+of|total\s+(?:number\s+of\s+)?)\b[^?]{0,40}\b(?:present|presence|absent|absentees?|on\s+duty)\b|\b(?:manpower|man\s*power|staff|employees?|workers?|operators?)\s+(?:present|presence|attendance|on\s+duty)\b|\bpresent\s+(?:manpower|man\s*power|staff|employees?|workers?)\b|\battendance\s+(?:today|now|status)\b|\btoday(?:''s)?\s+attendance\b)'
+  unless:
+    # a named day, month or year: the model writes that WHERE itself against the same table
+    - '(?i)\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\b20\d{2}\b|\byesterday\b|\b(?:last|this|next)\s+(?:week|month|year)\b'
+    # a factory, sewing line or unit: the HRMS has no factory or line column, and line manpower is the plan
+    - '(?i)\b(?:TAL|RHL|BGL|KTL|CKDL)\b|\blines?\s*(?:no\.?|number|#)?\s*-?\s*\d|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d|\b(?:planned?|plan|sewing|production)\s+manpower\b|\bmanpower\s+(?:plan|planned|budget|requisition)\b'
+    # a breakdown this single row does not produce
+    - '(?i)\b(?:department|section|designation|grade|floor|shift|company)\b|\b(?:per|each|every|by|group(?:ed)?\s+by|wise)\b'
+    # a named person: that is one employee's attendance, not the day's count
+    - '(?i)\b(?:employees?|emp|staff|worker)\s*(?:id|code|no\.?|number|#)\b'
+  sql: |
+    SELECT TOP (1)
+      CAST(d.WorkDate AS date) AS WorkDate,
+      COUNT(DISTINCT CASE WHEN d.DayStatus IN ('P', 'L', 'PW', 'PH', 'LW', 'LH') THEN d.EmployeeCode END) AS Present,
+      COUNT(DISTINCT CASE WHEN d.DayStatus = 'A' THEN d.EmployeeCode END) AS Absent,
+      COUNT(DISTINCT CASE WHEN d.DayStatus IN ('LV', 'MLV') THEN d.EmployeeCode END) AS OnLeave,
+      COUNT(DISTINCT CASE WHEN d.DayStatus IN ('W', 'H') THEN d.EmployeeCode END) AS OffDay,
+      COUNT(DISTINCT d.EmployeeCode) AS OnRoll
+    FROM dbo.DaywisePayHour d
+    WHERE d.WorkDate = (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour)
+    GROUP BY CAST(d.WorkDate AS date)

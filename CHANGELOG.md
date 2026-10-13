@@ -8,7 +8,47 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- **The HR databases answer questions about people** (Phase R, asked for on 2026-10-13). The owner opened the
+  three people databases — the HRMS with payroll and attendance, the HR planning database and the punch-device
+  database — including every business and personal column: salary, wage, bonus, tax, increment, medical, blood
+  group, religion, phone, email, address, date of birth, national ID and bank. Passwords, tokens and secrets stay
+  blocked, there and everywhere else, and no other database changed. A database is opened or closed by one line
+  in its catalog file. Staff can now ask what someone earns, how many people have a blood group, what a
+  department's headcount is and how many were at work on a given day, and each answer cites the table it came
+  from. **Everyone who can reach the app can ask these questions**; who may see what is the next phase, and the
+  design for it is written down.
+- **An HR agent** so a people question reaches the people databases. "Manpower" belongs to production as well as
+  to HR, and before this the production agent owned the word, so "how many are present today" was answered from
+  the planned operators on a sewing line, which is a plan and not who came to work.
+- **Every query result's column names are recorded** in the SQL log, so an audit can answer "what did it return?"
+  without re-reading the statement (Phase R).
+- **Seven data-quality checks over the people data**, run with the rest by `scripts/data_quality.py`: how current
+  attendance, punches, overtime and the salary sheet are, how much of the workforce each covers, and whether a
+  day-status code has appeared that the assistant does not know.
+
 ### Fixed
+- **"How many are present today?" is answered honestly, or not at all** (Phase R). Three separate things were
+  wrong. The question went to the wrong agent. The day-status column holds codes (P, L, A, LV, W …), so asking
+  for the word "present" matched no row at all. And attendance is not live: the newest working day in the HRMS
+  is 9 Sep 2026, the punch devices stopped in July, and a third copy stopped in 2022. The answer now gives the
+  present, absent, on-leave and off-day counts for the newest day the data holds, shows that date as a column,
+  and says plainly that nothing is loaded for today and that it covers the employees the HRMS runs payroll for
+  rather than the whole group. It costs no AI call.
+- **A headcount comes from the group list, not one payroll instance** (Phase R). The HRMS employee master holds
+  992 active people; the group-wide list holds 17,972 across TAL, BGL, RHL, MGL and SRSL. Answering "how many
+  employees do we have" from the first would have been wrong by a factor of eighteen, under a correct-looking
+  citation. The catalog and the agent's instructions now say which list answers which question, and warn that
+  the department names are not clean ("HR, Admin & Compliance", "HR & Admin" and a misspelling all exist).
+- **An overtime total says how few people it covers** (Phase R). Overtime has almost stopped being recorded in
+  the HRMS: 992 employees had overtime in 2019 and six in all of 2026. "495 hours in August 2026" is true and
+  reads like a company figure; it is five people.
+- **A built-in answer over a plain table names that table on its source card** (Phase R). Only curated views were
+  reported, so the first such answer showed the database, the SQL and the time with no table name — against the
+  reference format the project requires.
+- **A query no longer fails on a reserved word used as a column alias** (Phase R). `AS RowCount` ended three
+  questions in "System doesn't have the data." in one session. The model is now told to quote the aliases it
+  invents, and the error message says what to do when a server reports one.
 - **A database query that fails no longer searches the documents and calls the model** (Phase Q, Q5). An errored
   result was dropped before the "did a fixed tool run?" check, so a query that timed out or hit a type error was
   followed by a 10-second document search and an answer-model call that could only say "System doesn't have the

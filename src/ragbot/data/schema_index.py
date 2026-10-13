@@ -212,7 +212,10 @@ def get_index(cat: Catalog) -> SchemaIndex:
     p = vectors_path(cat.database)
     # the catalog's table_notes reach the BM25 documents through Table.description: an edited note must rebuild
     # the in-memory index too, not only the prompt (the vectors are keyed on the JSON sha and stay valid)
-    key = (json_sha(cat), p.stat().st_mtime_ns if p.exists() else 0, hash(tuple(sorted(cat.table_notes.items()))))
+    # The sensitive list belongs in the key too (Phase R): it decides which tables and columns are indexed at
+    # all, and editing only `sensitive_patterns:` changes neither the discovery JSON's hash nor the notes.
+    key = (json_sha(cat), p.stat().st_mtime_ns if p.exists() else 0, hash(tuple(sorted(cat.table_notes.items()))),
+           cat.sensitive_patterns)
     with _LOCK:
         _CHECKED[cat.database] = now
         hit = _CACHE.get(cat.database)

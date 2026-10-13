@@ -78,7 +78,8 @@ def assert_read_only(sql: str, dialect: str = "tsql") -> None:
 def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, *,
           allowed_tables: frozenset[str] | set[str] = frozenset(),
           big_tables: dict[str, int] | None = None,
-          allowed_catalogs: dict[str, frozenset[str]] | None = None) -> str:
+          allowed_catalogs: dict[str, frozenset[str]] | None = None,
+          sensitive_patterns: tuple[str, ...] | None = None) -> str:
     """Validate and normalise. Returns SQL with a row cap applied. Raises GuardError otherwise.
 
     `allowed_catalogs` (Phase P3, opt-in: setting data.cross_database_names, unrestricted scopes only) maps the
@@ -86,7 +87,12 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
     a three-part reference `Db.schema.table` is accepted only for one of those tables — never a `rag.*` view
     (virtual views are CTEs local to a catalog), never a sensitive name — and then counts as a raw table (no
     SELECT *, WHERE on big ones, keyed `db.schema.table` in `big_tables`). Without the map every three-part
-    name is rejected, as always."""
+    name is rejected, as always.
+
+    `sensitive_patterns` (Phase R) is the list that decides what this catalog hides; None = the global default
+    (data/sensitive.py). The column check below is one pass over every column in the statement with no way to
+    say which table a column came from, so a catalog that opens its own personal columns is given no
+    `allowed_catalogs` by tools._guard_for — a looser list must never reach another database's columns."""
     s = sql.strip().rstrip(";").strip()
     if not s:
         raise GuardError("empty statement")
@@ -125,13 +131,13 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
                 raise GuardError(f"three-part name not allowed: {t.sql(read_dialect)}")
             if db == "rag":
                 raise GuardError(f"another database's rag.* views cannot be read: {t.sql(read_dialect)}")
-            if is_sensitive(t.name):
+            if is_sensitive(t.name, sensitive_patterns):
                 raise GuardError(f"restricted table: {t.name}")
             if f"{db}.{name}" not in sibling:
                 raise GuardError(f"table not in catalog: {t.catalog}.{t.db}.{t.name}")
             raw.append(f"{t.catalog.lower()}.{db}.{name}")
             continue
-        if is_sensitive(t.name):
+        if is_sensitive(t.name, sensitive_patterns):
             raise GuardError(f"restricted table: {t.name}")
         if not db:
             if cte_reference_ok(t, with_ctes):
@@ -148,7 +154,7 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
             raise GuardError(f"table/view not in catalog: rag.{t.name}")
 
     for c in tree.find_all(exp.Column):
-        if c.name and is_sensitive(c.name):
+        if c.name and is_sensitive(c.name, sensitive_patterns):
             raise GuardError(f"restricted column: {c.name}")
 
     if raw:

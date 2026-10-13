@@ -159,15 +159,30 @@ def test_the_self_check_rejects_a_statement_that_is_not_filtered():
         assert_scoped(outside, cat, TAL, [v])
 
 
-def test_every_real_fixed_tool_runs_filtered_for_a_factory_user():
+def test_every_real_fixed_tool_is_filtered_or_refused_for_a_factory_user():
+    """A factory-scoped user reads a fixed tool's rows only through the factory filter — or not at all.
+
+    A tool over a rag.* view is rewritten with IN ('TAL'). A tool over a discovered table (the HR ones:
+    those databases have no rag schema, and an attendance row has no factory column to filter on) is
+    refused outright, because _guard_for offers no raw table to a user limited to some factories. Both
+    outcomes are the property; silently running an unfiltered raw statement is the one that is not.
+    """
     import yaml
     from pathlib import Path
+    from ragbot.data.tools import _guard_for
     cats = load_catalogs()
+    refused = []
     for tool in yaml.safe_load(Path("config/fixed_tools.yaml").read_text(encoding="utf-8")):
         cat = cats[tool["database"]]
-        sql, views = rewrite_virtual(guard(tool["sql"], cat.view_names, cat.dialect, 200), cat, scope=TAL)
+        try:
+            safe = _guard_for(tool["sql"], cat, 200, TAL)
+        except GuardError:
+            refused.append(tool["name"])
+            continue
+        sql, views = rewrite_virtual(safe, cat, scope=TAL)
         assert "IN ('TAL')" in sql, tool["name"]
         assert sqlglot.parse_one(sql, read="tsql")
+    assert "manpower_present_latest" in refused, "HR attendance has no factory column; it must be refused"
 
 
 # ---------------------------------------------------------------- data: fixed tools, raw tables, aggregates

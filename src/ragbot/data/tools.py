@@ -481,6 +481,10 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
         return local
     try:
         sql_exec, views = rewrite_virtual(sql, cat, scope=scope)
+        # rewrite_virtual only reports rag.* views, so a fixed tool over a discovered table (the HR ones,
+        # whose databases have no rag schema) had an empty [D#] card: database, SQL and time but no table
+        # name, against docs/REFERENCE_FORMAT.md. Same line as _run_guarded and the pasted-statement path.
+        views += [n for n in _views_in(sql, cat) if not cat.view(n)]
         # `heavy: true` in fixed_tools.yaml: a known-slow query (e.g. over the 4M-row, unindexed
         # dbo.ExportOrderBack) gets the longer timeout tier instead of failing at the default.
         timeout = int(settings().get("data.timeout_seconds_heavy", 30)) if tool.get("heavy") else None
@@ -648,6 +652,11 @@ def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope,
     big_rows = int(settings().get("data.big_table_rows", 1_000_000))
     big = {t.name.lower(): t.rows for t in offered if t.rows and t.rows > big_rows}
     allowed_catalogs: Optional[dict[str, frozenset[str]]] = None
+    # Phase R: a catalog with its own sensitive list (the HR databases) never crosses a three-part name. The
+    # guard's column check cannot tell which database a column belongs to, so the looser list would otherwise
+    # apply to a sibling's columns as well. Cross-database joins from such a database need another mechanism.
+    if cat.sensitive_patterns is not None:
+        siblings = None
     if siblings and scope.all_factories:
         allowed_catalogs = {}
         for db_name, sib in siblings.items():
@@ -656,7 +665,7 @@ def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope,
                         if t.rows and t.rows > big_rows})
     return guard(sql, cat.view_names, cat.dialect, max_rows,
                  allowed_tables=frozenset(t.name.lower() for t in offered), big_tables=big,
-                 allowed_catalogs=allowed_catalogs)
+                 allowed_catalogs=allowed_catalogs, sensitive_patterns=cat.sensitive_patterns)
 
 
 def _guard_and_fix(sql: str, cat: Catalog, max_rows: int, scope: Scope,

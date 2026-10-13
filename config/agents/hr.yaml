@@ -1,0 +1,23 @@
+# HR agent (Phase R, 2026-10-13): the people databases, opened by the owner on that date.
+# Without it "manpower present today" reached the Production agent (its keywords own "manpower") and was
+# answered from VistaQ's PLANNED line manpower, which is a plan and not who came to work.
+name: hr
+title: HR agent
+description: Employees, attendance and presence, leave and overtime, salary and the pay heads, departments and designations.
+stage: 1
+catalogs: [Hrms5Misami, HR, HWATT]
+keywords: [attendance, present, presence, manpower present, present today, absent, absentee, absence, late,
+           leave, leaves, casual leave, earned leave, maternity, overtime, ot hour, ot hours,
+           salary, salaries, payroll, payslip, pay slip, wage, wages, gross, basic, bonus, increment,
+           provident fund, gratuity, loan, employee, employees, headcount, head count, staff,
+           joining, resignation, resigned, designation, department, blood group, punch, roster, shift]
+charter: agents/hr
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'People data I can read is the HRMS — the employee master, daily attendance and presence, leave, overtime, and the monthly salary with its pay heads; the HR planning database adds the manpower budget, competency records and the visitor register.'
+status: >-
+  The employee master, leave, overtime and monthly salary are in Hrms5Misami, which carries one company's
+  staff — 992 active people, not the whole group. Attendance there stopped on 2026-09-09 (checked 2026-10-13)
+  and the HWATT punch log stopped in July 2026, so presence is answered for the newest day in the data with
+  that date stated, never as today; reported to the data owners on 2026-10-13. The HR database holds manpower
+  budgets, PMS competency and assessment records and the visitor register; its visitor rows have no date
+  (reported 2026-10-06), and its employee tables are copies — prefer Hrms5Misami for anything current.

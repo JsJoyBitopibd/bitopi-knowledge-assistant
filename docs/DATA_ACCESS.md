@@ -27,6 +27,33 @@ principal that is not sysadmin. After a new discovery, regenerate and re-run the
 Rotation: `ALTER LOGIN rag_reader WITH PASSWORD = N'…'`, update `.env`, recreate the containers.
 Removal: `private/rag_reader_rollback.sql`.
 
+**The sensitive-name rule is per database (Phase R, 2026-10-13).** By default it is the global list in
+`src/ragbot/data/sensitive.py`. A catalog may override it for its own database with one line:
+
+```yaml
+# 2026-10-13, owner's decision: this database answers HR questions. Only credentials stay blocked.
+sensitive_patterns: [password, pwd, token, secret]
+```
+
+That one line governs all six enforcement points at once — which tables the catalog offers, which columns it
+renders, what the schema index and the router see, what the guard accepts, and what `gen_reader_grants.py`
+denies at the server. Deleting it closes the database again. The discovery JSON keeps recording what the
+**default** rule says, and the catalog re-derives at load, so a later `discover_schema.py` run cannot
+re-close an opened database. Set today on `HR`, `Hrms5Misami` and `HWATT`, and on no other catalog.
+
+Two consequences worth knowing before touching it:
+
+- **An opened database is never read across a three-part name.** The guard's column check is one pass over
+  every column in a statement with no way to attribute a column to a table, so the looser list would reach a
+  sibling database's columns. `_guard_for` therefore withholds siblings entirely from such a catalog.
+- **`grants.py` has no REVOKE path.** Regenerating the script does not remove DENYs already applied at the
+  server, so opening a database at the server means running `private/rag_reader_rollback.sql`'s `DROP USER`
+  for that database first, then the new script. This matters the day the app stops signing in as `sa`.
+
+A catalog edit clears the question-to-SQL cache (it keys on `catalog_stamp()`), but the **result** cache does
+not carry a catalog component, so a pre-change result can still be served for up to
+`data.result_cache_ttl_seconds` (180 s by default). Restart the app or wait it out.
+
 The strict variant — SELECT on a `rag` schema of real views only — is the target once a DBA has created
 the views (section 6, Phase F2b): `CREATE SCHEMA rag AUTHORIZATION dbo; GRANT SELECT ON SCHEMA::rag TO
 rag_reader;` and then `REVOKE SELECT ALL USER SECURABLES` once nothing reads base tables any more. A view:
@@ -171,10 +198,24 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
   TRUNCATE EXEC EXECUTE GRANT REVOKE DENY BACKUP RESTORE OPENROWSET OPENQUERY OPENDATASOURCE
   BULK xp_ sp_ INTO OUTFILE LOAD_FILE LOAD DATA INFORMATION_SCHEMA sys. mysql. performance_schema
   `--` `/*` `;`
-- Every table/view referenced must be in the catalog's `views` list (parse with `sqlglot`).
-- Add `TOP (200)` / `LIMIT 200` when absent. Reject `SELECT *` on more than one view.
+- Every table/view referenced must be in the catalog's `views` list, or among the discovered tables that
+  catalog offers (parse with `sqlglot`).
+- **The sensitive-name check, per database.** A table or column whose name matches the catalog's effective
+  pattern list is refused — `restricted table:` / `restricted column:` — whatever the prompt showed. The list
+  is the global default in `src/ragbot/data/sensitive.py` unless the catalog sets `sensitive_patterns:`
+  (§2, Phase R); a three-part reference into a sibling database is checked the same way, and a catalog that
+  sets its own list is given no siblings at all, because this check is one pass over every column in the
+  statement with no way to say which table a column came from.
+- Add `TOP (200)` / `LIMIT 200` when absent. Reject `SELECT *` on more than one view. A discovered table with
+  more rows than `data.big_table_rows` needs a `WHERE` clause.
+- A user limited to some factories is offered **no** discovered table (there is no common factory column to
+  filter on), so a database with no `rag.*` views answers nothing for them.
 - Timeout 10 s; on error return the message to the model for one retry, then give up.
-- Log every statement (user, tool/generated, SQL, params, rows, ms) to `logs/sql.csv`.
+- Log every statement (user, tool/generated, SQL, params, rows, ms, database, result column names) to
+  `logs/sql.csv`; refusals and the raw reply go to `logs/sql_gen.csv`.
+- **Fixed tools do not pass through the guard** — their SQL is hand-written, not model output — but they are
+  held to the same rules by `tests/test_virtual.py` and `tests/test_scope_enforcement.py`, which run every one
+  of them through `_guard_for`.
 
 ## 5. What the assistant tells the user about data
 

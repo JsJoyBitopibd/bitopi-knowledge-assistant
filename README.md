@@ -223,6 +223,21 @@ Beyond the curated `rag.*` views, generated SQL may use any discovered table the
 never a sensitive or excluded one (`data/sensitive.py`, `exclude_tables:` in the catalog YAML), and
 always through the guard. Refresh after the database schema changes:
 
+**Opening one database to its own personal columns.** What counts as sensitive is a list of name
+patterns, global by default. A catalog may set its own with one line, and that line governs the
+catalog, the schema index, the router, the prompt and the server-side DENY script together:
+
+```yaml
+sensitive_patterns: [password, pwd, token, secret]   # only credentials stay blocked
+```
+
+Set on the three people databases on 2026-10-13 at the owner's request, so staff can ask about
+salary, attendance, blood group and the rest; deleting the line closes the database again. No other
+database is affected, and credentials stay blocked everywhere. Rebuild that database's schema
+vectors afterwards (`index_schema.py <db>`) and regenerate `private/rag_reader_grants.sql`; the
+rules and their two consequences are in `docs/DATA_ACCESS.md` §1. Note that **who** may ask is not
+yet restricted — see `docs/ROADMAP.md` "Phase S".
+
 ```powershell
 python scripts\discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json   # sys.* only, ~10 s
 python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --json

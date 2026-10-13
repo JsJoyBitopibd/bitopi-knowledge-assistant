@@ -8,6 +8,10 @@ database: HWATT
 description: 'Attendance device system (HWATT): employee card punches (KQZ_Card), devices and branches, attendance
   rules, vacation shift ratios, late and leave-early levels.'
 dialect: tsql
+# 2026-10-13, the owner opened this database: it answers HR questions, so its business and personal
+# columns (salary, attendance, leave, medical, contact, date of birth, NID, bank) are readable.
+# Only credentials stay blocked. Deleting this line closes the database again (Phase R).
+sensitive_patterns: [password, pwd, token, secret]
 connection_env: SQLSERVER_CONN_PRODUCTION
 connection_database: HWATT
 keywords:
@@ -37,6 +41,17 @@ keywords:
 - attrule
 - basicinfo
 - brch
+table_notes:
+  # Phase R, checked 2026-10-13: this device database is not current. Say so rather than returning a
+  # partial month as if it were the present.
+  dbo.KQZ_Card: >-
+    the punch log, one row per card read (1.54 million): EmployeeID, CardTime, the device and the branch.
+    The newest CardTime is in July 2026 and that month is partial (7,809 reads against about 35,000 in a
+    full month), so this system stopped collecting; it answers history, never "today". For presence use
+    Hrms5Misami's dbo.DaywisePayHour, which runs three weeks later but stops on 2026-09-09 as well.
+  dbo.KQZ_Employee: >-
+    the people the devices know (15,665), keyed by EmployeeID — a device register, not the employee
+    master. Headcount comes from Hrms5Misami's dbo.tblEmployee.
 exclude_tables:
 - '*back'
 - '*back_*'

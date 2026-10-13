@@ -42,10 +42,13 @@ def test_sql_rows_carry_the_database_they_ran_on(tmp_path, monkeypatch):
     """P0: 19 catalogs share one connection line, so the statement alone did not say where it ran."""
     monkeypatch.setenv("LOG_DIR", str(tmp_path))
     from ragbot.data.connectors import SQL_HEADER, _log
-    _log("sqlserver", "generated", "SELECT 1", "SELECT 1", {}, 1, 12.0, user="u", scope="f=*", database="Inventory")
+    _log("sqlserver", "generated", "SELECT 1", "SELECT 1", {}, 1, 12.0, user="u", scope="f=*", database="Inventory",
+         columns=["ItemCode", "ClosingBalance"])
     rows = _read(tmp_path / "sql.csv")
-    assert rows[0] == SQL_HEADER and rows[0][-1] == "database"
+    assert rows[0] == SQL_HEADER and rows[0][-1] == "columns"
     assert rows[1][SQL_HEADER.index("database")] == "Inventory"
+    # Phase R: the column NAMES a statement returned, so "which fields were shown?" needs no SQL re-parsing
+    assert rows[1][SQL_HEADER.index("columns")] == "ItemCode;ClosingBalance"
 
 
 def test_generation_log_records_the_reply_the_database_line_and_guard_errors(tmp_path, monkeypatch):

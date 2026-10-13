@@ -31,19 +31,23 @@ from ..config import env, log_dir, settings
 
 
 SQL_HEADER = ["ts", "user", "scope", "engine", "tool", "rows", "ms", "error", "params", "sql", "sql_exec",
-              "request_id", "database"]
+              "request_id", "database", "columns"]
 
 
 def _log(engine: str, tool: str, display_sql: str, sql_exec: str, params: dict, rows: int, ms: float,
-         error: str = "", user: str = "", scope: str = "", database: str = "") -> None:
+         error: str = "", user: str = "", scope: str = "", database: str = "",
+         columns: Optional[list[str]] = None) -> None:
     """One row per statement in logs/sql.csv (PRD FR-3.8), with the scope it ran under (FR-6.2), the request
-    that ran it (ragbot/trace.py) and the database it was opened on (Phase P0: 19 catalogs share one
-    connection line, so the statement alone does not say where it ran); its time counts toward "data.db"."""
+    that ran it (ragbot/trace.py), the database it was opened on (Phase P0: 19 catalogs share one connection
+    line, so the statement alone does not say where it ran) and the column NAMES it returned (Phase R: with
+    the HR databases open, "which fields did it show?" must be answerable without re-parsing the SQL — the
+    values are never logged). Its time counts toward "data.db"."""
     from .. import trace
     from ..logs import append_row
     trace.add("data.db", ms / 1000)
     append_row("sql.csv", SQL_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, engine, tool, rows,
-                                       f"{ms:.0f}", error, params, display_sql, sql_exec, trace.request_id(), database])
+                                       f"{ms:.0f}", error, params, display_sql, sql_exec, trace.request_id(), database,
+                                       ";".join(columns or [])])
 
 
 _DB_KEY = re.compile(r"((?:^|;)\s*(?:database|initial catalog)\s*=)[^;]*", re.IGNORECASE)
@@ -201,7 +205,7 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
             cur.close()
             ok = True
             _log("sqlserver", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000,
-                 user=user, scope=scope, database=database or "")
+                 user=user, scope=scope, database=database or "", columns=cols)
             return cols, rows
         except Exception as e:
             if attempt == 1 and reused and _is_link_error(e):
@@ -238,7 +242,7 @@ def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN",
         cols = [d[0] for d in cur.description] if cur.description else []
         rows = [list(r) for r in cur.fetchall()] if cur.description else []
         _log("mysql", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user,
-             scope=scope, database=database or "")
+             scope=scope, database=database or "", columns=cols)
         return cols, rows
     except Exception as e:
         _log("mysql", tool, display_sql or sql, sql, params, 0, (time.perf_counter() - t0) * 1000,

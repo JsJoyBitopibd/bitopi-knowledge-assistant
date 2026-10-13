@@ -105,6 +105,10 @@ _LINE = re.compile(r"\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*(\d{2,4}(?:\s*(?:,
                    r"|(?<![\w-])(\d{3,4})\s+lines?\b", re.I)
 _NUMS = re.compile(r"\d{2,4}")
 _UNIT = re.compile(r"\b(?:units?|blocks?)\s*(?:no\.?|#)?\s*[-:]?\s*(\d{1,2})(?![\w-])", re.I)
+# Phase R: "employee 1023", "emp id 250109595", "employee code 1023", "staff id 1023". An employee code is
+# digits here; a name is not an identifier a query can filter on reliably.
+_EMPLOYEE = re.compile(r"""\b(?:employees?|emp|staff|worker)\s*(?:id|code|no\.?|number|#)?\s*[-:#]?\s*"""
+                       r"""["']?(\d{3,12})["']?(?![\w-])""", re.I)
 _STYLE = re.compile(r"\bstyles?\s*(?:no\.?|number|#|code)?\s*[:#-]?\s*"
                     r"((?=[A-Za-z0-9/._-]*\d)[A-Za-z0-9][A-Za-z0-9/._-]{1,30})(?![\w-])", re.I)
 _ALL_FACTORIES = re.compile(r"\ball\s+(?:the\s+)?factor(?:y|ies)\b|\bevery\s+factor(?:y|ies)\b"
@@ -119,6 +123,7 @@ class QuestionEntities:
     lines: tuple[str, ...] = ()
     units: tuple[str, ...] = ()
     styles: tuple[str, ...] = ()
+    employees: tuple[str, ...] = ()
     eos: tuple[str, ...] = ()
     pos: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
@@ -129,11 +134,13 @@ class QuestionEntities:
         """True when the question names something only a database holds — a line, a unit, a style, an export
         order, a PO or a file. A factory alone is NOT one of these: "What is the TAL holiday policy?" is a
         document question, and a factory name says nothing about where the answer lives."""
-        return bool(self.lines or self.units or self.styles or self.eos or self.pos or self.files)
+        return bool(self.lines or self.units or self.styles or self.employees or self.eos or self.pos
+                    or self.files)
 
     def kinds(self) -> set[str]:
         return {k for k, v in (("factory", self.factories), ("line", self.lines), ("unit", self.units),
-                               ("style", self.styles), ("eo", self.eos), ("po", self.pos), ("file", self.files),
+                               ("style", self.styles), ("employee", self.employees),
+                               ("eo", self.eos), ("po", self.pos), ("file", self.files),
                                ("company", (self.company,) if self.company else ())) if v}
 
 
@@ -189,7 +196,8 @@ def _parse(question: str, codes: tuple[str, ...]) -> QuestionEntities:
     return QuestionEntities(
         factories=tuple(factories), all_factories=bool(_ALL_FACTORIES.search(rest)),
         lines=_first_groups(_LINE, rest, split_numbers=True), units=_first_groups(_UNIT, rest),
-        styles=_first_groups(_STYLE, rest), eos=tuple(dict.fromkeys(eos)), pos=tuple(dict.fromkeys(pos)),
+        styles=_first_groups(_STYLE, rest), employees=_first_groups(_EMPLOYEE, rest),
+        eos=tuple(dict.fromkeys(eos)), pos=tuple(dict.fromkeys(pos)),
         files=tuple(dict.fromkeys(files)), company=company)
 
 
@@ -200,6 +208,7 @@ _ENTITY_COLUMNS: dict[str, re.Pattern] = {
     "unit": re.compile(r"^unit(name)?$", re.I),
     "line": re.compile(r"^line(number|no|name)?$", re.I),
     "style": re.compile(r"^style(number|no|code)?$", re.I),
+    "employee": re.compile(r"^(employee|emp)(code|id|no)$", re.I),
     "eo": re.compile(r"^exportorderid$", re.I),
     "po": re.compile(r"^(po|pono|ponumber|exportpono)$", re.I),
     "file": re.compile(r"^(fileno|filerefno|filerefid)$", re.I),
@@ -218,7 +227,7 @@ def entity_lines(question: str, catalogs: Any, limit: int = 8) -> list[str]:
     kind, so the SQL model compares it correctly: "line '2102' = Line (text) in rag.vw_PlanDay, …"."""
     ents = question_entities(question)
     found = [("factory", ents.factories), ("line", ents.lines), ("unit", ents.units), ("style", ents.styles),
-             ("eo", ents.eos), ("po", ents.pos), ("file", ents.files)]
+             ("employee", ents.employees), ("eo", ents.eos), ("po", ents.pos), ("file", ents.files)]
     out: list[str] = []
     for kind, values in found:
         if not values:
