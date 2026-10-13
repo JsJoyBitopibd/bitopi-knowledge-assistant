@@ -104,11 +104,27 @@ def failed(results: Sequence[QueryResult]) -> Optional[str]:
     return prompt("not_found_db_error").strip().format(reason=friendly_db(r.error), source=_label(r.database))
 
 
-def general(question: str) -> str:
+def _agent_is_readable(agent, scope) -> bool:
+    """Whether any database this agent speaks for is one the user may read (Phase S)."""
+    try:
+        from ..data.catalog import load_catalogs
+        cats = load_catalogs()
+    except Exception:          # no catalogs loaded (unit tests, a broken folder): say nothing new
+        return True
+    own = [cats[n] for n in getattr(agent, "catalogs", ()) if n in cats]
+    return not own or any(scope.allows_database(c.restricted_to) for c in own)
+
+
+def general(question: str, scope=None) -> str:
     from ..domain_agents import pick_agent
     try:
         agent = pick_agent(question)
     except Exception:          # a broken agents folder must not break a not-found reply
+        agent = None
+    # Phase S: never describe a database this user may not read. The HR agent's sentence opens "People data I
+    # can read is the HRMS — the employee master, daily attendance …", which for a denied user would be both
+    # a description of data they have no access to and simply untrue.
+    if agent is not None and scope is not None and not _agent_is_readable(agent, scope):
         agent = None
     where = str(agent.extra.get("where") or "").strip() if agent is not None else ""
     return where or prompt("not_found_general").strip()

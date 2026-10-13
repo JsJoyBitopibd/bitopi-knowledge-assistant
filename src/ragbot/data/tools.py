@@ -756,6 +756,11 @@ def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bo
     catalog's full allow-list) -> virtual-view rewrite with the scope filter -> parameters -> cached_run.
     Raises GuardError / the database's error; a statement that reads no table is refused."""
     s = settings()
+    # Phase S, second check: answer_from_data drops the databases a user may not read, but a statement can
+    # arrive here by other roads — the day's question->SQL cache, a fixed tool, a companion, a repair. Refuse
+    # before the guard rather than trusting the caller to have filtered.
+    if not scope.allows_database(cat.restricted_to):
+        raise GuardError(f"outside the user's scope: database {cat.database}")
     siblings = siblings_of(cat, {c.database: c for c in (cats or {}).values()}) if cats else {}
     safe, _notes = _guard_and_fix(sql, cat, int(s["data.max_rows"]), scope, siblings)
     sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
@@ -1064,6 +1069,12 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
     from ..domain_agents import pick_agent
     with trace.span("data"):
         cats = load_catalogs()
+        # Phase S: drop the databases this user may not read before anything looks at them. Doing it here and
+        # not at the guard means a denied database is never ranked, never has its tables rendered into a
+        # prompt, never matches one of its fixed tools and is not a candidate for a pasted statement — the
+        # model is not told it exists. The guard checks again (_run_guarded) for whatever arrives by another
+        # road, such as a statement replayed from the day's cache.
+        cats = {n: c for n, c in cats.items() if scope.allows_database(c.restricted_to)}
         if not cats:
             return []
         if _STATEMENT.search(question):

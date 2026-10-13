@@ -780,17 +780,38 @@ actually is, and four findings are now written into `table_notes`, the agent cha
 | The HRMS master holds 992 active people; the group list holds 17,972 | A headcount from the wrong one is out by a factor of eighteen, under a correct citation |
 | Overtime: 992 employees in 2019, six in 2026 | A monthly total reads like a company figure and is five people, so the answer states the count |
 
-### Deferred, with the reason — Phase S, the per-user rule
+### Phase S — the per-user rule (mechanism built 2026-10-13, not yet armed)
 
-**Not built now because it could not deny anything.** `Scope` carries no groups, so a catalog's
-`restricted_to: [KA-HR]` cannot be evaluated at either enforcement point, and `scope_for_groups` **unions**
-group scopes, so a `databases: [HR]` key would be cancelled by the same user's membership in `KA-Managers`.
-A gate that cannot deny is worse than none. Doing it properly means a `Scope.databases` field with
-**intersection** semantics — the one place the union rule must not apply — folded into `Scope.key()` so a
-cached result never crosses it, plus sign-in switched on (`auth.provider` is `none` today, which makes every
-visitor the same shared user with an all-factory scope). Until then, **anyone who can reach the app can ask
-for any employee's salary**; that is the direct consequence of the owner's decision and it is recorded here
-rather than worked around.
+The problem as first written: `Scope` carried no groups, so a catalog's `restricted_to: [KA-HR]` could not be
+evaluated at either enforcement point, and `scope_for_groups` **unions** group scopes, so a `databases: [HR]`
+key would be cancelled by the same user's membership in `KA-Managers`. A gate that cannot deny is worse than
+none.
+
+**The design changed when it was built, and this is why.** The plan above said `Scope.databases` with
+**intersection** semantics. Taken literally it cannot express the rule the owner wants: to deny the HR
+databases to `KA-Managers`, that group would have to list *every other database* and keep that list in step
+with each new one, and a group membership would then **reduce** access — the opposite of what
+`config/scopes.yaml` promises in its own header ("a group can only add access"). What is built instead:
+
+- a catalog names the groups that may read it, `restricted_to: [KA-HR]` (`data/catalog.py`); a catalog that
+  names none is open to everyone, which is how all nineteen behave today;
+- `Scope.groups` carries the user's groups, and `Scope.allows_database()` is the single check. A group still
+  only ever grants. Being an admin is **not** a master key: the admin flag shows the timings and the audit
+  panel, and making it open every database would hand every administrator the payroll in the same change;
+- `Scope.key()` includes the groups, so an answer cached for someone who may read a restricted database is
+  never served to someone who may not;
+- enforcement in two places: `answer_from_data` drops the denied databases **before the router**, so their
+  tables are never rendered into a prompt, their fixed tools never match and the model is not told they
+  exist; and `_run_guarded` refuses again, for whatever arrives by another road (the day's question→SQL
+  cache, a companion, a repair). A not-found reply also stops describing a database the user may not read.
+
+**Not armed, deliberately.** `auth.provider` is `none`, so every visitor is the one open user built from
+`auth.open_groups: [KA-Managers]`. Adding `restricted_to: [KA-HR]` to the people catalogs today would deny
+the HR questions to *everybody* and break what Phase R just shipped. Switching it on is therefore two
+changes made together: the `restricted_to:` line on `Hrms5Misami`, `HR` and `HWATT`, and a real sign-in
+provider (`local` with `config/users.yaml`, or `ldap` once BITOPI-PDC serves LDAPS). Until that day,
+**anyone who can reach the app can ask for any employee's salary** — the direct consequence of the owner's
+decision of 2026-10-13, recorded rather than worked around.
 
 Also deferred: re-running discovery for the other sixteen databases. The JSONs were written at 10:03 on
 2026-10-04 and the patterns gained `medical, tax, bonus, increment, pay` at 17:17 the same day, so those

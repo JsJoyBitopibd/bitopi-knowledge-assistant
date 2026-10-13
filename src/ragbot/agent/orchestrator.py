@@ -188,7 +188,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             # happened and offer Refresh data. `error_kind` stays empty on purpose — the UI renders an
             # error_kind turn as a warning box without the action row, which would take Refresh and the chips
             # away (app.py answer_body).
-            out.text = nf + " " + (not_found.failed(failed) or not_found.general(q))
+            out.text = nf + " " + (not_found.failed(failed) or not_found.general(q, scope))
             out.not_found = True
             out.follow_ups = not_found.suggestions(q, results)
             yield Final(_log(out, user, scope)); return
@@ -203,7 +203,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if not chunks and not _has_rows(results):
         # one plain sentence after the fixed line (agent/not_found.py): what was checked, or where else to look
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
-                               else not_found.empty(results) or not_found.empty_filter(results) or not_found.general(q))
+                               else not_found.empty(results) or not_found.empty_filter(results) or not_found.general(q, scope))
         out.not_found = True
         if not denied:
             out.follow_ups = not_found.suggestions(q, results)

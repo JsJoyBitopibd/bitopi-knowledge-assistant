@@ -163,6 +163,14 @@ class Catalog:
     # personal columns on 2026-10-13 and only credentials stay blocked. None = the global default, unchanged.
     sensitive_patterns: tuple[str, ...] | None = None
     max_rendered_columns: int | None = None   # Phase R: raise the 40-column prompt cap for a wide database
+    # Phase S. `restricted_to:` the groups whose members may read this database; empty (the default) means
+    # open to everyone, which is how every catalog behaved before. The check is auth/models.py
+    # Scope.allows_database, and the filter runs before the router, so a user who may not read a database
+    # never has its tables put in front of the model, never matches one of its fixed tools, and cannot reach
+    # it through a cached statement. Nothing names a group yet: with auth.provider 'none' every visitor is
+    # the one open user, so a line here would deny the HR questions to everybody. Turning it on is two
+    # changes together — `restricted_to: [KA-HR]` on the three people catalogs and a real sign-in provider.
+    restricted_to: tuple[str, ...] = ()
 
     @property
     def sensitive_pats(self) -> tuple[str, ...]:
@@ -386,6 +394,15 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
             if not isinstance(raw, list) or not raw or not all(isinstance(p, str) and p.strip() for p in raw):
                 raise RuntimeError(f"{f.name}: sensitive_patterns must be a non-empty list of words")
             pats = tuple(p.strip().lower() for p in raw)
+        # Phase S: the groups that may read this database. Checked the same way and for the same reason — a
+        # typo in a key that decides access must fail loudly, not leave the database open without anyone noticing.
+        limited: tuple[str, ...] = ()
+        if "restricted_to" in d:
+            raw_groups = d.get("restricted_to")
+            if not isinstance(raw_groups, list) or not raw_groups \
+                    or not all(isinstance(g, str) and g.strip() for g in raw_groups):
+                raise RuntimeError(f"{f.name}: restricted_to must be a non-empty list of group names")
+            limited = tuple(g.strip().lower() for g in raw_groups)
         tables = _load_discovered(folder, d["database"], pats)
         for t in tables:
             if not t.description and t.name.lower() in notes:
@@ -402,5 +419,6 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                                       schema_rag_k=int(d["schema_rag_k"]) if d.get("schema_rag_k") else None,
                                       routable=bool(d.get("routable", True)), sensitive_patterns=pats,
                                       max_rendered_columns=int(d["max_rendered_columns"])
-                                      if d.get("max_rendered_columns") else None)
+                                      if d.get("max_rendered_columns") else None,
+                                      restricted_to=limited)
     return cats

@@ -9,6 +9,15 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **A database can name who may read it** (Phase S). A catalog may carry `restricted_to: [KA-HR]`, and then only
+  a member of one of those groups can reach it — through a question, a built-in query, a pasted statement or an
+  answer cached earlier in the day. A database that names no group stays open to everyone, which is how all
+  nineteen behave today. A group still only ever grants access, never removes it, and being an administrator is
+  **not** a master key: the admin flag shows the timings and the audit panel, and letting it open every database
+  would have handed every administrator the payroll in the same change. **It is built but not switched on**: there
+  is no sign-in yet, so every visitor is the same shared user, and the line alone would deny the HR questions to
+  everybody. Switching it on means adding the line to the three people catalogs *and* turning on sign-in, together.
+  Until that day anyone who can reach the app can still ask what anyone earns — the owner's recorded decision.
 - **The HR databases answer questions about people** (Phase R, asked for on 2026-10-13). The owner opened the
   three people databases — the HRMS with payroll and attendance, the HR planning database and the punch-device
   database — including every business and personal column: salary, wage, bonus, tax, increment, medical, blood
