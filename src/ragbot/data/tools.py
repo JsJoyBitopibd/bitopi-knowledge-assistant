@@ -719,12 +719,32 @@ def _sql_key(question: str, cats: dict[str, Catalog], scope: Scope, agent: str =
     return norm, tuple(sorted(cats)), catalog_stamp(), scope.key(), date.today().isoformat(), agent
 
 
+def _named_catalog(name: str, cats: dict[str, Catalog]) -> Optional[str]:
+    """The catalog a model-written DATABASE line names. The prompt shows each database with its dialect
+    ("Hrms5Misami (tsql)") and the model copies that label, so an exact-only match found nothing and the
+    statement silently went to the keyword fallback's database instead — on 2026-10-13 that sent a correct
+    HR statement to BitopiSplint, whose guard then refused dbo.vwAllCompanyEmployeeList and the question
+    answered not-found (golden case 100). Match the name as written first, then the bare identifier in
+    front of whatever qualifier the label carries."""
+    def _clean(s: str) -> str:
+        return s.strip().strip("`\"'[]").strip()
+
+    name = _clean(name)
+    if not name:
+        return None
+    exact = next((k for k in cats if k.lower() == name.lower()), None)
+    if exact:
+        return exact
+    bare = _clean(re.split(r"[\s(,;]", name, maxsplit=1)[0])
+    return next((k for k in cats if bare and k.lower() == bare.lower()), None)
+
+
 def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -> tuple[str, str]:
     """First line 'DATABASE: <name>' picks the catalog; anything else falls back to keyword scoring."""
     lines = raw.splitlines()
     if lines and lines[0].strip().upper().startswith("DATABASE:"):
         name = lines[0].split(":", 1)[1].strip()
-        match = next((k for k in cats if k.lower() == name.lower()), None)
+        match = _named_catalog(name, cats)
         sql = "\n".join(lines[1:]).strip()
         return (match or fallback_db), sql
     return fallback_db, raw

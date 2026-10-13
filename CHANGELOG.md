@@ -28,6 +28,19 @@ each phase is in `docs/ROADMAP.md`.
   day-status code has appeared that the assistant does not know.
 
 ### Fixed
+- **A model-written query runs against the database it named** (found by the release eval, 2026-10-13). The
+  prompt lists each database with its dialect, so the model replied `DATABASE: Hrms5Misami (tsql)` — the label
+  it had been shown. That name was compared exactly, matched nothing, and the query fell through to whichever
+  database scored best on the question's keywords. A correct HR statement was therefore run against the ERP,
+  whose guard refused the HR view, and the question answered "System doesn't have the data." Nothing was ever
+  read from the wrong place — the guard stopped it — but the answer was lost. The name is now read either as
+  written or as the plain identifier in front of the label.
+- **A headcount question that names a factory reaches the people databases** (found by the release eval,
+  2026-10-13). "How many active employees does the group have, by factory?" gave the HR agent one keyword
+  ("employees") and the order agent one ("factory"). Such a tie is settled by the databases the ranking has
+  already picked — and the ranking had picked the ERP, because "factory" and "group" are its vocabulary. So the
+  wrong choice confirmed itself and the HRMS was never put in front of the model. The HR agent now owns the
+  headcount wording and wins on its own words, which lets it substitute its database as it was designed to.
 - **"How many are present today?" is answered honestly, or not at all** (Phase R). Three separate things were
   wrong. The question went to the wrong agent. The day-status column holds codes (P, L, A, LV, W …), so asking
   for the word "present" matched no row at all. And attendance is not live: the newest working day in the HRMS

@@ -208,3 +208,18 @@ def test_a_keyword_tie_is_broken_by_the_catalogs_the_router_picked():
     assert picked is not None and picked.name == "production"
     # a preference neither tied agent owns leaves the tie unbroken
     assert pick_agent(q, agents=agents, prefer_catalogs=["HR"]) is None
+
+
+def test_a_headcount_question_that_names_a_factory_still_reaches_hr():
+    """The miss found by the 2026-10-13 gate eval (golden case 100). "how many active employees does the
+    group have, by factory?" gave hr one hit (employees) and order one (factory). The tie went to order
+    because the router had already ranked BitopiSplint first, so Hrms5Misami was never put in front of the
+    SQL model, the guard refused dbo.vwAllCompanyEmployeeList, and the question answered not-found. The
+    tie-break reads the ranking, so a wrong ranking confirmed itself: hr has to win on its own words."""
+    agents = load_agents()
+    q = "how many active employees does the group have, by factory?"
+    assert pick_agent(q, agents=agents).name == "hr"
+    # the ranking that caused the miss must not be able to take the question back
+    assert pick_agent(q, agents=agents, prefer_catalogs=["BitopiSplint", "Inventory"]).name == "hr"
+    # and the new words stay inside this domain: an order question that names a factory is untouched
+    assert pick_agent("How many orders shipped from the TAL factory last week?", agents=agents).name != "hr"

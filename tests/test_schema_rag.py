@@ -156,3 +156,24 @@ def test_a_failure_that_is_not_a_conversion_still_reaches_the_model_with_the_col
     assert r.error and "HYT00" in r.error
     asked = [m["content"] for m in chat.messages_seen if m["role"] == "user"]
     assert any("Column kinds of what the query read" in c and "Line (text)" in c for c in asked)
+
+
+def test_the_database_line_is_read_though_the_model_copies_the_dialect_label():
+    """Golden case 100 (2026-10-13). The prompt lists each database with its dialect, so the model wrote
+    "DATABASE: Hrms5Misami (tsql)". The name was matched exactly, found nothing, and the statement fell
+    through to the keyword-best database — BitopiSplint — whose guard then refused the HR view the model
+    had correctly chosen, and the question answered not-found."""
+    cats = {"BitopiSplint": None, "Inventory": None, "Hrms5Misami": None, "HR": None}
+
+    def pick(line):
+        return tools._split_database_line(f"{line}\nSELECT 1 FROM dbo.T", cats, "BitopiSplint")[0]
+
+    assert pick("DATABASE: Hrms5Misami (tsql)") == "Hrms5Misami"       # the reply that failed
+    assert pick("DATABASE: Hrms5Misami") == "Hrms5Misami"              # and the plain form still works
+    assert pick("DATABASE: [Hrms5Misami]") == "Hrms5Misami"
+    assert pick("DATABASE: hrms5misami (t-sql, read only)") == "Hrms5Misami"
+    assert pick("DATABASE: HR (tsql)") == "HR"                         # a label never matches a sibling
+    assert pick("DATABASE: Payroll2") == "BitopiSplint"                # nothing offered by that name
+    db, sql = tools._split_database_line("SELECT 1 FROM dbo.T", cats, "BitopiSplint")
+    assert db == "BitopiSplint" and sql == "SELECT 1 FROM dbo.T"       # no line at all: SQL kept whole
+    assert tools._split_database_line("DATABASE: HR\nSELECT 1", cats, "BitopiSplint")[1] == "SELECT 1"
