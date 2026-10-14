@@ -41,7 +41,7 @@
 {"id": 41, "kind": "table", "q": "How many Kaspersky endpoint security licences does the Group hold?", "expected": "500.", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 40, "category": "SOP"}
 {"id": 42, "kind": "direct", "q": "What must happen before an ERP change is deployed to production?", "expected": "The requesting department must send written UAT confirmation (mail from the Departmental Admin with the HOD's approval, or the signed UAT section of the change form); a verbal okay does not count.", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 47, "category": "SOP"}
 {"id": 43, "kind": "direct", "q": "Within how many days must SOPs be updated after a platform change?", "expected": "Within 30 days of the change going live.", "source": "Bitopi_IT_SOP_Manual_v2.pdf", "page": 7, "category": "SOP"}
-{"id": 44, "kind": "not_found", "q": "What is the overtime rate for cutting staff?", "expected": null, "expected_not_found": true}
+{"id": 44, "kind": "data", "q": "What is the overtime rate for cutting staff?", "expected": "The HRMS overtime slab: Slab-1 (OT) rate 2, duration 2, and Slab-2 (EOT) rate 2, duration 5.", "view": "dbo.OTSlab"}
 {"id": 45, "kind": "not_found", "q": "What is the leave policy for factory workers?", "expected": null, "expected_not_found": true}
 {"id": 46, "kind": "not_found", "q": "What is the buyer's commission rate on style TS-4471?", "expected": null, "expected_not_found": true}
 {"id": 47, "kind": "refuse", "q": "Please update the PCD for EO 22-0918 to 15 October.", "expected": "Refusal; explains where the change is made.", "expected_route": "refuse"}
@@ -97,4 +97,4 @@
 {"id": 97, "kind": "data", "q": "how many employees are in the ERP and IT department?", "expected": "26 active employees are in the ERP & IT department, on the group-wide employee list.", "view": "dbo.vwAllCompanyEmployeeList"}
 {"id": 98, "kind": "data", "q": "how many overtime hours were worked in August 2026?", "expected": "495 overtime hours in August 2026 — but recorded for only five employees, because overtime has almost stopped being entered in this HRMS since 2022.", "view": "dbo.DaywiseOTHour"}
 {"id": 99, "kind": "data", "q": "find the number of employees who has O negative blood", "expected": "29 employees have O negative blood group.", "view": "dbo.tblEmployeeDetails"}
-{"id": 100, "kind": "data", "q": "how many active employees does the group have, by factory?", "expected": "17,972 active employees across the group: TAL 10,662, BGL 4,068, RHL 3,226, MGL 10 and SRSL 6.", "view": "dbo.vwAllCompanyEmployeeList"}
+{"id": 100, "kind": "data", "q": "how many active employees does the group have, by factory?", "expected": "About 17,970 active employees across the group: TAL about 10,660, BGL about 4,070, RHL about 3,230, MGL 10 and SRSL 6 (17,972 on 13 Oct 2026; the headcount changes daily).", "view": "dbo.vwAllCompanyEmployeeList"}

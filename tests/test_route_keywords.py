@@ -78,3 +78,17 @@ def test_a_factory_with_database_vocabulary_is_data_but_a_factory_alone_asks_the
     small = SaysData()
     monkeypatch.setattr(router, "get_small_chat", lambda: small)
     assert router.route("Tell me about TAL") == "data" and small.calls == 1
+
+
+def test_an_overtime_rate_is_data_without_the_model_and_policy_words_still_win(cats, monkeypatch):
+    """Phase R / golden case 44: the HRMS holds the overtime slab (dbo.OTSlab). Left to the model, the same
+    question was routed documents on 13 Oct and data on 14 Oct from an identical prompt."""
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    for q in ["What is the overtime rate for cutting staff?", "what is the OT rate", "show the EOT slab",
+              "Overtime rates for sewing operators"]:
+        assert router.route(q) == "data", q
+    assert router.route("What is the overtime policy for cutting staff?") == "documents"
+    assert router.route("Who approves overtime for the cutting section?") == "documents"
+    small = SaysData()
+    monkeypatch.setattr(router, "get_small_chat", lambda: small)
+    assert router.route("How much overtime did cutting do?") == "data" and small.calls == 1   # no rate: the model

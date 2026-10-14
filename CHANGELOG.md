@@ -87,6 +87,13 @@ each phase is in `docs/ROADMAP.md`.
   unscored and can be re-run on its own. The before-and-after check now compares all six scores, including
   the not-found and refusal checks it used to skip, and never compares against a run that was itself cut
   short by an outage.
+- **"What is the overtime rate?" gets the same answer every time** (Phase R). Since the HR databases were
+  opened, the payroll system's overtime slab answers it: OT and EOT, both at rate 2. The question used to go to
+  the AI to choose between documents and data, and it chose differently from one day to the next, so the
+  same question got "System doesn't have the data" one day and the slab the next. An overtime rate or slab now
+  goes straight to the data, while an overtime *policy* or "who approves overtime" still goes to the documents.
+  Two test questions were updated to match: the overtime one now expects the slab, and the group headcount one
+  no longer fixes a number that changes every day.
 - **The watcher was running yesterday's rules** (Phase M). The background job that collects the morning
   brief's signals read its rule list from inside the built image rather than from the configuration
   folder, so a rule added or changed during the day was never picked up and nothing reported it. It now

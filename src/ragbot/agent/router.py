@@ -77,6 +77,11 @@ _LINE_CUE = re.compile(r"\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|\bL-
                        r"|\bunits?\s*(?:no\.?|#)?\s*[-:]?\s*\d{1,2}\b", re.I)
 _RUNNING_CUE = re.compile(r"\b(?:what|which|whose)\b.{0,40}\b(?:styles?|buyers?|orders?)\b.{0,40}\brunning\b"
                           r"|\brunning\b.{0,20}\b(?:on|in|at)\b.{0,20}\blines?\b", re.I)
+# Phase R: the overtime rate is the HRMS's own slab (Hrms5Misami dbo.OTSlab), which the router prompt already
+# files under data. Left to the model, "What is the overtime rate for cutting staff?" was routed documents on
+# 13 Oct and data on 14 Oct from a byte-identical prompt — a coin flip between "no data" and an answer.
+# "Overtime policy" and "who approves overtime" still go to documents: _DOC_HINT is checked first.
+_PAY_RATE_CUE = re.compile(r"\b(?:overtime|ot|eot)\s+(?:rates?|slabs?)\b", re.I)
 
 
 def _factory_with_vocabulary(question: str) -> bool:
@@ -103,7 +108,7 @@ def route(question: str, user: str = "") -> str:
         return "data"
     if p and not d:
         return "documents"
-    if not p and (_LINE_CUE.search(question) or _RUNNING_CUE.search(question)
+    if not p and (_LINE_CUE.search(question) or _RUNNING_CUE.search(question) or _PAY_RATE_CUE.search(question)
                   or _factory_with_vocabulary(question)):
         return "data"            # Phase Q: a named line or "which style is running" needs no routing call
     if _keyword_data(question):
