@@ -56,6 +56,33 @@ def test_the_watcher_and_the_risk_job_keep_their_own_runs(tmp_path):
     assert run["id"] == rid and run["predictions"] == 2 and len(preds) == 2
 
 
+# ---------------------------------------------------------------- once a day (M5b)
+def test_the_daily_risk_run_is_due_until_one_has_started_that_day(tmp_path):
+    """The compose watcher ticks hourly; the levels are a daily series. Due = no risk run started today."""
+    from datetime import date
+    db = tmp_path / "signals.db"
+    day = date(2026, 10, 15)
+    assert signals.risk_due(day, path=db)                                   # no store at all
+    signals.write_run([_sig()], datetime(2026, 10, 15, 0, 10), [], path=db)
+    assert signals.risk_due(day, path=db)                                   # a watcher run is not a risk run
+    signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 14, 23, 59), [], source=SRC, path=db)
+    assert signals.risk_due(day, path=db)                                   # yesterday's run does not count
+    signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 15, 0, 10), [], source=SRC, path=db)
+    assert not signals.risk_due(day, path=db)                               # done for today
+    assert signals.risk_due(date(2026, 10, 16), path=db)                    # and due again tomorrow
+
+
+def test_a_store_from_before_phase_m_is_due_not_an_error(tmp_path):
+    import sqlite3
+    from datetime import date
+    db = tmp_path / "signals.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE watch_run (id INTEGER PRIMARY KEY, started TEXT, finished TEXT, signals INTEGER)")
+    con.commit()
+    con.close()
+    assert signals.risk_due(date(2026, 10, 15), path=db)
+
+
 # ---------------------------------------------------------------- round trip
 def test_a_prediction_comes_back_as_the_object_the_engine_produced(tmp_path):
     db = tmp_path / "signals.db"

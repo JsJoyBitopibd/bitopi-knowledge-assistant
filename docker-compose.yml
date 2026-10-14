@@ -62,12 +62,14 @@ services:
   watch:
     # Phase L: runs every agent's watch rules (config/agents/*.yaml) every 60 minutes and stores the signals in
     # data/index/signals.db for the morning brief. Guarded SELECTs over rag.* views only; no model call.
+    # Phase M: --risk-daily also scores and stores the quality risk levels, on the first tick of each day.
+    # Without it no level is stored and the Stage-2 backtest has nothing to read.
     image: bitopi-assistant:1.0
     depends_on:
       - app
     healthcheck:
       disable: true
-    command: ["python", "scripts/watch.py", "--every", "60"]
+    command: ["python", "scripts/watch.py", "--every", "60", "--risk-daily"]
     env_file: .env
     volumes:
       - ./data/index:/app/data/index

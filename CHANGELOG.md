@@ -71,6 +71,11 @@ each phase is in `docs/ROADMAP.md`.
   day-status code has appeared that the assistant does not know.
 
 ### Fixed
+- **The quality risk levels are now stored every day** (Phase M). The daily scoring had been built and
+  tested, but nothing scheduled it: the background watcher ran only the brief's checks, so the levels from
+  14 October were the only ones ever stored, and the weeks of history the Stage-2 review needs would never
+  have built up. The watcher now scores the risk levels on its first run of each day, and only once, even
+  after a restart.
 - **The watcher was running yesterday's rules** (Phase M). The background job that collects the morning
   brief's signals read its rule list from inside the built image rather than from the configuration
   folder, so a rule added or changed during the day was never picked up and nothing reported it. It now

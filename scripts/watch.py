@@ -4,6 +4,7 @@ Usage: python scripts/watch.py              # once
        python scripts/watch.py --every 60   # keep running, every 60 minutes (docker-compose service `watch`)
        python scripts/watch.py --risk       # Phase M: score and store the risk levels, then settle finished subjects
        python scripts/watch.py --risk-only  # the risk pass without the watch rules
+       python scripts/watch.py --every 60 --risk-daily   # the service: watch rules hourly, risk once a day
 Exit code 1 when a rule failed (the others are still stored).
 """
 import argparse, time, _path  # noqa: F401
@@ -11,7 +12,7 @@ from datetime import datetime
 from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.domain_agents import load_agents
-from ragbot.domain_agents.signals import db_path, open_predictions, write_risk_run, write_run
+from ragbot.domain_agents.signals import db_path, open_predictions, risk_due, write_risk_run, write_run
 from ragbot.domain_agents.watch import run_all
 
 
@@ -90,10 +91,14 @@ def main() -> None:
     ap.add_argument("--risk", action="store_true", help="also score and store the Stage-2 risk levels")
     ap.add_argument("--risk-only", action="store_true", help="only the risk pass, no watch rules")
     ap.add_argument("--dry-run", action="store_true", help="score but store nothing (risk pass only)")
+    ap.add_argument("--risk-daily", action="store_true",
+                    help="score the risk levels on the first tick of each day only (the compose service)")
     a = ap.parse_args()
     while True:
         failed = 0 if a.risk_only else once(a.timeout)
-        if a.risk or a.risk_only:
+        # --risk-daily: the levels are a daily series, so an hourly watcher stores them once a day. Asking the
+        # store rather than remembering it here means a restart does not add a second run that day.
+        if a.risk or a.risk_only or (a.risk_daily and risk_due()):
             failed += risk_once(max(a.timeout, 180), dry_run=a.dry_run)
         if not a.every:
             raise SystemExit(1 if failed else 0)

@@ -195,6 +195,13 @@ goes, and it cannot be written before roughly late November 2026.
 - the lead time between a prediction and its outcome. A short lead time means the level was a
   description rather than a warning.
 
+**Read every daily prediction, not only the settled row.** `risk.settle()` writes the outcome onto the
+file's *newest* open prediction (`open_predictions()`), so each row `settled()` returns is the file's
+last daily level, made at most a day before it finished: its lead time is always under a day. The
+earlier predictions for the same file (one per day from `watch.py --risk-daily`, M5b) keep
+`outcome_at` empty. To ask "what did the level say a week before the file finished?", join every
+prediction of a (dimension, factory, subject) to that subject's settled outcome and group by days ahead.
+
 **The starting picture, 2026-10-14** (`scripts/watch.py --risk-only`, 7-day window): 158 files scored,
 151 of them still running and therefore predicted — 52 critical, 55 watch, 32 on target, 12 too few
 checked. 2,058,760 pieces checked in the window, 24% of them in files at the critical level.

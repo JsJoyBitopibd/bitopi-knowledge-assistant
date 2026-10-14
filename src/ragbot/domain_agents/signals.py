@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -188,6 +188,27 @@ def _assessment(row: tuple) -> Any:
                    level=row[4], totals=json.loads(row[5]), caveat=row[7], days=int(row[8]))
     a.measures = [Measured(**m) for m in json.loads(row[6])]
     return a
+
+
+def risk_due(today: Optional[date] = None, path: Optional[Path] = None) -> bool:
+    """Whether today's risk run is still to do: no `risk_run` row started on `today` (the factory's date).
+
+    The levels are a daily series — one prediction per running file per day is what the backtest reads — so
+    the hourly watcher scores risk on its first tick of the day and not again (`watch.py --risk-daily`).
+    A pass that raised writes no row, so a failed night is simply due again on the next tick.
+    """
+    path = path or db_path()
+    if not path.exists():
+        return True
+    con = _connect(path, readonly=True)
+    try:
+        row = con.execute("SELECT 1 FROM risk_run WHERE started LIKE ? LIMIT 1",
+                          (f"{(today or date.today()).isoformat()}%",)).fetchone()
+    except sqlite3.Error:          # a store from before Phase M has no risk_run table yet
+        return True
+    finally:
+        con.close()
+    return row is None
 
 
 def risk_latest(scope: Scope, dimension: str = "quality",
