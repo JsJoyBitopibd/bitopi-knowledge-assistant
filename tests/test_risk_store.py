@@ -238,3 +238,57 @@ def test_a_finished_subject_stays_settled_across_runs(tmp_path):
     assert risk.settle("quality", [a, b], running, "2026-10-14", path=db) == 0
     assert [p["subject"] for p in signals.open_predictions(path=db)] == ["FR-RUNNING"]
     assert len(signals.settled(path=db)) == 1
+
+
+# ---------------------------------------------------------------- the brief (Phase M6)
+def test_risk_levels_do_not_change_the_health_score_or_the_kpi_totals():
+    """Two traps in brief.py. health() and attention() filter kind == "ops", so predictions cannot reach
+    them; metrics() does NOT filter on kind, which is why a risk row must never carry a `metric:` — it
+    would be summed into the KPI row beside "Behind schedule" as though it were a quantity."""
+    from ragbot.domain_agents import brief
+
+    sigs = [_sig(level="red"), _sig(factory="RHL", level="green")]
+    before = brief.build(sigs)
+    after = brief.build(sigs, risk=brief.risk_summary("quality", [_assess(), _assess("FR-B")]))
+    assert after.health == before.health          # the score keeps its old meaning and stays comparable
+    assert after.metrics == before.metrics
+    assert [s.rule for s in after.attention] == [s.rule for s in before.attention]
+    assert after.risk is not None and after.risk.red == 2
+
+
+def test_the_risk_summary_counts_and_orders_by_consequence():
+    from ragbot.domain_agents import brief
+
+    big = _assess("FR-BIG", "TAL", checked=40000, defects=3000)       # red, most pieces
+    small = _assess("FR-SMALL", "TAL", checked=4000, defects=300)     # red, fewer pieces
+    ok = _assess("FR-OK", "TAL", checked=4000, defects=40)            # green
+    r = brief.risk_summary("quality", [ok, small, big])
+    assert (r.total, r.red, r.green) == (3, 2, 1)
+    assert [a.subject for a in r.worst] == ["FR-BIG", "FR-SMALL", "FR-OK"]
+    assert "provisional" in r.caveat.lower()
+
+
+def test_an_empty_risk_summary_is_none_so_the_brief_shows_nothing():
+    from ragbot.domain_agents import brief
+    assert brief.risk_summary("quality", []) is None
+    assert brief.build([_sig()], risk=None).risk is None
+
+
+def test_the_risk_line_renders_escaped_and_carries_the_caveat():
+    """A file number, buyer or style reaches the page from the database as text."""
+    from ragbot.domain_agents import brief
+    from ragbot.ui import view
+
+    nasty = _assess("<script>alert(1)</script>", "TAL")
+    html = view.risk_html(brief.risk_summary("quality", [nasty]))
+    assert "<script>" not in html and "&lt;script&gt;" in html
+    assert "provisional" in html.lower()
+    assert view.risk_html(None) is None
+
+
+def test_the_risk_line_shows_no_caveat_when_nothing_red_is_provisional():
+    from ragbot.domain_agents import brief
+    from ragbot.ui import view
+
+    html = view.risk_html(brief.risk_summary("quality", [_assess(defects=40)]))   # green
+    assert "provisional" not in html.lower()

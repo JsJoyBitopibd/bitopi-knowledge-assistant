@@ -472,3 +472,34 @@ def freshness_card_html(rows: Sequence[Fresh]) -> str:
 def composer_meta_html(scope_label: str) -> str:
     return (f'<div class="ka-composer-meta"><span class="ka-chip">{esc(scope_label)} · Data + Documents</span>'
             '<span>Every answer shows its source</span></div>')
+
+
+def risk_html(r: Any) -> Optional[str]:
+    """The Stage-2 risk line: counts, the worst few files, and the caveat when a red is provisional.
+
+    The caveat is rendered from the row, not from the rules file, so a level read back later still
+    carries the reason its red is not a judgement. Everything is escaped: a file number, buyer or style
+    comes from the database and reaches the page as text (Phase U1 — Streamlit's sanitizer drops a
+    <style> holding "<" + a letter and drops <svg>, so nothing here builds markup from data).
+    """
+    if r is None or not r.total:
+        return None
+    parts = [f'<div class="ka-risk"><div class="ka-risk-head">'
+             f'<span class="ka-risk-title">Quality risk</span>'
+             f'<span class="ka-risk-count">{r.red:,} of {r.total:,} running files need attention</span></div>']
+    parts.append('<div class="ka-risk-counts">'
+                 + " · ".join(f'{n:,} {esc(lv)}' for lv, n in
+                              (("critical", r.red), ("watch", r.amber), ("on target", r.green),
+                               ("too few checked", r.info)) if n)
+                 + "</div>")
+    for a in r.worst:
+        dhu = next((m for m in a.measures if m.measure == "dhu"), None)
+        detail = f"DHU {dhu.value}" if dhu is not None and dhu.value is not None else "not enough checked"
+        parts.append(f'<div class="ka-risk-row">{badge_html(a.level)}'
+                     f'<span class="ka-risk-subject">{esc(a.factory)} · {esc(a.subject)}</span>'
+                     f'<span class="ka-risk-detail">{esc(detail)} over {int(a.window_days)} days, '
+                     f'{float(a.totals.get("Checked", 0) or 0):,.0f} pieces checked</span></div>')
+    if r.caveat:
+        parts.append(f'<div class="ka-risk-caveat">{esc(r.caveat)}</div>')
+    parts.append("</div>")
+    return "".join(parts)

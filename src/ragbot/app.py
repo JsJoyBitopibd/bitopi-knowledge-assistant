@@ -368,18 +368,26 @@ def home() -> None:
         st.html(view.greeting_html(f"{hello}{', ' + first if first else ''}", subtitle))
         if run is not None and signals:
             limit = int(s.get("brief.max_items", 5))
-            b = bf.build(signals, 1000)
+            # Phase M: Stage-2 levels, read from their own tables (signals.latest() reads the
+            # watcher's run; a risk run is deliberately not one, or it would replace the brief).
+            from ragbot.domain_agents.signals import risk_latest
+            _rrun, _preds = risk_latest(scope)
+            risk = bf.risk_summary("quality", _preds, (_rrun or {}).get("finished", ""), limit)
+            b = bf.build(signals, 1000, risk=risk)
             banner = view.banner_html(b.data_warnings)
             if banner:
                 st.html(banner)
             ui.kpi_cards(b, ops, ask)
+            risk_block = view.risk_html(b.risk)
+            if risk_block:
+                st.html(risk_block)
             if b.attention:
                 shown = b.attention if st.session_state.brief_more else b.attention[:limit]
                 ui.attention_list(shown, len(b.attention), _when, ask)
                 if len(b.attention) > limit:
                     st.button("Show fewer" if st.session_state.brief_more else f"Show {len(b.attention) - limit} more",
                               key="more", type="tertiary", on_click=toggle_more)
-            note = f"Checked {_when(run['finished'])} by the watcher; signals are facts from the databases, not predictions."
+            note = f"Checked {_when(run['finished'])} by the watcher; the figures are read from the databases. Quality risk levels are calculated from them, not forecast by AI."
             if bf.is_stale(run["finished"], datetime.now(), int(s.get("brief.stale_after_minutes", 180))):
                 note = "⚠ " + note + " This check is older than expected — the watcher may have stopped."
             if scope.is_admin and run.get("errors"):
