@@ -8,6 +8,24 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-14 — Phases P, Q, R, M: data answers, people data, quality risk
+
+Data answers right the first time (Phase P), questions understood the way staff ask them (Phase Q), the three people
+databases opened (Phase R), the per-user database rule built but not yet switched on (Phase S1–S2), a second model
+provider behind one gateway (N4), Stage-2 quality risk levels stored daily (Phase M), and the web app restyled
+(U1–U3, VistaQ V1–V8). Gate: the full 100-case golden set (`eval/results/20261014T1519.json`, cases 79 and 100
+re-run in `20261014T1521.json`), 0 unscored: hit 96%, faithfulness 100%, correctness 93%, citations 100%,
+not-found 100%, refuse 100%. On the 98 cases unchanged since 13 Oct, no score dropped; correctness went from 92% to 93%.
+Leak suite 47 cases, 0 leaks. Model-written SQL p50 4.97 s (the rule: within 0.5 s of 5.98 s). 947 tests.
+
+**Upgrading:** rebuild the image and recreate every service (`docker compose build app && docker compose up -d`). The
+`watch` service now runs with `--risk-daily` and mounts `config/agents`, `config/rules` and `config/catalog`. New
+settings with defaults in the example: `paths.reference_dir`, `data.schema_rag_max_tables`,
+`data.max_databases_per_question_max`, `data.cross_database_names` (off; the owner's call), `data.values.*`,
+`data.empty_retry.*`, `llm.max_tokens_sql` (now 4096), `llm.tiers`, `llm.daily_budget`, `llm.quota_reset_tz`. A
+second provider (N4) is optional, in `.env` (`LLM_FALLBACK_*`). **Anyone who can reach the app can ask any employee's salary until S3 is armed**,
+which is the owner's decision of 2026-10-13.
+
 ### Added
 - **The assistant now says which orders are heading for a quality problem** (Phase M, Stage 2 of the
   agent ladder). Every running order file is scored each day from VistaQ's live line inspections:
