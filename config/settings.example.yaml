@@ -94,7 +94,9 @@ llm:
     main: [answer, sql, judge, repair]
     executive: [recommend, prioritise]
   daily_budget: 500            # provider requests per day this deployment may spend (free tier: 500 per model);
-                               # the admin caption shows "calls today n/budget", scripts/eval.py --budget refuses to overspend
+                               # the admin caption shows "calls since 13:00 n/budget", scripts/eval.py --budget refuses to overspend
+  quota_reset_tz: America/Los_Angeles   # where the provider's day starts: Gemini resets at midnight Pacific,
+                                        # 13:00 in Dhaka under US daylight time and 14:00 otherwise
 
 answer:
   not_found_text: "System doesn't have the data."

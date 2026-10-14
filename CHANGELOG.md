@@ -76,6 +76,17 @@ each phase is in `docs/ROADMAP.md`.
   14 October were the only ones ever stored, and the weeks of history the Stage-2 review needs would never
   have built up. The watcher now scores the risk levels on its first run of each day, and only once, even
   after a restart.
+- **The AI budget counter now follows the provider's day.** Google resets the daily allowance at midnight
+  Pacific time, which is 13:00 in Dhaka (14:00 from November), not at midnight here. The counter used to
+  reset at local midnight, so a morning looked fresh while it was really spending what was left of the
+  previous afternoon's allowance. The admin caption now reads "calls since 13:00", and a test run is
+  refused against the right number.
+- **The quality score no longer counts an outage as a wrong answer.** When the AI service ran out of
+  allowance during a test run, its "quota reached" message was scored as a wrong answer, and on a question
+  whose right answer is "no data" it would have been scored as a *right* one. Such a question is now left
+  unscored and can be re-run on its own. The before-and-after check now compares all six scores, including
+  the not-found and refusal checks it used to skip, and never compares against a run that was itself cut
+  short by an outage.
 - **The watcher was running yesterday's rules** (Phase M). The background job that collects the morning
   brief's signals read its rule list from inside the built image rather than from the configuration
   folder, so a rule added or changed during the day was never picked up and nothing reported it. It now

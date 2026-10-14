@@ -1,12 +1,16 @@
 """Golden-set evaluation: hit rate, faithfulness (judge), correctness (judge), citation validity,
-not-found handling, refusal routing. Saves eval/results/<stamp>.json and BLOCKs on a > 5-point drop.
-Usage: python scripts/eval.py [--limit N] [--sleep S] [--kind data,both] [--tag label]"""
+not-found handling, refusal routing. Saves eval/results/<stamp>.json and BLOCKs on a > 5-point drop of any score.
+Usage: python scripts/eval.py [--limit N] [--sleep S] [--kind data,both] [--ids 77,94] [--tag label]
+                              [--budget] [--baseline eval/results/<stamp>.json]
+A case the provider could not answer (quota, timeout) is unscored, not wrong: re-run it with --ids."""
 import argparse, json, re, time, _path  # noqa: F401
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 from ragbot.agent.orchestrator import answer
 from ragbot.auth.models import Scope
 from ragbot.config import settings
+from ragbot.evaluation import SCORES, baseline_rows, blocks, infra_failure, outage_row, pick_baseline, scores
 from ragbot.llm import get_chat
 from ragbot.llm.base import LLMError
 
@@ -51,14 +55,21 @@ def main():
     ap.add_argument("--kind", help="comma-separated kinds to run"); ap.add_argument("--tag", default="")
     ap.add_argument("--compare", metavar="FILE", help="only compare a saved run (eval/results/<stamp>.json)")
     ap.add_argument("--budget", action="store_true",
-                    help="refuse to start when today's provider calls plus this run's would exceed llm.daily_budget")
+                    help="refuse to start when the provider's day's calls plus this run's would exceed llm.daily_budget")
+    ap.add_argument("--ids", help="comma-separated case ids to run (e.g. the unscored ones of a run)")
+    ap.add_argument("--baseline", metavar="FILE",
+                    help="compare against this run instead of the newest complete one that covers every case")
     a = ap.parse_args()
+    baseline = (Path(a.baseline) if Path(a.baseline).is_absolute() else ROOT / a.baseline) if a.baseline else None
     if a.compare:
-        compare(Path(a.compare) if Path(a.compare).is_absolute() else ROOT / a.compare)
+        compare(Path(a.compare) if Path(a.compare).is_absolute() else ROOT / a.compare, baseline)
         return
     cases = [json.loads(l) for l in Path(settings().path("golden_set")).read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.kind:
         cases = [c for c in cases if c.get("kind") in a.kind.split(",")]
+    if a.ids:
+        wanted = {int(x) for x in a.ids.split(",") if x.strip()}
+        cases = [c for c in cases if c["id"] in wanted]
     if a.limit:
         cases = cases[: a.limit]
     if a.budget:
@@ -75,7 +86,12 @@ def main():
         row = {"id": c["id"], "kind": c.get("kind", ""), "route": res.route, "answer": res.text, "warnings": res.warnings}
         markers = set(re.findall(r"\[([PD]\d+)\]", res.text))
         row["citation_valid"] = 1.0 if markers <= {r.marker for r in res.references} else 0.0
-        if c.get("expected_route"):
+        if infra_failure(res):
+            # the provider was out (quota, timeout): there is no answer to score. Scored, it counted as wrong —
+            # and the quota message is marked not-found, so on a not-found case it would have counted as right.
+            row.update(citation_valid=None, hit=None, faithful=None, correct=None, unscored=True,
+                       error_kind=res.error_kind)
+        elif c.get("expected_route"):
             row.update(hit=None, faithful=None, correct=1.0 if res.route == c["expected_route"] else 0.0)
         elif c.get("expected_not_found"):
             row.update(hit=None, faithful=None, correct=1.0 if res.not_found else 0.0)
@@ -125,41 +141,49 @@ def main():
     stamp = summary["date"].replace(":", "").replace("-", "")
     (out / f"{stamp}.json").write_text(json.dumps({"summary": summary, "rows": rows}, indent=1, ensure_ascii=False),
                                        encoding="utf-8")
+    unscored = [r["id"] for r in rows if r.get("unscored")]
     print(f"n={summary['n']} hit={summary['hit_rate']:.0%} faithful={summary['faithfulness']:.0%} "
           f"correct={summary['correctness']:.0%} citations_valid={summary['citation_validity']:.0%} "
-          f"not_found={summary['not_found_ok']:.0%} refuse={summary['refuse_ok']:.0%}  model={summary['model']}"
-          + (f"  UNSCORED={summary['unscored']} (judge unreachable; re-run them)" if summary["unscored"] else ""))
-    compare(out / f"{stamp}.json")
+          f"not_found={summary['not_found_ok']:.0%} refuse={summary['refuse_ok']:.0%}  model={summary['model']}")
+    if unscored:
+        print(f"  INCOMPLETE: {len(unscored)} case(s) unscored (provider or judge unreachable) — not a gate result "
+              f"until they are re-run: --ids {','.join(str(i) for i in unscored)}")
+    compare(out / f"{stamp}.json", baseline)
 
 
-def compare(current: Path) -> None:
-    """Compare like with like: the most recent earlier run that covered every case of this one, scored on
-    exactly these cases. (Comparing a --kind subset with a different run's totals printed false BLOCKs.)
-    Only files named like a run (<date>T<time>.json) are candidates; other reports in the folder (and
-    the run itself) are skipped."""
-    run = json.loads(current.read_text(encoding="utf-8"))
-    rows, summary = run["rows"], run["summary"]
+def compare(current: Path, baseline: Optional[Path] = None) -> None:
+    """Compare like with like: a baseline run scored on exactly this run's cases, every score of the six.
+
+    The baseline is `--baseline` when given, else the most recent earlier *complete* run that covered every
+    case of this one (ragbot/evaluation.py: a run with an unscored or outage row is never a baseline). Cases
+    this run left unscored are left out of both sides and named, so a gap is never read as a drop or a rise.
+    Only files named like a run (<date>T<time>.json) are candidates; other reports in the folder are skipped."""
+    rows = json.loads(current.read_text(encoding="utf-8"))["rows"]
     ids = {r["id"] for r in rows}
-    base = None
-    runs = sorted(f for f in current.parent.glob("*.json") if re.fullmatch(r"\d{8}T\d{4}", f.stem))
-    for f in reversed([f for f in runs if f.name < current.name]):
-        old = {r["id"]: r for r in json.loads(f.read_text(encoding="utf-8")).get("rows", [])}
-        if ids <= set(old):
-            base = (f.name, [old[i] for i in sorted(ids)])
-            break
-    if base:
+    if baseline is not None:
+        fname, old_rows = baseline.name, baseline_rows(baseline, ids)
+    else:
+        base = pick_baseline(current, ids)
+        if base is None:
+            print("  no complete earlier run covers these cases; nothing compared")
+            return
         fname, old_rows = base
-        print(f"  vs {fname} on the same {len(ids)} cases:")
-        for k, col in (("hit_rate", "hit"), ("faithfulness", "faithful"), ("correctness", "correct"),
-                       ("citation_validity", "citation_valid")):
-            xs = [r[col] for r in old_rows if r.get(col) is not None]
-            before = sum(xs) / len(xs) if xs else 0.0
-            flag = "  <-- BLOCK: dropped more than 5 points" if before - summary[k] > 0.05 else ""
-            print(f"  {k:<18} {before:.0%} -> {summary[k]:.0%}{flag}")
-        changed = [(r["id"], o.get("correct"), r.get("correct")) for r, o in zip(sorted(rows, key=lambda r: r["id"]), old_rows)
-                   if r.get("correct") != o.get("correct")]
-        if changed:
-            print("  correctness changed: " + ", ".join(f"case {i} {a} -> {b}" for i, a, b in changed))
+    gaps = {r["id"] for r in rows if outage_row(r)}
+    now = sorted((r for r in rows if r["id"] not in gaps), key=lambda r: r["id"])
+    old = [o for o in old_rows if o["id"] not in gaps]
+    before, after = scores(old), scores(now)
+    dropped = set(blocks(before, after))
+    print(f"  vs {fname} on the same {len(now)} cases" + (f" ({len(gaps)} unscored left out: "
+          f"{', '.join(str(i) for i in sorted(gaps))})" if gaps else "") + ":")
+    for k in SCORES:
+        if before[k] is None or after[k] is None:
+            continue
+        flag = "  <-- BLOCK: dropped more than 5 points" if k in dropped else ""
+        print(f"  {k:<18} {before[k]:.0%} -> {after[k]:.0%}{flag}")
+    changed = [(r["id"], o.get("correct"), r.get("correct")) for r, o in zip(now, old)
+               if r.get("correct") != o.get("correct")]
+    if changed:
+        print("  correctness changed: " + ", ".join(f"case {i} {a} -> {b}" for i, a, b in changed))
 
 
 if __name__ == "__main__":
