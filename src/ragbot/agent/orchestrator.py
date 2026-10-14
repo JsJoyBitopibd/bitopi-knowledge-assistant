@@ -216,7 +216,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # a repaired model-written result comes with the DISTINCT lookups that fixed it ([D2]…, P2): still templated
     with_lookups = len(results) > 1 and all(x.tool == "lookup" for x in results[1:])
     if r == "data" and not chunks and (len(results) == 1 or companion or with_lookups) and s.get("answer.templated", True):
-        if _templated_answer(out, results, nf, allow_generated=bool(s.get("answer.templated_generated", True))):
+        if _templated_answer(out, results, nf, allow_generated=bool(s.get("answer.templated_generated", True)),
+                             scope=scope):
             yield Final(_log(out, user, scope)); return
 
     yield _writing(chunks, results)
@@ -295,7 +296,8 @@ def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) ->
     return Stage("writing", "Writing the answer…", sources=names[:limit])
 
 
-def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_generated: bool = False) -> bool:
+def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_generated: bool = False,
+                      scope: Optional[Scope] = None) -> bool:
     """Fill `out` from agent/templated.py when the results qualify and the text verifies: one result, or a fixed
     tool's result [D1] followed by its companion [D2] (an empty companion is left out)."""
     from ..data.tools import companion_tool, load_fixed_tools, merge_companion
@@ -323,6 +325,15 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
         if holder is not None:
             used.append(holder)
             text += "\n\n" + prompt("matched_value_note").strip().format(asked=asked, matched=matched, marker=f"D{len(used)}")
+    # Phase M: the stored Stage-2 level for the file this answer is about. Appended exactly as the
+    # P2 note above is — a sentence from prompts/, the result that holds its numbers added to
+    # `used`, cited [D#], and left to verify(). The level is computed in Python from VistaQ rows,
+    # never by the model, and every figure the sentence states is in the cited rows.
+    risk_result = _risk_note(text, used, scope)
+    if risk_result is not None:
+        note_text, source = risk_result
+        used.append(source)
+        text += "\n\n" + note_text.replace("[D1]", f"[D{len(used)}]")
     block, refs = sources_block([], used)
     ok, problems = verify(text, [], used, nf)
     if not ok:
@@ -455,3 +466,35 @@ def _log(a: Answer, user: str, scope: Scope) -> Answer:
 def _log_verify_failure(question: str, rewritten: str, problems: list[str]) -> None:
     with open(log_dir() / "verify_failures.csv", "a", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerow([datetime.now().isoformat(timespec="seconds"), question, rewritten, " | ".join(problems)])
+
+
+# A file number as VistaQ and the ERP both write it (FR-26-1985); the risk store is keyed on it.
+_FILE_NO = re.compile(r"\bFR-\d{2}-\d{1,6}\b", re.I)
+
+
+def _risk_note(text: str, used: list[QueryResult], scope: Optional[Scope]):
+    """The stored Stage-2 level for the one file this answer is about, as (sentence, citable result).
+
+    Only when the answer is about exactly ONE file. A table of sixty files would otherwise grow sixty
+    sentences, and "the risk for this order" means nothing when the answer covers many. Returns None
+    whenever there is nothing certain to say — no file, several files, no stored level, or no risk run
+    yet — so an answer is never blocked by this.
+    """
+    if scope is None or not used:
+        return None
+    try:
+        from ..domain_agents import risk
+        subjects = {m.upper() for m in _FILE_NO.findall(text)}
+        for r in used:                       # a file can be in the rows without being in the prose
+            if "fileno" in [c.lower() for c in r.columns]:
+                i = [c.lower() for c in r.columns].index("fileno")
+                subjects |= {str(row[i]).upper() for row in r.rows if i < len(row) and row[i]}
+        if len(subjects) != 1:
+            return None
+        found = risk.for_subjects(subjects, scope)
+        a = next(iter(found.values()), None)
+        if a is None:
+            return None
+        return risk.note(a, marker="D1", as_of_day=str(getattr(used[0], "as_of", "") or "")[:10]), risk.note_source(a)
+    except Exception:
+        return None                          # a missing or unreadable risk store must never break an answer

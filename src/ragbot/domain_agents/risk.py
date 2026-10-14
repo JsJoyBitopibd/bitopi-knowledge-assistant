@@ -373,3 +373,59 @@ def predictable(assessments: list[Assessment], running: set[tuple[str, str]]) ->
     outcome is settled against.
     """
     return [a for a in assessments if (a.factory, a.subject) in running]
+
+
+LEVEL_WORD = {"red": "critical", "amber": "watch", "green": "on target", "info": "not enough checked"}
+# How a measure is named to a person. The column names are the vocabulary of config/fixed_tools.yaml
+# (&vq_measures) and belong in a table header, not in a sentence a factory manager reads.
+MEASURE_WORD = {"dhu": "DHU", "reject_pct": "reject rate", "ftp_pct": "first pass",
+                "defective_pct": "defective pieces", "rectified_pct": "rectified"}
+PERCENT = ("reject_pct", "ftp_pct", "defective_pct", "rectified_pct")
+
+
+def note_source(a: Assessment) -> Any:
+    """The stored level as a citable result.
+
+    Every number the note states is in these rows, so the sentence obeys non-negotiable #2 the same way
+    an aggregates answer does: `engine="local"` is the project's existing way to cite a pre-computed copy
+    (data/aggregates.py), and the copy here was computed in Python from VistaQ rows, never by the model.
+    """
+    from ..models import QueryResult
+
+    cols = ["Measure", "Value", "Target", "Critical at", "Level", "Pieces checked", "Days"]
+    checked = float(a.totals.get("Checked", 0) or 0)
+    rows = [[m.measure, m.value, m.amber, m.red, m.level, checked, a.days] for m in a.measures]
+    return QueryResult(
+        database="signals.db", engine="local", views=["prediction"],
+        sql=f"-- Stage-2 quality risk for {a.subject} ({a.factory}), stored by scripts/watch.py --risk",
+        tool="risk", columns=cols, rows=rows, key_columns=["Measure"], agent="quality")
+
+
+def note(a: Assessment, marker: str = "D1", as_of_day: str = "") -> str:
+    """One sentence for an answer about this subject, loaded from prompts/ (never inlined, CLAUDE.md)."""
+    from ..config import prompt
+
+    scored = [m for m in a.measures if m.value is not None and m.enough]
+    if scored:
+        detail = ", ".join(
+            f"{MEASURE_WORD.get(m.measure, m.measure)} {m.value}{'%' if m.measure in PERCENT else ''}"
+            f" against a target of {m.amber}{'%' if m.measure in PERCENT else ''}"
+            for m in scored)
+    else:
+        detail = (f"only {float(a.totals.get('Checked', 0) or 0):,.0f} pieces were checked, too few to judge")
+    return prompt("risk_note").strip().format(
+        subject=a.subject, level_word=LEVEL_WORD.get(a.level, a.level), detail=detail,
+        window_days=a.window_days, as_of_day=as_of_day or "the latest inspection day",
+        marker=f"[{marker}]", caveat=a.caveat).strip()
+
+
+def for_subjects(subjects: set[str], scope: Any, path: Optional[Any] = None) -> dict[str, Assessment]:
+    """The newest stored level for each named subject the viewer may see. {} when nothing is stored yet,
+    so an answer is never blocked by the absence of a risk run."""
+    from .signals import risk_latest
+
+    try:
+        _run, preds = risk_latest(scope, "quality", path=path)
+    except Exception:
+        return {}
+    return {a.subject: a for a in preds if a.subject in subjects}

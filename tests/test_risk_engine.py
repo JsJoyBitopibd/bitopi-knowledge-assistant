@@ -137,3 +137,47 @@ def test_a_red_from_a_validated_threshold_is_not_marked_provisional():
                          amber_source="DHUThreshold", red=6, red_provisional=False, min_checked=200)])
     a = risk.evaluate(rs, "FR", "TAL", [_row(4000, defects=300)])
     assert a.level == "red" and not a.provisional and a.caveat == ""
+
+
+# ---------------------------------------------------------------- the note on an answer (Phase M6b)
+def test_the_note_states_only_numbers_that_are_in_its_cited_rows():
+    """Non-negotiable #2: every number in an answer must appear in a retrieved row. The level is computed
+    in Python from VistaQ rows, never by the model, and note_source() is the result that licenses it."""
+    import re
+
+    a = risk.evaluate(_rs(), "FR-26-1945", "TAL", [_row(4000, defects=327, rejected=0)])
+    text = risk.note(a, marker="D3", as_of_day="2026-10-14")
+    src = risk.note_source(a)
+
+    in_rows = {str(v) for row in src.rows for v in row}
+    # the file number and the date are identifiers, not claims the sentence makes
+    claims = text.replace(a.subject, "").replace("2026-10-14", "").replace("D3", "")
+    for n in re.findall(r"\d+\.\d+|\b\d+\b", claims):
+        assert n in in_rows or n == str(a.window_days), f"{n} is in the sentence but not in the cited rows"
+
+
+def test_the_note_is_readable_rather_than_a_column_dump():
+    a = risk.evaluate(_rs(), "FR-26-1945", "TAL", [_row(4000, defects=327, rejected=40)])
+    text = risk.note(a, marker="D3")
+    assert "DHU" in text and "reject rate" in text
+    assert "dhu " not in text and "reject_pct" not in text
+    assert "critical" in text
+
+
+def test_the_note_carries_the_caveat_only_for_a_provisional_red():
+    red = risk.note(risk.evaluate(_rs(), "FR", "TAL", [_row(4000, defects=327)]), marker="D3")
+    green = risk.note(risk.evaluate(_rs(), "FR", "TAL", [_row(4000, defects=40)]), marker="D3")
+    assert "provisional" in red.lower() and "provisional" not in green.lower()
+
+
+def test_the_note_says_so_when_too_little_was_checked():
+    a = risk.evaluate(_rs(), "FR", "TAL", [_row(50, defects=3)])
+    assert "too few to judge" in risk.note(a, marker="D3")
+
+
+def test_the_note_source_is_a_local_result_like_the_aggregates_copies():
+    """engine="local" is the project's existing way to cite a pre-computed copy (data/aggregates.py)."""
+    src = risk.note_source(risk.evaluate(_rs(), "FR-26-1945", "TAL", [_row(4000, defects=327)]))
+    assert src.engine == "local" and src.database == "signals.db" and src.views == ["prediction"]
+    assert src.tool == "risk" and "FR-26-1945" in src.sql
+    assert "Measure" in src.columns and len(src.rows) == 2
