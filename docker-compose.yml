@@ -1,10 +1,11 @@
-# Two containers from the same image sharing the index and PDFs:
+# Four services from the same image sharing the index and PDFs:
 #   app           - the Streamlit UI
 #   ingest-worker - rescans data/pdfs and re-ingests on a schedule, so new PDFs reach the app
 #                   without a restart (the app hot-reloads its caches when the index changes)
 #   aggregates    - refreshes the pre-computed heavy results (config/aggregates.yaml) daily;
 #                   one read-only scan each, swapped into data/index/aggregates.db atomically
-#   watch         - runs the domain agents' watch rules hourly into data/index/signals.db (morning brief)
+#   watch         - the domain agents' watch rules hourly (morning brief) and, once a day, the Stage-2
+#                   quality risk levels (--risk-daily), into data/index/signals.db
 #
 #   docker compose up -d
 #

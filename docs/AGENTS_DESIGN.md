@@ -2,8 +2,10 @@
 
 Status: designed 2026-10-06. Phase K (Stage 1 for the Order, Finance/LC and Production agents, plus the
 data-quality report) is built and released as v1.11.0, Phase L (watcher, morning brief, Quality agent) as
-v1.12.0; "As built" in `docs/ROADMAP.md` lists where the live data changed the plan. Phases M–O wait for the
-staff interviews, cost data and the Stage-4 sign-off (§8). Progress is tracked in `docs/PROGRESS.md`.
+v1.12.0, and Phase M (Stage 2 for the Quality domain only) with the N4 model gateway as v1.13.0; "As built" in
+`docs/ROADMAP.md` lists where the live data changed the plan. N1–N3 wait for the Stage-2 backtest (M✓) and the
+cost data, the other domains' Stage 2 for the staff interviews and their data owners, and O for the Stage-4
+sign-off (§8). Progress is tracked in `docs/PROGRESS.md`.
 
 ## Summary
 
@@ -197,7 +199,7 @@ of this project (`CLAUDE.md`, "Decisions already made").
 ## 6. Model gateway
 
 The concept routes cheap tasks to a cheap model and executive reasoning to a stronger one, with a
-backup. Phase N extends the two functions that exist today (`get_chat`, `get_small_chat` in
+backup. *Built in v1.13.0 (N4, ahead of N1–N3).* Phase N extended the two functions that existed (`get_chat`, `get_small_chat` in
 `src/ragbot/llm/__init__.py`) into `get_model(task)`:
 
 | Tier | Tasks | Model |
@@ -221,8 +223,8 @@ design notes are in `docs/ROADMAP.md`, "Phases K–O".
 |---|---|---|
 | K | v1.11.0 | Stage 1 for Order, Finance/LC, Sourcing, Production: agent registry and charters, curated views, fixed tools for the example questions, data-quality report |
 | L | v1.12.0 | Watcher job, `signals.db`, the morning brief on the home page, health score; Quality's Stage-1 tools |
-| M | v1.13.0 | Stage 2: risk rules from the interviews, green / amber / red per order, every evaluation stored |
-| N | v1.14.0 | Stage 3: playbooks, ranked recommendations with computed costs, approve / reject and outcome records; the model gateway |
+| M | v1.13.0 | Stage 2, as built: the Quality domain only — green / amber / red per running order file, amber from VistaQ's own targets (`dbo.Threshold`), red provisional until the interviews, every evaluation stored daily (ROADMAP "Phase M" records the deviations) |
+| N | v1.14.0 | Stage 3: playbooks, ranked recommendations with computed costs, approve / reject and outcome records (the model gateway, N4, shipped early in v1.13.0) |
 | O | v1.15.0 | Stage 4, after sign-off: drafts stored locally, never sent |
 
 Logistics and Energy join when their data feeds exist. The interviews run alongside Phases K and L,

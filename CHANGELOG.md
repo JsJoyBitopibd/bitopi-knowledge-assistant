@@ -8,6 +8,17 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Fixed
+- **The before-and-after check sets aside a question whose definition changed.** When a test question is
+  redefined between two runs, as the overtime-rate question was in 1.13.0 (from "no data" to the payroll slab),
+  comparing its two scores mixed two different questions into one figure; with five not-found questions, one
+  case is 20 points. The check now leaves such a question out of both sides and prints it separately, so the
+  1.13.0 gate's figures no longer need working out by hand.
+- The 1.13.0 notes below, corrected after the release: one Added, Changed and Fixed list each (there were two
+  of each), the quota gauge described as it shipped ("calls since 13:00", not "calls today"), and the optional
+  `LLM_EXECUTIVE_MODEL` setting listed. The README now describes the `watch` service and its Windows task, and
+  the prompt history has its missing v19 (Phase R) and v20 (Phase M6b) entries.
+
 ## [1.13.0] — 2026-10-14 — Phases P, Q, R, M: data answers, people data, quality risk
 
 Data answers right the first time (Phase P), questions understood the way staff ask them (Phase Q), the three people
@@ -16,15 +27,17 @@ provider behind one gateway (N4), Stage-2 quality risk levels stored daily (Phas
 (U1–U3, VistaQ V1–V8). Gate: the full 100-case golden set (`eval/results/20261014T1519.json`, cases 79 and 100
 re-run in `20261014T1521.json`), 0 unscored: hit 96%, faithfulness 100%, correctness 93%, citations 100%,
 not-found 100%, refuse 100%. On the 98 cases unchanged since 13 Oct, no score dropped; correctness went from 92% to 93%.
-Leak suite 47 cases, 0 leaks. Model-written SQL p50 4.97 s (the rule: within 0.5 s of 5.98 s). 947 tests.
+Leak suite 47 cases, 0 leaks. Model-written SQL p50 4.97 s, 1.0 s under the 5.98 s baseline (the rule: no more than
+0.5 s slower; the question set grew from 5 to 9). 947 tests.
 
 **Upgrading:** rebuild the image and recreate every service (`docker compose build app && docker compose up -d`). The
 `watch` service now runs with `--risk-daily` and mounts `config/agents`, `config/rules` and `config/catalog`. New
 settings with defaults in the example: `paths.reference_dir`, `data.schema_rag_max_tables`,
 `data.max_databases_per_question_max`, `data.cross_database_names` (off; the owner's call), `data.values.*`,
 `data.empty_retry.*`, `llm.max_tokens_sql` (now 4096), `llm.tiers`, `llm.daily_budget`, `llm.quota_reset_tz`. A
-second provider (N4) is optional, in `.env` (`LLM_FALLBACK_*`). **Anyone who can reach the app can ask any employee's salary until S3 is armed**,
-which is the owner's decision of 2026-10-13.
+second provider (N4) is optional, in `.env` (`LLM_FALLBACK_*`), as is `LLM_EXECUTIVE_MODEL` (unset = the main model).
+**Anyone who can reach the app can ask any employee's salary until S3 is armed**, which is the owner's decision of
+2026-10-13.
 
 ### Added
 - **The assistant now says which orders are heading for a quality problem** (Phase M, Stage 2 of the
@@ -87,6 +100,175 @@ which is the owner's decision of 2026-10-13.
 - **Seven data-quality checks over the people data**, run with the rest by `scripts/data_quality.py`: how current
   attendance, punches, overtime and the salary sheet are, how much of the workforce each covers, and whether a
   day-status code has appeared that the assistant does not know.
+- **Phase P3 — questions that span two databases.** Every combination is decided in `docs/DATA_ACCESS.md` §5a:
+  the 18 catalogs on the production instance, the two VistaQ catalogs on their own host. Three mechanisms:
+  a fixed tool's companion from another database can now declare `merge:` and its columns are joined onto the
+  main rows in Python — one table from two servers, cited `[D1][D2]` (the VistaQ QC-per-file answers now carry
+  each file's buyer, export orders and POs from the ERP in the same rows); small masters are copied nightly for
+  SQLite joins (`company_master`); and, **off by default** (`data.cross_database_names`), a model-written statement
+  may read a sibling database on the same instance as `Database.schema.table` — the guard accepts only a raw table
+  that sibling's catalog offers, never a `rag.*` view or a sensitive name, for unrestricted users only, and the
+  reference card names both tables. Proven on a dev copy with the setting on; the owner decides for production.
+- **Phase P2 — the recorded names, and a second look when a query finds nothing.** A nightly value index
+  (`config/aggregates.yaml` specs with `entity:`; `src/ragbot/data/values.py`) copies the store, company, item
+  category, store group and issue-cause names as the data records them, and matches a question's words against
+  them — whole phrase, the store aliases of `entities.yaml`, then a close spelling ("mantainance store" →
+  'Maintenance Store (Misami)'), scoped to what the user may see. A fixed tool's `type: value` parameter binds the
+  recorded value (the stock-balance tool now filters on the store named); the SQL prompt gets a "Known values"
+  line with the recorded spelling and the column to filter on; the router counts a recorded name like a keyword.
+- **Self-correction, bounded** (`src/ragbot/data/empty_retry.py`). When a model-written statement returns nothing,
+  the recorded values of each text column it filtered on are looked up (guarded `SELECT DISTINCT`, cited as their
+  own cards); an exact hit means the zero is real; a unique close match replaces the misspelled literal and the
+  statement runs again, with a note under the answer saying what was matched; otherwise at most one more model
+  call shows the recorded values, or the other tables listed for the question. At most 2 extra calls per
+  question, only after an empty first try, within 20 s, never on the `both` route (the owner's bounds).
+- **Not-found replies after a model-written query say what was checked** in the user's own words ("I checked
+  Inventory (store system) for '1178108', 'xyz store' and found no matching records"), offer the recorded values
+  as questions to click, skip the documents search, and show "Refresh data".
+- **Phase P1 — store questions answered right the first time.** Seven curated Inventory views: `rag.vw_StockBalance`
+  (closing balance of an item per company and store — receipts minus issues in the store ledger, converted to the
+  item's base unit, with category, store group and the non-production flag), `vw_StockMovement`, `vw_GoodsReceipt`,
+  `vw_StockIssue`, `vw_Item`, `vw_Store`, `vw_Company`; six fixed tools (stock balance, receipts and issues, receipts,
+  issues, stores holding an item, item record) that answer with no model call; an Inventory / Store agent and charter.
+  The 8 Oct 2026 closing-balance question that was answered "System doesn't have the data." in 23 s now answers in
+  3 s: Maintenance Store (Misami), 13 L received, 12.125 L issued, 0.875 L in hand.
+- **Companies and stores by name.** `config/reference/entities.yaml` (the group's 12 companies with codes, short
+  names and aliases from `SystemManager.dbo.Company`; store aliases; metric synonyms). A fixed tool's `type: entity`
+  parameter turns "companyid=02" or "misami" into the bound parameter '02', never question text.
+- **The router hears the question's own words.** Catalog `synonyms:` ("closing balance" → "closing stock"),
+  `table_notes:` (one-line descriptions for discovered tables, seen by the prompt and the schema index) and a per-catalog
+  `schema_rag_k`; compound tokens split on real column names (`companyid` → company id); SQL reserved words stripped
+  from a pasted statement ("ORDER BY" no longer scores the order agent); ties broken by table-name share, then keyword
+  hits, not the alphabet; a third catalog is shown when it ties the second on keywords; "please find / get / fetch"
+  are list cues; a column-word signal in table selection (three shared words at least). Schema recall 16/17.
+- **A pasted SQL statement runs as written** — under the same guard, scope and row cap as a model-written one,
+  against the catalog that offers its tables (bare names qualified with `dbo.`, `TOP (200)` added); it is never
+  rewritten or scored on its words.
+- **Phase P0 — the logs explain a failed data answer.** `logs/sql.csv` gains a `database` column (19 catalogs share
+  one connection line, so the statement alone did not say where it ran); new `logs/sql_gen.csv` records every SQL
+  attempt: the databases the model was shown, the `DATABASE:` line it wrote, the raw reply, whether the guard or the
+  database refused it, the row count and the stop reason; `logs/chat.csv` gains `databases_considered`, filled on
+  a not-found too. Admins see the databases under each answer.
+- **Quota gauge.** `ragbot/quota.py` counts the provider calls in `calls.csv` made since the provider's day began
+  (midnight in `llm.quota_reset_tz`: 13:00 Dhaka, 14:00 from 2 Nov) against `llm.daily_budget` (500, the free
+  tier); the admin caption shows "calls since 13:00 n/500" and `scripts/eval.py --budget` refuses a run that would
+  overspend the day (the judge alone took a third of a free day).
+- Phase P design in `docs/ROADMAP.md` (P0 hygiene → P1 right the first time → P2 bounded self-correction → P3
+  cross-database), with the diagnosis of the 8 Oct closing-balance failure.
+- **RHL's VistaQ server** as two catalogs, `VistaQ_Default_RHL` (QC inspections and defects, daily QC and defect
+  summaries, production and session plans, cutting, corrective actions) and `VistaQ_Logging_RHL` (application logs),
+  on their own connection line `SQLSERVER_CONN_VISTAQ`. Discovery, schema vectors, and name hints for line, unit,
+  buyer, style and defect IDs. The server holds all three factories, so neither catalog declares `factory:`.
+- A catalog can declare `factory:` (one factory's data only). The router then prefers it when a question names that
+  factory and keeps it out when the question names another one. No catalog uses it today.
+- **Live line quality from VistaQ, answered in under a second.** Six views over the raw inspection tables
+  (`rag.vw_LineDayQuality`, `vw_QCDefect`, `vw_QCStageDay`, `vw_CorrectiveAction`, `vw_CuttingDaily`, `vw_QCTarget`;
+  the factory comes from the line → unit → factory tree) and 15 fixed tools for the questions QC and production staff
+  ask: QC summary, DHU, defect summary, lines above the DHU target, lines by DHU or end-line output, rejects, defects
+  by buyer or style, results by QC stage, corrective actions, cutting output. Each takes a period (today by default,
+  yesterday, this or last week or month, last N days) and an optional factory. Measured live on 7 Oct 2026: 0.05–0.55 s
+  for a day or a week, about 3 s for a month, the same for a user limited to one factory. DHU matches the value
+  VistaQ stores on its corrective actions. The list is in `docs/vistaq_questions.md`. `dbo.DefectSummary` and
+  `dbo.QCSummary` are left out: the job that fills them runs days behind.
+- **Not-found replies say something useful.** After "System doesn't have the data." comes one plain sentence for
+  staff (`agent/not_found.py`): what was checked and for which period when a query came back empty ("I checked VistaQ
+  for today and found no matching records…"), else where that kind of information lives (each agent's `where:` in
+  `config/agents/*.yaml`), never a view or table name. Under it, "Questions I can answer": the same question over a
+  wider period when a period was empty, then example questions close to the question, none naming another factory
+  or one particular record. The model's own not-found sentence follows the same rule (prompts v11).
+- Quality watch rules on VistaQ: DHU today and reject rate today per factory (amber at VistaQ's own targets, 3.85
+  and 1 %), replacing the DHU of the stale daily line record.
+- Golden cases 70–79 (VistaQ questions, the "toady" typo, an AQL question that must be not-found).
+- **Written dates in VistaQ questions** (owner's screenshots, 8 Oct): one period grammar (`tools.PERIOD`, written
+  `{period}` in a tool's `match:`) adds dates written day first (`6-10-2026`, `06/10/2026`, `2026-10-06`,
+  `7th october`, `October 7`), ranges (`from 1 Oct to 5 Oct`), months (`in September`, `for October`) and weekdays
+  (`last thursday`). Answer headings name the period ("on 6 Oct 2026", "in October 2026"), and follow-ups keep it. A
+  date that cannot be read goes to model-written SQL. Before, "DHU of 6-10-2026" was answered for today.
+- A **Date** column first in every grouped VistaQ answer: the day the rows cover, or "first to last day".
+- `defects_by_line_window`: "defect summary line wise / by line / broken down by line" gives defects, defective and
+  checked pieces and DHU per line. It had repeated the by-type table.
+- Golden cases 80–83 (the two dated DHU questions from the screenshots, line-wise defects, day-wise QC).
+- **VistaQ's production dashboard.** VistaQ's dashboard cards, pasted with "show me these data of yesterday", are
+  answered as one row per figure, columns BGL / RHL / TAL / All. The figures: working styles, lines, planned
+  production, RTT, sewing production, variance vs RTT, WIP, efficiency, average SMV, man hours and plan man hours,
+  SAH, FTP / defective / rectified / reject rate and qty, overall DHU, defects.
+  - New views `rag.vw_PlanDay`, `vw_PlanOutputDay`, `vw_LineDayManHours` (working-session slots, with VistaQ's
+    manpower changes) and `vw_CombinationFlowDay` (cut input and output, for WIP); `Rectified` on `vw_LineDayQuality`.
+  - Tools `production_dashboard_window` and `production_by_line_window` (any production figure, or "dashboard").
+  - Definitions are in `docs/vistaq_questions.md`.
+  - Before, this question got "System doesn't have the data." after 33 s; now about 4–6 s.
+- **Answers grouped exactly as asked** (owner's rule, 8 Oct): "Unit, Line and Buyer wise DHU of TAL" gives Date,
+  Unit, Line, Buyer, DHU and nothing else.
+  - Fixed tools can take `group_by` and `measures` params, read from the question and filled from a whitelist in
+    the tool's YAML.
+  - New view `rag.vw_PlanQualityDay` (QC by buyer, style, colour and file); tool `quality_by_group_window`.
+- **PO and EO questions answered per file.** VistaQ records QC per file (FR number = the ERP's FileRefID), not per PO
+  (always "TBA") or EO.
+  - A PO-, EO- or order-wise question gets QC per file, with a note saying so, and each file's export orders and POs
+    from the ERP as a second cited source ([D2]).
+  - This uses a new `companion:` option on fixed tools: a second query on another database, with bind parameters,
+    in a two-source templated answer.
+  - "DHU of EO TAL-26-1985-1" leads to its file (`quality_by_eo_window`); "Which export orders are in file
+    FR-26-1985?" lists them (`orders_by_file_id`).
+- Golden cases 84–88 (the pasted dashboard, per line, the screenshot grouping question, PO-wise, EO).
+- `scripts/set_db_connection.ps1` sets the connection lines in `.env` from a hidden password prompt. `-Variable` and
+  `-Database` write one extra line for a database on another server.
+- **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
+  website widget). It holds the original export (HTML + PDF), one PNG per screen, each screen's unpacked markup
+  (`source/*.html`, the exact values), and `DESIGN.md` (tokens, type, components, and which screen goes with which
+  surface). `scripts/unpack_design.py` unpacks a new export.
+
+### Changed
+- **The conversation is centred on every screen** (Phase Q, U3). The thread and the Sources rail are one block
+  capped at 1,120 px and centred in the page, instead of spreading from the sidebar to the window edge: on a
+  1,920 px screen the margins are now equal (250 px each side) and the thread keeps the designer's proportions
+  (thread 776 px, rail 280 px). Below about 1,100 px the rail drops under the thread and spans its full width;
+  on a phone the page keeps its 16 px gutters, the user bubble its 300 px cap, and nothing scrolls sideways.
+  Stylesheet only — no change to any answer, table or button.
+- **Web app restyled to the desktop design** (screens 1 and 2). Dark green sidebar with New chat, Factory pills,
+  Search in, document categories, Recent (this session's conversations) and a Data status card. On an empty
+  conversation: the home briefing (date and status, greeting, data-age banner, KPI cards with a health ring,
+  "Needs your attention" with Critical/Watch badges, "Try asking"). Once a question is asked: a header with Export
+  (conversation and references as Markdown), the thread (dark question bubble, B avatar, a "Queried … · N rows"
+  progress line, tables inside the answer, Copy / CSV / Refresh / thumbs, follow-up pills) and a **Sources** rail
+  (one card per [D#]/[P#] reference with Show query or Open PDF, then Data freshness). IBM Plex fonts are served by
+  the app (`src/ragbot/static/fonts/`, SIL OFL), with no call to Google Fonts. Code: `src/ragbot/ui/`, theme in
+  `.streamlit/config.toml`.
+- The **Factory** pills narrow the user's scope in code (`ui/view.narrow_scope`; never wider than the user's own
+  scope), so document filters, SQL predicates, caches and the brief all follow the pick. The answer path, citation
+  checks and logging are unchanged.
+- Left out on purpose: **Share** (conversations are not stored) and on/off switches for **Search in** (the router
+  picks the source). See `docs/design/DESIGN.md`.
+- **Sortable answer tables**: every table in an answer has a sort button beside each column name (ascending →
+  descending → the answer's order). Numbers and dates sort by value, codes naturally (`TAL-26-1741-2` before
+  `…-10`), and blank cells always go last. A templated answer's 25-row preview is drawn with all the rows its query returned
+  (up to 200), so sorting covers every row. The sorting runs in the browser (`ui/sort_table.js`), with no query and no
+  model call. The Sources rail now moves under the thread when the window is too narrow for both.
+- `dhu_by_line` and `dhu_by_line_by_factory` read VistaQ (live, today by default) instead of the daily line record
+  that stopped on 20 Sep; golden cases 68–69 follow. The Quality agent reads VistaQ first, the Production agent
+  gains VistaQ's end-line and cutting output, and both charters say how VistaQ counts (prompts v11).
+- Date periods: "last week", "last month", and the typo "toady" (read as today, shown as "today").
+- **Faster SQL generation**: `llm.max_tokens_sql` 1536 → 4096. Gemini spends hidden thinking tokens before it writes
+  the SQL; at 1536, a third of the calls stopped at the limit and were retried, costing about 3 s each.
+- **No slow first question after a restart**: the warm-up runs the embedder and reranker once and creates the model
+  clients. The embedder's first run had cost the first model-written question about 12 s (its data step went from
+  18.5 s to 6.5 s). The admin timings now show `data.embed` and `data.schema`.
+- Fixed tools can declare `unless:`; the VistaQ tools use it so a question naming a QC stage, line, unit, PO, style
+  or a buyer goes to model-written SQL that applies the filter, instead of a fixed answer that ignores it ("…at Waist
+  QC yesterday" had been answered over every stage).
+- **Dhaka time**: the image sets `TZ=Asia/Dhaka`. On UTC, "today" was the day before between 00:00 and 06:00 in
+  Dhaka, and "as of" times and the Data status card ran 6 hours behind. Log timestamps are Dhaka time from 8 Oct
+  2026 09:45; earlier rows are UTC.
+- VistaQ questions that ask "day wise", "daily" or "per day" go to model-written SQL, which can group by day.
+- `defects_by_line_window` is replaced by `quality_by_group_window` (golden case 82 now expects only the columns
+  asked). `match_fixed_tool` collapses whitespace, so a pasted multi-line question matches. It also reads regex
+  groups by the pattern's group count: `m.lastindex` hid nested groups, so `FR-(26-1985)` lost its inner group.
+  Quality and Production charters describe the new views and definitions (prompts v13).
+- `scripts/check_catalog.py --live` checks a view with `WHERE 1 = 0`, so it no longer totals an aggregating view's
+  88 million rows on a live server.
+- Wording: "Found N matching rows" instead of "N row(s) found"; the not-found note under an answer points to the
+  suggested questions; the home "Try asking" list, the input placeholder and the greeting reply mention line
+  quality.
 
 ### Fixed
 - **The quality risk levels are now stored every day** (Phase M). The daily scoring had been built and
@@ -203,180 +385,6 @@ which is the owner's decision of 2026-10-13.
   card still shows the time the rows were read.
 - A DISTINCT lookup run by the empty-result repair could be reported as the user's own query ("I checked
   PlanningTNA and found no matching records"); it is evidence about the data, not the question asked.
-
-### Changed
-- **The conversation is centred on every screen** (Phase Q, U3). The thread and the Sources rail are one block
-  capped at 1,120 px and centred in the page, instead of spreading from the sidebar to the window edge: on a
-  1,920 px screen the margins are now equal (250 px each side) and the thread keeps the designer's proportions
-  (thread 776 px, rail 280 px). Below about 1,100 px the rail drops under the thread and spans its full width;
-  on a phone the page keeps its 16 px gutters, the user bubble its 300 px cap, and nothing scrolls sideways.
-  Stylesheet only — no change to any answer, table or button.
-
-### Added
-- **Phase P3 — questions that span two databases.** Every combination is decided in `docs/DATA_ACCESS.md` §5a:
-  the 18 catalogs on the production instance, the two VistaQ catalogs on their own host. Three mechanisms:
-  a fixed tool's companion from another database can now declare `merge:` and its columns are joined onto the
-  main rows in Python — one table from two servers, cited `[D1][D2]` (the VistaQ QC-per-file answers now carry
-  each file's buyer, export orders and POs from the ERP in the same rows); small masters are copied nightly for
-  SQLite joins (`company_master`); and, **off by default** (`data.cross_database_names`), a model-written statement
-  may read a sibling database on the same instance as `Database.schema.table` — the guard accepts only a raw table
-  that sibling's catalog offers, never a `rag.*` view or a sensitive name, for unrestricted users only, and the
-  reference card names both tables. Proven on a dev copy with the setting on; the owner decides for production.
-- **Phase P2 — the recorded names, and a second look when a query finds nothing.** A nightly value index
-  (`config/aggregates.yaml` specs with `entity:`; `src/ragbot/data/values.py`) copies the store, company, item
-  category, store group and issue-cause names as the data records them, and matches a question's words against
-  them — whole phrase, the store aliases of `entities.yaml`, then a close spelling ("mantainance store" →
-  'Maintenance Store (Misami)'), scoped to what the user may see. A fixed tool's `type: value` parameter binds the
-  recorded value (the stock-balance tool now filters on the store named); the SQL prompt gets a "Known values"
-  line with the recorded spelling and the column to filter on; the router counts a recorded name like a keyword.
-- **Self-correction, bounded** (`src/ragbot/data/empty_retry.py`). When a model-written statement returns nothing,
-  the recorded values of each text column it filtered on are looked up (guarded `SELECT DISTINCT`, cited as their
-  own cards); an exact hit means the zero is real; a unique close match replaces the misspelled literal and the
-  statement runs again, with a note under the answer saying what was matched; otherwise at most one more model
-  call shows the recorded values, or the other tables listed for the question. At most 2 extra calls per
-  question, only after an empty first try, within 20 s, never on the `both` route (the owner's bounds).
-- **Not-found replies after a model-written query say what was checked** in the user's own words ("I checked
-  Inventory (store system) for '1178108', 'xyz store' and found no matching records"), offer the recorded values
-  as questions to click, skip the documents search, and show "Refresh data".
-- **Phase P1 — store questions answered right the first time.** Seven curated Inventory views: `rag.vw_StockBalance`
-  (closing balance of an item per company and store — receipts minus issues in the store ledger, converted to the
-  item's base unit, with category, store group and the non-production flag), `vw_StockMovement`, `vw_GoodsReceipt`,
-  `vw_StockIssue`, `vw_Item`, `vw_Store`, `vw_Company`; six fixed tools (stock balance, receipts and issues, receipts,
-  issues, stores holding an item, item record) that answer with no model call; an Inventory / Store agent and charter.
-  The 8 Oct 2026 closing-balance question that was answered "System doesn't have the data." in 23 s now answers in
-  3 s: Maintenance Store (Misami), 13 L received, 12.125 L issued, 0.875 L in hand.
-- **Companies and stores by name.** `config/reference/entities.yaml` (the group's 12 companies with codes, short
-  names and aliases from `SystemManager.dbo.Company`; store aliases; metric synonyms). A fixed tool's `type: entity`
-  parameter turns "companyid=02" or "misami" into the bound parameter '02', never question text.
-- **The router hears the question's own words.** Catalog `synonyms:` ("closing balance" → "closing stock"),
-  `table_notes:` (one-line descriptions for discovered tables, seen by the prompt and the schema index) and a per-catalog
-  `schema_rag_k`; compound tokens split on real column names (`companyid` → company id); SQL reserved words stripped
-  from a pasted statement ("ORDER BY" no longer scores the order agent); ties broken by table-name share, then keyword
-  hits, not the alphabet; a third catalog is shown when it ties the second on keywords; "please find / get / fetch"
-  are list cues; a column-word signal in table selection (three shared words at least). Schema recall 16/17.
-- **A pasted SQL statement runs as written** — under the same guard, scope and row cap as a model-written one,
-  against the catalog that offers its tables (bare names qualified with `dbo.`, `TOP (200)` added); it is never
-  rewritten or scored on its words.
-- **Phase P0 — the logs explain a failed data answer.** `logs/sql.csv` gains a `database` column (19 catalogs share
-  one connection line, so the statement alone did not say where it ran); new `logs/sql_gen.csv` records every SQL
-  attempt: the databases the model was shown, the `DATABASE:` line it wrote, the raw reply, whether the guard or the
-  database refused it, the row count and the stop reason; `logs/chat.csv` gains `databases_considered`, filled on
-  a not-found too. Admins see the databases under each answer.
-- **Quota gauge.** `ragbot/quota.py` counts today's provider calls in `calls.csv` against `llm.daily_budget` (500,
-  the free tier); the admin caption shows "calls today n/500" and `scripts/eval.py --budget` refuses a run that
-  would overspend the day (the judge alone took a third of a free day).
-- Phase P design in `docs/ROADMAP.md` (P0 hygiene → P1 right the first time → P2 bounded self-correction → P3
-  cross-database), with the diagnosis of the 8 Oct closing-balance failure.
-- **RHL's VistaQ server** as two catalogs, `VistaQ_Default_RHL` (QC inspections and defects, daily QC and defect
-  summaries, production and session plans, cutting, corrective actions) and `VistaQ_Logging_RHL` (application logs),
-  on their own connection line `SQLSERVER_CONN_VISTAQ`. Discovery, schema vectors, and name hints for line, unit,
-  buyer, style and defect IDs. The server holds all three factories, so neither catalog declares `factory:`.
-- A catalog can declare `factory:` (one factory's data only). The router then prefers it when a question names that
-  factory and keeps it out when the question names another one. No catalog uses it today.
-- **Live line quality from VistaQ, answered in under a second.** Six views over the raw inspection tables
-  (`rag.vw_LineDayQuality`, `vw_QCDefect`, `vw_QCStageDay`, `vw_CorrectiveAction`, `vw_CuttingDaily`, `vw_QCTarget`;
-  the factory comes from the line → unit → factory tree) and 15 fixed tools for the questions QC and production staff
-  ask: QC summary, DHU, defect summary, lines above the DHU target, lines by DHU or end-line output, rejects, defects
-  by buyer or style, results by QC stage, corrective actions, cutting output. Each takes a period (today by default,
-  yesterday, this or last week or month, last N days) and an optional factory. Measured live on 7 Oct 2026: 0.05–0.55 s
-  for a day or a week, about 3 s for a month, the same for a user limited to one factory. DHU matches the value
-  VistaQ stores on its corrective actions. The list is in `docs/vistaq_questions.md`. `dbo.DefectSummary` and
-  `dbo.QCSummary` are left out: the job that fills them runs days behind.
-- **Not-found replies say something useful.** After "System doesn't have the data." comes one plain sentence for
-  staff (`agent/not_found.py`): what was checked and for which period when a query came back empty ("I checked VistaQ
-  for today and found no matching records…"), else where that kind of information lives (each agent's `where:` in
-  `config/agents/*.yaml`), never a view or table name. Under it, "Questions I can answer": the same question over a
-  wider period when a period was empty, then example questions close to the question, none naming another factory
-  or one particular record. The model's own not-found sentence follows the same rule (prompts v11).
-- Quality watch rules on VistaQ: DHU today and reject rate today per factory (amber at VistaQ's own targets, 3.85
-  and 1 %), replacing the DHU of the stale daily line record.
-- Golden cases 70–79 (VistaQ questions, the "toady" typo, an AQL question that must be not-found).
-- **Written dates in VistaQ questions** (owner's screenshots, 8 Oct): one period grammar (`tools.PERIOD`, written
-  `{period}` in a tool's `match:`) adds dates written day first (`6-10-2026`, `06/10/2026`, `2026-10-06`,
-  `7th october`, `October 7`), ranges (`from 1 Oct to 5 Oct`), months (`in September`, `for October`) and weekdays
-  (`last thursday`). Answer headings name the period ("on 6 Oct 2026", "in October 2026"), and follow-ups keep it. A
-  date that cannot be read goes to model-written SQL. Before, "DHU of 6-10-2026" was answered for today.
-- A **Date** column first in every grouped VistaQ answer: the day the rows cover, or "first to last day".
-- `defects_by_line_window`: "defect summary line wise / by line / broken down by line" gives defects, defective and
-  checked pieces and DHU per line. It had repeated the by-type table.
-- Golden cases 80–83 (the two dated DHU questions from the screenshots, line-wise defects, day-wise QC).
-- **VistaQ's production dashboard.** VistaQ's dashboard cards, pasted with "show me these data of yesterday", are
-  answered as one row per figure, columns BGL / RHL / TAL / All. The figures: working styles, lines, planned
-  production, RTT, sewing production, variance vs RTT, WIP, efficiency, average SMV, man hours and plan man hours,
-  SAH, FTP / defective / rectified / reject rate and qty, overall DHU, defects.
-  - New views `rag.vw_PlanDay`, `vw_PlanOutputDay`, `vw_LineDayManHours` (working-session slots, with VistaQ's
-    manpower changes) and `vw_CombinationFlowDay` (cut input and output, for WIP); `Rectified` on `vw_LineDayQuality`.
-  - Tools `production_dashboard_window` and `production_by_line_window` (any production figure, or "dashboard").
-  - Definitions are in `docs/vistaq_questions.md`.
-  - Before, this question got "System doesn't have the data." after 33 s; now about 4–6 s.
-- **Answers grouped exactly as asked** (owner's rule, 8 Oct): "Unit, Line and Buyer wise DHU of TAL" gives Date,
-  Unit, Line, Buyer, DHU and nothing else.
-  - Fixed tools can take `group_by` and `measures` params, read from the question and filled from a whitelist in
-    the tool's YAML.
-  - New view `rag.vw_PlanQualityDay` (QC by buyer, style, colour and file); tool `quality_by_group_window`.
-- **PO and EO questions answered per file.** VistaQ records QC per file (FR number = the ERP's FileRefID), not per PO
-  (always "TBA") or EO.
-  - A PO-, EO- or order-wise question gets QC per file, with a note saying so, and each file's export orders and POs
-    from the ERP as a second cited source ([D2]).
-  - This uses a new `companion:` option on fixed tools: a second query on another database, with bind parameters,
-    in a two-source templated answer.
-  - "DHU of EO TAL-26-1985-1" leads to its file (`quality_by_eo_window`); "Which export orders are in file
-    FR-26-1985?" lists them (`orders_by_file_id`).
-- Golden cases 84–88 (the pasted dashboard, per line, the screenshot grouping question, PO-wise, EO).
-- `scripts/set_db_connection.ps1` sets the connection lines in `.env` from a hidden password prompt. `-Variable` and
-  `-Database` write one extra line for a database on another server.
-- **Design system** in `docs/design/`: the owner's design set for every assistant surface (web app, Android app,
-  website widget). It holds the original export (HTML + PDF), one PNG per screen, each screen's unpacked markup
-  (`source/*.html`, the exact values), and `DESIGN.md` (tokens, type, components, and which screen goes with which
-  surface). `scripts/unpack_design.py` unpacks a new export.
-
-### Changed
-- **Web app restyled to the desktop design** (screens 1 and 2). Dark green sidebar with New chat, Factory pills,
-  Search in, document categories, Recent (this session's conversations) and a Data status card. On an empty
-  conversation: the home briefing (date and status, greeting, data-age banner, KPI cards with a health ring,
-  "Needs your attention" with Critical/Watch badges, "Try asking"). Once a question is asked: a header with Export
-  (conversation and references as Markdown), the thread (dark question bubble, B avatar, a "Queried … · N rows"
-  progress line, tables inside the answer, Copy / CSV / Refresh / thumbs, follow-up pills) and a **Sources** rail
-  (one card per [D#]/[P#] reference with Show query or Open PDF, then Data freshness). IBM Plex fonts are served by
-  the app (`src/ragbot/static/fonts/`, SIL OFL), with no call to Google Fonts. Code: `src/ragbot/ui/`, theme in
-  `.streamlit/config.toml`.
-- The **Factory** pills narrow the user's scope in code (`ui/view.narrow_scope`; never wider than the user's own
-  scope), so document filters, SQL predicates, caches and the brief all follow the pick. The answer path, citation
-  checks and logging are unchanged.
-- Left out on purpose: **Share** (conversations are not stored) and on/off switches for **Search in** (the router
-  picks the source). See `docs/design/DESIGN.md`.
-- **Sortable answer tables**: every table in an answer has a sort button beside each column name (ascending →
-  descending → the answer's order). Numbers and dates sort by value, codes naturally (`TAL-26-1741-2` before
-  `…-10`), and blank cells always go last. A templated answer's 25-row preview is drawn with all the rows its query returned
-  (up to 200), so sorting covers every row. The sorting runs in the browser (`ui/sort_table.js`), with no query and no
-  model call. The Sources rail now moves under the thread when the window is too narrow for both.
-- `dhu_by_line` and `dhu_by_line_by_factory` read VistaQ (live, today by default) instead of the daily line record
-  that stopped on 20 Sep; golden cases 68–69 follow. The Quality agent reads VistaQ first, the Production agent
-  gains VistaQ's end-line and cutting output, and both charters say how VistaQ counts (prompts v11).
-- Date periods: "last week", "last month", and the typo "toady" (read as today, shown as "today").
-- **Faster SQL generation**: `llm.max_tokens_sql` 1536 → 4096. Gemini spends hidden thinking tokens before it writes
-  the SQL; at 1536, a third of the calls stopped at the limit and were retried, costing about 3 s each.
-- **No slow first question after a restart**: the warm-up runs the embedder and reranker once and creates the model
-  clients. The embedder's first run had cost the first model-written question about 12 s (its data step went from
-  18.5 s to 6.5 s). The admin timings now show `data.embed` and `data.schema`.
-- Fixed tools can declare `unless:`; the VistaQ tools use it so a question naming a QC stage, line, unit, PO, style
-  or a buyer goes to model-written SQL that applies the filter, instead of a fixed answer that ignores it ("…at Waist
-  QC yesterday" had been answered over every stage).
-- **Dhaka time**: the image sets `TZ=Asia/Dhaka`. On UTC, "today" was the day before between 00:00 and 06:00 in
-  Dhaka, and "as of" times and the Data status card ran 6 hours behind. Log timestamps are Dhaka time from 8 Oct
-  2026 09:45; earlier rows are UTC.
-- VistaQ questions that ask "day wise", "daily" or "per day" go to model-written SQL, which can group by day.
-- `defects_by_line_window` is replaced by `quality_by_group_window` (golden case 82 now expects only the columns
-  asked). `match_fixed_tool` collapses whitespace, so a pasted multi-line question matches. It also reads regex
-  groups by the pattern's group count: `m.lastindex` hid nested groups, so `FR-(26-1985)` lost its inner group.
-  Quality and Production charters describe the new views and definitions (prompts v13).
-- `scripts/check_catalog.py --live` checks a view with `WHERE 1 = 0`, so it no longer totals an aggregating view's
-  88 million rows on a live server.
-- Wording: "Found N matching rows" instead of "N row(s) found"; the not-found note under an answer points to the
-  suggested questions; the home "Try asking" list, the input placeholder and the greeting reply mention line
-  quality.
-
-### Fixed
 - **The `aggregates` service was not running** (the local copies dated from 7 Oct); it is up again and now also
   refreshes the value index. The `ingest-worker`, `watch` and `aggregates` containers reported "unhealthy" because
   the image's health probe is the Streamlit port they do not serve; the probe is disabled for them.

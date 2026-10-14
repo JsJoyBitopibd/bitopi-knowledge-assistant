@@ -10,9 +10,9 @@ would overspend.
 **The provider's day is not ours.** Google resets the free tier at midnight Pacific time — 13:00 in
 Dhaka while the US keeps daylight time, 14:00 otherwise — so the bucket that is empty at 13:00 is the
 one spent by the next morning. Counting by the Dhaka date called a morning "fresh" when it was the tail
-of the previous afternoon's bucket: on 2026-10-14 the 500 calls ran out at 09:35 after 163 calls "today"
-(338 had been made since 13:00 the day before). Failed calls are counted too; that errs on the side of
-refusing a run.
+of the previous afternoon's bucket: on 2026-10-14 the first 429 came at 09:35 and the bucket was empty by
+09:37, after 163 successful calls that morning (338 had been made since 13:00 the day before). Failed calls
+are counted too; that errs on the side of refusing a run.
 """
 from __future__ import annotations
 

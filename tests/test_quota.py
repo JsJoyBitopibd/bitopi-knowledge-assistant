@@ -31,6 +31,8 @@ def test_the_window_opens_at_midnight_pacific_not_midnight_in_dhaka():
 
 def test_the_window_moves_to_14_00_when_us_daylight_time_ends():
     assert window_start(_at(2026, 11, 2, 15, 0)) == datetime(2026, 11, 2, 14, 0)
+    assert window_start(_at(2026, 11, 2, 14, 0)) == datetime(2026, 11, 2, 14, 0)
+    assert window_start(_at(2026, 11, 2, 13, 59)) == datetime(2026, 11, 1, 13, 0)
     # daylight time ends at 02:00 on 1 Nov, so that day's midnight was still 13:00 in Dhaka
     assert window_start(_at(2026, 11, 2, 13, 30)) == datetime(2026, 11, 1, 13, 0)
 

@@ -142,9 +142,12 @@ scope; admins can look up a user's scope and download their log in the sidebar (
 ### Running ingestion and the aggregates refresh unattended (Phase H4)
 
 **Docker**: `docker compose up -d` runs `ingest-worker` (rescans `data/pdfs` every
-`ingest.watch_interval_seconds`) and `aggregates` (daily refresh) next to the app; nothing else to do.
+`ingest.watch_interval_seconds`), `aggregates` (daily refresh) and `watch` (`scripts/watch.py --every 60
+--risk-daily`: the morning brief's signals every hour, and once a day the Stage-2 quality risk levels, into
+`data/index/signals.db`) next to the app; nothing else to do. Without `watch` there is no morning brief and no
+stored risk level.
 
-**Windows without Docker**: two scheduled tasks, created once from an administrator prompt. Run them as
+**Windows without Docker**: three scheduled tasks, created once from an administrator prompt. Run them as
 an account that can read the PDF share (SYSTEM usually cannot reach network shares); `/rp` asks for its
 password. Replace `C:\ka` with the folder this repository is in:
 
@@ -153,7 +156,12 @@ schtasks /create /tn "Bitopi KA ingest" /sc minute /mo 10 /ru "DOMAIN\svc-accoun
   /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\ingest_worker.py\" --once"
 schtasks /create /tn "Bitopi KA aggregates" /sc daily /st 02:00 /ru "DOMAIN\svc-account" /rp ^
   /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\refresh_aggregates.py\""
+schtasks /create /tn "Bitopi KA watch" /sc hourly /ru "DOMAIN\svc-account" /rp ^
+  /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\watch.py\" --risk-daily"
 ```
+
+`watch.py --risk-daily` without `--every` runs the watch rules once and scores the risk levels only if none
+were stored yet that day, so an hourly task stores them once a day.
 
 The ingest scripts give way to the app (Phase I4): they run at below-normal priority with 4 embedding
 threads and pause while the app is searching, so a bulk load slows answers by about 12% instead of

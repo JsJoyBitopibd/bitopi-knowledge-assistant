@@ -196,6 +196,10 @@ def risk_due(today: Optional[date] = None, path: Optional[Path] = None) -> bool:
     The levels are a daily series — one prediction per running file per day is what the backtest reads — so
     the hourly watcher scores risk on its first tick of the day and not again (`watch.py --risk-daily`).
     A pass that raised writes no row, so a failed night is simply due again on the next tick.
+
+    Store-wide, not per dimension: right for today's single dimension (quality). With a second one, a night
+    on which one dimension wrote its row and the other raised would count as done and the failed one would
+    wait a day — give this a `dimension` argument and run only the dimensions still due before adding one.
     """
     path = path or db_path()
     if not path.exists():

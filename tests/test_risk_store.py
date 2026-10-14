@@ -72,6 +72,16 @@ def test_the_daily_risk_run_is_due_until_one_has_started_that_day(tmp_path):
     assert signals.risk_due(date(2026, 10, 16), path=db)                    # and due again tomorrow
 
 
+def test_a_night_whose_risk_pass_failed_is_due_again(tmp_path):
+    """watch.py's risk_once() writes no risk_run row for a dimension that raised, so the next hourly tick
+    retries it. (Store-wide: correct for the one dimension there is — see risk_due's docstring.)"""
+    from datetime import date
+    db = tmp_path / "signals.db"
+    signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 14, 0, 6), [], source=SRC, path=db)
+    signals.write_run([_sig()], datetime(2026, 10, 15, 0, 5), [], path=db)      # 00:05 tick: rules stored, risk raised
+    assert signals.risk_due(date(2026, 10, 15), path=db)                         # 01:05 tick tries again
+
+
 def test_a_store_from_before_phase_m_is_due_not_an_error(tmp_path):
     import sqlite3
     from datetime import date

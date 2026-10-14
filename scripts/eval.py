@@ -10,7 +10,8 @@ from typing import Optional
 from ragbot.agent.orchestrator import answer
 from ragbot.auth.models import Scope
 from ragbot.config import settings
-from ragbot.evaluation import SCORES, baseline_rows, blocks, infra_failure, outage_row, pick_baseline, scores
+from ragbot.evaluation import (SCORES, baseline_rows, blocks, infra_failure, kind_changed, outage_row, pick_baseline,
+                               scores)
 from ragbot.llm import get_chat
 from ragbot.llm.base import LLMError
 
@@ -156,7 +157,8 @@ def compare(current: Path, baseline: Optional[Path] = None) -> None:
 
     The baseline is `--baseline` when given, else the most recent earlier *complete* run that covered every
     case of this one (ragbot/evaluation.py: a run with an unscored or outage row is never a baseline). Cases
-    this run left unscored are left out of both sides and named, so a gap is never read as a drop or a rise.
+    this run left unscored are left out of both sides and named, so a gap is never read as a drop or a rise; so
+    are cases whose kind changed between the runs (a redefined golden case), which are printed on their own.
     Only files named like a run (<date>T<time>.json) are candidates; other reports in the folder are skipped."""
     rows = json.loads(current.read_text(encoding="utf-8"))["rows"]
     ids = {r["id"] for r in rows}
@@ -168,13 +170,19 @@ def compare(current: Path, baseline: Optional[Path] = None) -> None:
             print("  no complete earlier run covers these cases; nothing compared")
             return
         fname, old_rows = base
-    gaps = {r["id"] for r in rows if outage_row(r)}
-    now = sorted((r for r in rows if r["id"] not in gaps), key=lambda r: r["id"])
-    old = [o for o in old_rows if o["id"] not in gaps]
+    gaps = {r["id"] for r in rows if outage_row(r)} | {o["id"] for o in old_rows if outage_row(o)}
+    redefined = set(kind_changed(old_rows, rows))
+    now = sorted((r for r in rows if r["id"] not in gaps | redefined), key=lambda r: r["id"])
+    old = [o for o in old_rows if o["id"] not in gaps | redefined]
     before, after = scores(old), scores(now)
     dropped = set(blocks(before, after))
     print(f"  vs {fname} on the same {len(now)} cases" + (f" ({len(gaps)} unscored left out: "
           f"{', '.join(str(i) for i in sorted(gaps))})" if gaps else "") + ":")
+    if redefined:
+        by_id, old_by_id = {r["id"]: r for r in rows}, {o["id"]: o for o in old_rows}
+        print("  redefined since the baseline, reported separately: " + ", ".join(
+            f"case {i} {old_by_id[i].get('kind')} -> {by_id[i].get('kind')} (correct {old_by_id[i].get('correct')} "
+            f"-> {by_id[i].get('correct')})" for i in sorted(redefined)))
     for k in SCORES:
         if before[k] is None or after[k] is None:
             continue

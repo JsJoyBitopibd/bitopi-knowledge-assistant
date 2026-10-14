@@ -74,6 +74,14 @@ def baseline_rows(path: Path, ids: set[Any]) -> list[dict[str, Any]]:
     return [old[i] for i in sorted(ids)]
 
 
+def kind_changed(old_rows: list[dict[str, Any]], new_rows: list[dict[str, Any]]) -> list[Any]:
+    """Cases whose kind differs between the two runs: the golden case was redefined in between (case 44, a
+    not-found case until Phase R gave it an answer). Compared as they are, they move a score that is not about
+    the same question — one case is 25 points of not-found — so compare() sets them aside and names them."""
+    old = {r["id"]: r.get("kind") for r in old_rows}
+    return sorted(r["id"] for r in new_rows if r["id"] in old and old[r["id"]] != r.get("kind"))
+
+
 def blocks(before: dict[str, Optional[float]], after: dict[str, Optional[float]],
            drop: float = BLOCK_DROP) -> list[str]:
     """The scores that dropped by more than `drop` (five points). A score only one side has is not compared."""

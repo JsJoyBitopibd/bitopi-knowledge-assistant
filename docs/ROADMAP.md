@@ -632,7 +632,7 @@ Detail and evidence per step: `docs/PROGRESS.md` Phase M.
 - Gate: as above, plus a backtest report over past orders (late-shipment share per level), recorded
   in `docs/tuning_log.md` as the baseline the Stage-3 gate compares against.
 
-## Phase N — Stage 3: recommendations, model gateway → v1.14.0
+## Phase N — Stage 3: recommendations → v1.14.0 (N4, the model gateway, shipped early in v1.13.0)
 
 - **N1 playbooks.** `config/playbooks/*.yaml`: a risk pattern → candidate actions with parameters.
   Cost and date effects computed in Python (needs the cost data in `AGENTS_DESIGN.md` §3).
@@ -641,7 +641,7 @@ Detail and evidence per step: `docs/PROGRESS.md` Phase M.
   `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged.
 - **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
   recommendation); the outcome is recorded as in M3.
-- **N4 model gateway — built 2026-10-14, ahead of N1–N3.** `get_model(task)` in
+- **N4 model gateway — built 2026-10-14, ahead of N1–N3; released in v1.13.0.** `get_model(task)` in
   `src/ragbot/llm/__init__.py` with tiers in `settings.yaml` (`llm.tiers`; small: rewrite, route;
   main: answers, SQL, judge; executive: recommendations, cross-domain ranking). On an `LLMError`
   of kind quota or timeout, one retry on a fallback provider from `.env` (`LLM_FALLBACK_*`);
@@ -685,7 +685,7 @@ stages and gates are tracked in `docs/PROGRESS.md` "Phase P".
   the documents directly instead of spending an answer-model call first. Logs: `sql.csv` gains `database`;
   new `logs/sql_gen.csv` records every SQL attempt (kind generate/replay/retry/guard/error, the databases
   shown, the model's `DATABASE:` line, the raw reply, guard and database errors, stop reason); `chat.csv`
-  gains `databases_considered` (filled on a not-found too). A quota gauge (`ragbot/quota.py`: today's rows in
+  gains `databases_considered` (filled on a not-found too). A quota gauge (`ragbot/quota.py`: the rows since the provider's day began — 13:00 Dhaka — in
   `calls.csv` against `llm.daily_budget`) in the admin caption and `scripts/eval.py --budget`. Tests write
   their logs to a temp folder (`tests/conftest.py`). Compose mounts for prompts, tools, agents, aggregates
   and `config/reference` so P1's config edits need no rebuild.
@@ -768,7 +768,7 @@ Deferred on purpose, with the reason recorded in PROGRESS: the static sqlglot ty
 types file for every catalog's views (the declared kinds cover the hot path, the aggressive pass covers the
 rest), and 2-hop join paths with `relations:` between curated views (the acceptance questions reach a tool).
 
-## Phase R — the people databases, opened (unreleased)
+## Phase R — the people databases, opened → v1.13.0
 
 Asked for on 2026-10-13: *"Give the full permission of HR database also. After successful implementation of
 the project, we will set rule, who will get which permission."* Confirmed with the owner: all three people

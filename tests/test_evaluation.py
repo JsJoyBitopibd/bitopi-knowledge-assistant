@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ragbot.evaluation import (baseline_rows, blocks, complete, infra_failure, outage_row, pick_baseline,
+from ragbot.evaluation import (baseline_rows, blocks, complete, infra_failure, kind_changed, outage_row, pick_baseline,
                                scores)
 
 QUOTA_TEXT = "The daily AI quota has been reached. Please try again after midnight Pacific time"
@@ -84,3 +84,13 @@ def test_refuse_is_gated_and_a_kind_absent_on_one_side_is_not_compared():
 def test_exactly_five_points_is_not_a_block():
     assert blocks({"hit_rate": 0.95}, {"hit_rate": 0.90}) == []
     assert blocks({"hit_rate": 0.95}, {"hit_rate": 0.8999}) == ["hit_rate"]
+
+
+def test_a_redefined_case_is_named_not_compared():
+    """Case 44 was not-found on 13 Oct and data on 14 Oct (R8). Left in, it is 25 points of not-found on one side
+    and a data case on the other; compare() sets it aside and prints it instead."""
+    old = [_row(44, kind="not_found", hit=None), _row(45, kind="not_found", hit=None), _row(1)]
+    new = [_row(44, kind="data"), _row(45, kind="not_found", hit=None), _row(1)]
+    assert kind_changed(old, new) == [44]
+    assert kind_changed(old, old) == []
+    assert kind_changed(old, [_row(99)]) == []          # a case only one side has is not "changed"
