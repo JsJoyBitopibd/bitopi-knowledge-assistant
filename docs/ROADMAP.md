@@ -588,7 +588,38 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
   day, all and by factory. `rag.vw_LineDailyOutput` now has `Defects` (DHU numerator) and
   `DefectivePcs`; it had called the defect count "defective pieces".
 
-## Phase M — Stage 2: risk levels → v1.13.0
+## Phase M — Stage 2: risk levels — **built 2026-10-14, scoped to the Quality domain**
+
+Built for Quality only, because the Stage-1 gate is per domain and only Quality passes it: the other
+five rest on data that has stopped (order shipment status unmaintained on every past-ship order,
+goods receipts 52 days stale, the LC close flag wrong on 96%, the daily line copy 23 days stale, HR
+attendance 34 days stale). A risk engine on those would publish confident levels from data weeks old.
+`config/data_quality.yaml` now has six `agent: quality` checks so that gate is evidenced rather than
+merely asserted; the one finding is a VistaQ summary job 15 days behind, on tables no answer reads.
+
+**Two deviations from the plan above, both deliberate.**
+
+1. *Thresholds are not "rules from the interviews".* Amber is read live from VistaQ's own
+   `dbo.Threshold` (DHU 3.85, reject 1%), so the factories are measured against the number they set
+   for themselves, and `risk.drift()` reports when the two stop matching. Only red is provisional,
+   and it is labelled as such everywhere it appears. First pass is deliberately not a rule at all:
+   `FTPRateThreshold` is NULL, so inventing an amber for it would fabricate the one number this
+   design is careful not to fabricate.
+2. *Levels are not folded into the health score*, which this plan asked for. The score is one check
+   per watch rule per factory — about a dozen numbers; adding 151 per-file levels would swamp it,
+   change what it means overnight and make it incomparable with the history already stored. The risk
+   block stands beside it with its own denominator.
+
+**The outcome is final quality at completion**, not ship dates: the order data is unmaintained, so a
+shipping outcome would measure the wrong thing badly. Settlement is measured against the newest day
+VistaQ itself holds, never the clock, or a feed outage would settle every open file at once.
+
+What was built: M0 the VistaQ reachability probe · M1 six checks + a data-age watch rule ·
+M2 `config/rules/quality.yaml` + validator · M3 the pure engine · M4 `risk_run`/`prediction` sibling
+tables · M5 the daily job and the outcome pass · M6 the brief block and the cited note on an answer.
+Detail and evidence per step: `docs/PROGRESS.md` Phase M.
+
+### The plan as originally written
 
 - **M1 rules from the interviews** (run alongside K and L): `config/rules/<dimension>.yaml` for
   material, production, quality, shipping, finance (thresholds and the reason text);

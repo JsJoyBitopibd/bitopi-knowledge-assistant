@@ -178,3 +178,27 @@ retrieve 2.11 vs 2.04 s (+3%). The other 20 hit the key's per-minute limit, and 
 33-question search-only run (+12% p95) as the larger sample. Throughput: 47.1 chunks/min for 320 chunks
 while giving way (65 s paused).
 
+
+## Phase M — Stage-2 quality risk: the backtest baseline
+
+The Stage-2 → Stage-3 gate is *"several weeks of stored risk levels compared with what actually
+happened"*. The levels began being stored on **2026-10-14**; this section is where the first backtest
+goes, and it cannot be written before roughly late November 2026.
+
+**What the backtest must report**, from `signals.settled("quality")`:
+
+- the share of files predicted red whose final quality was over the VistaQ DHU target, and the same for
+  amber and green — the thing the levels claim;
+- the same split by factory, since TAL carries about two thirds of the files;
+- rows with `revised > 0` excluded and counted separately: those are files that settled, resumed and
+  moved, so their outcome was not final when it was first recorded;
+- the lead time between a prediction and its outcome. A short lead time means the level was a
+  description rather than a warning.
+
+**The starting picture, 2026-10-14** (`scripts/watch.py --risk-only`, 7-day window): 158 files scored,
+151 of them still running and therefore predicted — 52 critical, 55 watch, 32 on target, 12 too few
+checked. 2,058,760 pieces checked in the window, 24% of them in files at the critical level.
+
+**The thresholds this baseline tests.** Amber is VistaQ's own (`dbo.Threshold`: DHU 3.85, reject 1%).
+Red (DHU 6, reject 2%) is provisional and unvalidated — the backtest is the first evidence about
+whether it means anything, and the QC interviews are the second.

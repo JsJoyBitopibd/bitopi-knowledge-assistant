@@ -9,6 +9,20 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **The assistant now says which orders are heading for a quality problem** (Phase M, Stage 2 of the
+  agent ladder). Every running order file is scored each day from VistaQ's live line inspections:
+  defects per hundred pieces and the reject rate over the last seven days, against the targets VistaQ
+  itself holds. The morning brief shows how many files need attention and the worst of them, and an
+  answer about a single file carries its level with the figures it was calculated from. **Nothing is
+  forecast by AI**: the level is arithmetic over inspection rows, and the answer cites the rows.
+  Today that is 52 of 151 running files at the critical level and 55 on watch.
+- **Every level is stored with what it was calculated from**, and the final quality is recorded when a
+  file finishes running. After some weeks of this the thresholds can be checked against what actually
+  happened instead of being taken on trust — which is the condition for the assistant being allowed to
+  recommend anything (Stage 3).
+- **The red level is marked provisional wherever it appears.** Amber is the target VistaQ already keeps;
+  red is a starting point for the quality interviews and nobody has validated it yet, so the brief and
+  the answer both say so rather than presenting it as the QC department's judgement.
 - **The quality data is now checked, and one long-suspected problem has a number** (Phase M). The
   data-quality report gains a `## quality` section — six read-only checks on the VistaQ line-inspection
   data: are inspections and defects current, is any factory missing from the newest day, are the quality
