@@ -9,6 +9,17 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **The quality data is now checked, and one long-suspected problem has a number** (Phase M). The
+  data-quality report gains a `## quality` section — six read-only checks on the VistaQ line-inspection
+  data: are inspections and defects current, is any factory missing from the newest day, are the quality
+  targets sane, and do the production plans carry the order file number that quality is grouped by.
+  Five pass. The sixth measures something that had been reported in October and never checked since: the
+  job that fills VistaQ's own summary tables is **15 days behind** the live inspections. No answer reads
+  those summary tables — the assistant was moved onto the live ones in October — so nothing staff see is
+  wrong, but the VistaQ owners now have the number. These are also the first checks of any kind to read
+  the VistaQ server.
+- **A stalled quality feed now says so** (Phase M). If VistaQ stops sending line inspections, the morning
+  brief shows a dated warning for each factory instead of a DHU of zero, which reads like a perfect day.
 - **A second provider takes over when the first runs out or times out** (Phase N4). Model calls now go
   through one gateway with three tiers — small for rewriting and routing, main for answers and SQL, and an
   executive tier reserved for the cross-domain ranking Phase N will add — and a call that fails on quota or

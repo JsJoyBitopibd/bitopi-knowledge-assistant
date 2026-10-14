@@ -294,3 +294,96 @@ checks:
     sql: |
       SELECT SUM(CASE WHEN DateAdded IS NULL THEN 1 ELSE 0 END) AS bad, COUNT(*) AS total
       FROM dbo.VisitorInformation
+
+  # ---- Quality (VistaQ). The Stage-1 -> Stage-2 gate (docs/AGENTS_DESIGN.md §4) is per domain: a domain
+  # starts Stage 2 only once its data-quality report is clean enough to trust. Quality is the one domain
+  # whose data is live, but it had no checks at all, so it could not evidence the gate either way.
+  # These are the FIRST checks to run against the VistaQ host (SQLSERVER_CONN_VISTAQ); every other check
+  # reads the production server. dbo.QualityInspection holds ~88 million rows: only ever filter or
+  # aggregate on the date-only indexed columns, never on InspectionDate/ActivityDate.
+  - name: vistaq_inspections_fresh
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: freshness
+    max_age_days: 2
+    what: Newest sewing-line inspection recorded in VistaQ
+    fix: IT/VistaQ; line quality, DHU and the quality risk level are all read from this table, so they stop with it
+    sql: |
+      SELECT MAX(InspectionDateOnly) AS last_date FROM dbo.QualityInspection
+
+  - name: vistaq_defects_fresh
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: freshness
+    max_age_days: 2
+    what: Newest defect recorded against an inspection
+    fix: IT/VistaQ; DHU is defects divided by pieces checked, so defects stopping while inspections continue makes every DHU read low
+    sql: |
+      SELECT MAX(InspectionDefectDateOnly) AS last_date FROM dbo.QualityInspectionDefect
+
+  - name: vistaq_factory_coverage
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: share
+    max_share: 0
+    what: Factories that inspected in the last 7 days but have nothing on the newest inspection day
+    fix: IT/QC; a factory missing from the newest day makes a group DHU the DHU of only the factories that did report
+    sql: |
+      SELECT SUM(CASE WHEN f.OnLatest = 0 THEN 1 ELSE 0 END) AS bad, COUNT(*) AS total
+      FROM (
+        SELECT qi.WorkspaceFactoryId,
+               MAX(CASE WHEN qi.InspectionDateOnly = m.LatestDay THEN 1 ELSE 0 END) AS OnLatest
+        FROM dbo.QualityInspection qi
+        CROSS JOIN (SELECT MAX(InspectionDateOnly) AS LatestDay FROM dbo.QualityInspection) AS m
+        WHERE qi.InspectionDateOnly >= DATEADD(day, -7, m.LatestDay)
+        GROUP BY qi.WorkspaceFactoryId
+      ) AS f
+
+  - name: vistaq_summary_job_lag
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: count
+    max: 2
+    what: Days the DefectSummary / QCSummary job is behind the live inspection tables (the worse of the two)
+    fix: IT/VistaQ restart or re-point the summary job; it was reported behind on 7 Oct 2026 (29 Sep / 5 Oct) and nothing has measured it since
+    sql: |
+      SELECT CASE WHEN x.qc_lag >= x.defect_lag THEN x.qc_lag ELSE x.defect_lag END AS n
+      FROM (
+        SELECT
+          ISNULL(DATEDIFF(day, (SELECT MAX(InspectionDate) FROM dbo.QCSummary),
+                               (SELECT MAX(InspectionDateOnly) FROM dbo.QualityInspection)), 9999) AS qc_lag,
+          ISNULL(DATEDIFF(day, (SELECT MAX(InspectionDefectDate) FROM dbo.DefectSummary),
+                               (SELECT MAX(InspectionDefectDateOnly) FROM dbo.QualityInspectionDefect)), 9999) AS defect_lag
+      ) AS x
+
+  - name: vistaq_targets_sane
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: count
+    max: 0
+    what: Problems in the VistaQ quality targets that the amber level is read from
+    fix: QC/VistaQ admin; amber comes from this row, so a missing, duplicated, expired or impossible target silently moves every amber level
+    sql: |
+      SELECT
+        CASE WHEN (SELECT COUNT(*) FROM dbo.Threshold WHERE ISNULL(IsActive, 0) = 1) <> 1 THEN 1 ELSE 0 END
+        + (SELECT COUNT(*) FROM dbo.Threshold
+           WHERE ISNULL(IsActive, 0) = 1
+             AND (DHUThreshold <= 0 OR DHUThreshold > 100
+                  OR RejectRateThreshold < 0 OR RejectRateThreshold > 100
+                  OR EffectiveFrom > CAST(GETDATE() AS date)
+                  OR (EffectiveTo IS NOT NULL AND EffectiveTo < CAST(GETDATE() AS date)))) AS n
+
+  - name: vistaq_inspections_without_a_file
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: share
+    max_share: 0.05
+    what: Inspections on the newest day whose production plan carries no ERP file number (FR)
+    fix: IE/planning set the file on every plan; quality grouped by file, and the order-level risk level, cover only the inspections whose plan carries one
+    sql: |
+      SELECT SUM(CASE WHEN p.Id IS NULL OR p.FileId IS NULL OR LTRIM(RTRIM(p.FileId)) = ''
+                      THEN 1 ELSE 0 END) AS bad,
+             COUNT(*) AS total
+      FROM dbo.QualityInspection qi
+      LEFT JOIN dbo.ProductionPlan p ON p.Id = qi.ProductionPlanId
+      WHERE qi.InspectionDateOnly = (SELECT MAX(InspectionDateOnly) FROM dbo.QualityInspection)

@@ -45,3 +45,23 @@ watch:
     amber: 1
     red: 2
     weight: 1
+  # Phase M. Without this a VistaQ stall reads as "DHU 0" or "no rows" rather than as a warning: the
+  # Production agent has line_data_age for the PlanningTNA copy, but nothing watched VistaQ itself, which
+  # is the live source for every quality answer AND for the Stage-2 risk level. A factory that stops
+  # reporting still has historical rows, so its MAX(InspectionDate) ages and this turns red — which is the
+  # failure that actually happens; a factory that never reported at all would have no row, and all three
+  # have reported since May 2025.
+  - name: vistaq_data_age
+    kind: data          # about the data, not the factory: a warning line, not in the health score
+    title: 'VistaQ line quality last updated {day} ({age} day(s) ago)'
+    question: 'Show the {factory} QC summary today'
+    database: VistaQ_Default_RHL
+    sql: |
+      SELECT Factory, MAX(InspectionDate) AS day,
+             DATEDIFF(day, MAX(InspectionDate), CAST(GETDATE() AS date)) AS age
+      FROM rag.vw_LineDayQuality
+      GROUP BY Factory
+    value: age
+    amber: 2
+    red: 7
+    weight: 1
