@@ -122,3 +122,119 @@ def drift(rs: RuleSet, targets: dict[str, Any]) -> list[str]:
             out.append(f"risk {rs.dimension}.{r['name']}: amber {r['amber']} no longer matches "
                        f"{col} = {targets[col]} in the database")
     return out
+
+
+# The counts a measure is computed from. Named here so the ratio is never taken from a ratio column:
+# the Quality charter is explicit that DHU is 100 x SUM(Defects) / SUM(Checked) over the sums, and that
+# averaging the DHU column is wrong — a line that checked 40 pieces would otherwise weigh as much as one
+# that checked 4,000.
+_SUMS = ("Checked", "Passed", "DefectivePcs", "Rectified", "Rejected", "Defects")
+_RATIOS = {
+    "dhu": ("Defects", "Checked"),
+    "reject_pct": ("Rejected", "Checked"),
+    "ftp_pct": ("Passed", "Checked"),
+    "defective_pct": ("DefectivePcs", "Checked"),
+    "rectified_pct": ("Rectified", "DefectivePcs"),
+}
+_WORST = ("red", "amber", "green", "info")
+
+
+@dataclass
+class Measured:
+    """One rule's measure over the window, and the level it scores."""
+    rule: str
+    measure: str
+    value: Optional[float]
+    level: str
+    amber: Optional[float] = None
+    red: Optional[float] = None
+    red_provisional: bool = False
+    enough: bool = True            # False when the window checked fewer pieces than the rule asks for
+    reason: str = ""
+
+
+@dataclass
+class Assessment:
+    """A subject's risk over a window: the level, how it was reached, and the counts it came from.
+
+    Everything a backtest will need later is on this object, because the counts behind a level cannot be
+    recovered once the window has moved on."""
+    dimension: str
+    subject: str                   # the VistaQ file (FR number) for Quality
+    factory: str                   # never blank: the scope filter is applied on this
+    window_days: int
+    level: str
+    totals: dict[str, float] = field(default_factory=dict)
+    measures: list[Measured] = field(default_factory=list)
+    caveat: str = ""               # travels with a provisional red so a later reader cannot lose it
+    days: int = 0
+
+    @property
+    def provisional(self) -> bool:
+        """Whether this level rests on a threshold nobody has validated."""
+        return self.level == "red" and any(m.level == "red" and m.red_provisional for m in self.measures)
+
+
+def totals(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Sum the counts over the window. Missing and None values count as zero: VistaQ returns no row for a
+    measure a line did not record that day, which is a zero, not an unknown."""
+    out = {k: 0.0 for k in _SUMS}
+    for r in rows:
+        for k in _SUMS:
+            v = r.get(k)
+            if v is not None:
+                out[k] += float(v)
+    return out
+
+
+def ratio(measure: str, sums: dict[str, float]) -> Optional[float]:
+    """A measure recomputed from the sums, never averaged from a ratio column (the charter's rule).
+    None when the denominator is zero — nothing was checked, so the measure does not exist."""
+    pair = _RATIOS.get(measure)
+    if pair is None:
+        return None
+    num, den = sums.get(pair[0], 0.0), sums.get(pair[1], 0.0)
+    if not den:
+        return None
+    return round(100.0 * num / den, 2)
+
+
+def evaluate(rs: RuleSet, subject: str, factory: str, rows: list[dict[str, Any]],
+             days: Optional[int] = None) -> Assessment:
+    """Score one subject over its window. Pure: no database, no clock, no settings — the caller supplies
+    the rows, exactly as data/quality.py evaluate() takes `today` so it can be tested without either.
+
+    A rule whose window checked fewer pieces than `min_checked` scores `info`, not `green`: at 50 pieces a
+    single garment with three defects is a DHU of 6, which would read as red on noise. `info` says "not
+    enough was checked to judge", which is true, where green would be a claim.
+    """
+    from .watch import level as level_of
+
+    sums = totals(rows)
+    out: list[Measured] = []
+    for r in rs.rules:
+        measure = str(r.get("measure") or "")
+        value = ratio(measure, sums)
+        need = float(r.get("min_checked") or 0)
+        enough = sums.get("Checked", 0.0) >= need
+        if not enough:
+            lvl, why = "info", (f"{sums.get('Checked', 0):.0f} pieces checked in {days or rs.window_days} days, "
+                                f"fewer than the {need:.0f} this rule needs to judge")
+        else:
+            lvl = level_of(r, value)
+            target = r.get("amber")
+            why = (f"{measure} {value} over {days or rs.window_days} days"
+                   + (f", target {target}" if target is not None else "")) if value is not None else \
+                  "nothing was checked in the window"
+        out.append(Measured(rule=str(r.get("name") or ""), measure=measure, value=value, level=lvl,
+                            amber=r.get("amber"), red=r.get("red"),
+                            red_provisional=bool(r.get("red_provisional")), enough=enough, reason=why))
+
+    worst = next((l for l in _WORST if any(m.level == l for m in out)), "info")
+    a = Assessment(dimension=rs.dimension, subject=subject, factory=factory,
+                   window_days=days or rs.window_days, level=worst, totals=sums, measures=out,
+                   days=len({r.get("InspectionDate") for r in rows if r.get("InspectionDate") is not None}))
+    # The caveat is stored on the assessment, not looked up when it is displayed: a row read months later
+    # must still carry the reason its red is not a judgement.
+    a.caveat = rs.red_caveat if a.provisional else ""
+    return a
