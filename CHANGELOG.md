@@ -9,6 +9,15 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **A second provider takes over when the first runs out or times out** (Phase N4). Model calls now go
+  through one gateway with three tiers — small for rewriting and routing, main for answers and SQL, and an
+  executive tier reserved for the cross-domain ranking Phase N will add — and a call that fails on quota or
+  a timeout is retried once on a second provider set in `.env`. An authentication failure is **not** retried:
+  a wrong key fails the same way twice and a retry would only hide the real cause. A reply that has already
+  begun arriving on screen is not retried either, because the answer would be written twice. Both attempts
+  are logged, so a fallback is visible in the audit as two calls. Nothing retries until a second provider is
+  configured, and it should be a different account: a second key on the same free tier shares one daily
+  allowance, which is what stopped the work on 29 September and again on 9 October.
 - **A database can name who may read it** (Phase S). A catalog may carry `restricted_to: [KA-HR]`, and then only
   a member of one of those groups can reach it — through a question, a built-in query, a pasted statement or an
   answer cached earlier in the day. A database that names no group stays open to everyone, which is how all

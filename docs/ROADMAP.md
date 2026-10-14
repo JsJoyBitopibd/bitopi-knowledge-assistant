@@ -610,10 +610,16 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
   `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged.
 - **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
   recommendation); the outcome is recorded as in M3.
-- **N4 model gateway.** `get_model(task)` in `src/ragbot/llm/__init__.py` with tiers in
-  `settings.yaml` (small: rewrite, route; main: answers, SQL; executive: recommendations,
-  cross-domain ranking); on `LLMError` quota or timeout, one retry on a fallback provider from
-  `.env`. `get_chat()` and `get_small_chat()` stay as thin wrappers. Every call still logged.
+- **N4 model gateway — built 2026-10-14, ahead of N1–N3.** `get_model(task)` in
+  `src/ragbot/llm/__init__.py` with tiers in `settings.yaml` (`llm.tiers`; small: rewrite, route;
+  main: answers, SQL, judge; executive: recommendations, cross-domain ranking). On an `LLMError`
+  of kind quota or timeout, one retry on a fallback provider from `.env` (`LLM_FALLBACK_*`);
+  never on auth, which would fail identically and hide the cause, and never on a stream that has
+  already shown deltas, which would write the answer twice. `get_chat()` and `get_small_chat()`
+  stay as thin wrappers. Every call still logged — a fallback appears as two rows in `calls.csv`.
+  Taken out of order because Phase M is blocked on stale data and on the interviews, while this is
+  pure code, and because its absence stopped the work three times (28 Sep outage, 29 Sep and 9 Oct
+  spent quota, 13 Oct gate deferred overnight). Not armed: `LLM_FALLBACK_PROVIDER` is empty.
 - Gate: as above, plus gateway tests with fake providers (fallback on quota, no fallback on auth),
   and recommendation eval cases at 100% citations.
 
