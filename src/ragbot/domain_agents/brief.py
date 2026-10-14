@@ -26,6 +26,7 @@ class Brief:
     metrics: list[tuple[str, float]] = field(default_factory=list)   # (label, total over the viewer's factories)
     attention: list[Signal] = field(default_factory=list)
     data_warnings: list[Signal] = field(default_factory=list)       # amber/red checks on the data itself
+    risk: Optional["RiskSummary"] = None                            # Phase M: Stage-2 levels, beside the score
 
 
 def health(signals: list[Signal]) -> Health:
@@ -67,9 +68,9 @@ def metrics(signals: list[Signal]) -> list[tuple[str, float]]:
     return list(totals.items())
 
 
-def build(signals: list[Signal], limit: int = 5) -> Brief:
+def build(signals: list[Signal], limit: int = 5, risk: Optional["RiskSummary"] = None) -> Brief:
     return Brief(health=health(signals), metrics=metrics(signals), attention=attention(signals, limit),
-                 data_warnings=data_warnings(signals))
+                 data_warnings=data_warnings(signals), risk=risk)
 
 
 def greeting(now_utc: datetime, utc_offset_hours: float = 6) -> str:
@@ -83,3 +84,37 @@ def is_stale(finished_iso: str, now: datetime, max_minutes: int) -> bool:
         return now - datetime.fromisoformat(finished_iso) > timedelta(minutes=max_minutes)
     except ValueError:
         return True
+
+
+@dataclass
+class RiskSummary:
+    """Stage-2 levels for one dimension, summarised for the brief."""
+    dimension: str
+    total: int
+    red: int = 0
+    amber: int = 0
+    green: int = 0
+    info: int = 0
+    worst: list = field(default_factory=list)      # Assessment, worst first
+    caveat: str = ""                               # set when any shown red rests on a provisional threshold
+    as_of: str = ""
+
+
+def risk_summary(dimension: str, assessments: list, as_of: str = "", limit: int = 5) -> Optional[RiskSummary]:
+    """Counts and the worst few, for the brief's risk line.
+
+    Deliberately NOT folded into health(). The health score is one check per watch rule per factory —
+    about a dozen numbers; adding a hundred and fifty per-file levels would swamp it, change what the
+    score means overnight, and make it incomparable with the history already stored under the old
+    meaning. The risk line stands beside it with its own denominator, which is also easier to read:
+    "52 of 151 running files are red on quality" says more than a score that moved from 35 to 43.
+    """
+    if not assessments:
+        return None
+    counts = {lv: sum(a.level == lv for a in assessments) for lv in ("red", "amber", "green", "info")}
+    worst = sorted(assessments,
+                   key=lambda a: (_LEVEL_RANK.get(a.level, 9), -float(a.totals.get("Checked", 0) or 0)))[:limit]
+    # The caveat travels from the rows themselves, so it cannot be lost if the rules file changes later.
+    caveat = next((a.caveat for a in worst if a.level == "red" and a.caveat), "")
+    return RiskSummary(dimension=dimension, total=len(assessments), red=counts["red"], amber=counts["amber"],
+                       green=counts["green"], info=counts["info"], worst=worst, caveat=caveat, as_of=as_of)

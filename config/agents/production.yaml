@@ -1,14 +1,17 @@
 # Production agent (docs/AGENTS_DESIGN.md). Owns the line tools (config/fixed_tools.yaml `agent: production`).
 name: production
 title: Production agent
-description: Sewing lines — day targets and output, efficiency, manpower, inspected and defective pieces.
+description: Sewing lines — day targets and output, efficiency, manpower; live end-line and cutting output from VistaQ.
 stage: 1
-catalogs: [PlanningTNA, BiMob, Production]
+catalogs: [PlanningTNA, VistaQ_Default_RHL, BiMob, Production]
 keywords: [line, lines, sewing, output, target, targets, efficiency, manpower,
-           operator, operators, production, hourly, below target]
+           operator, operators, production, hourly, below target, cutting, end line]
 charter: agents/production
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'Production data I can read is the daily line plan (targets, efficiency, manpower) and VistaQ''s live end-line and cutting output; the production planning or IE team has the rest.'
 status: >-
-  The daily line record on this server was last updated on 20 Sep 2026; answers show the production date.
+  Day targets and efficiency come from the daily line record (last updated 20 Sep 2026; answers show the production
+  date). End-line output (pieces passed at Output QC) and cutting output are live from VistaQ for RHL, TAL and BGL.
 # Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the production interviews set them.
 watch:
   - name: lines_below_target

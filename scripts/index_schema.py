@@ -52,17 +52,19 @@ def check(cats, k: int) -> None:
     f = Path(__file__).resolve().parents[1] / "tests" / "schema_cases.jsonl"
     cases = [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
     hits = {"keyword": 0, "hybrid": 0}
+    from ragbot.data.db_router import prepared
     for c in cases:
         cat = cats[c["db"]]
         idx = si.get_index(cat)
         want = {t.lower() for t in c["accept"]}
+        q = prepared(c["q"], cat)           # what select_tables searches: compounds split, the catalog's synonyms added
         row = []
         for mode, qvec in (("keyword", None), ("hybrid", list(_embed_query(c["q"])))):
-            got = idx.search(c["q"], k, qvec)
+            got = idx.search(q, k, qvec)
             ok = any(g.lower() in want for g in got)
             hits[mode] += ok
             row.append(f"{mode}={'HIT ' if ok else 'miss'}")
-        print(f"  {' '.join(row)}  {c['q']!r}  top: {idx.search(c['q'], 3, list(_embed_query(c['q'])))}")
+        print(f"  {' '.join(row)}  {c['q']!r}  top: {idx.search(q, 3, list(_embed_query(c['q'])))}")
     for mode, n in hits.items():
         print(f"{mode:8s} recall@{k}: {n}/{len(cases)} = {n / len(cases):.0%}")
 

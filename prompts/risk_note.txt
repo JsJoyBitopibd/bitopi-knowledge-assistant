@@ -1,0 +1,1 @@
+Quality risk for file {subject} is {level_word}: {detail}, over the {window_days} days to {as_of_day} {marker}. {caveat}

@@ -7,6 +7,8 @@ If nothing is found it says: **System doesn't have the data.**
 Built with Claude Code from the brief in `CLAUDE.md`. Plan and acceptance tests: `docs/PLAN.md`.
 Database rules and the semantic layer (including how this build runs without any DDL on the
 server): `docs/DATA_ACCESS.md`. Citation format: `docs/REFERENCE_FORMAT.md`.
+Look and feel of every surface (web app, Android app, website widget): `docs/design/DESIGN.md`. The web
+app follows its screens 1 and 2 (`src/ragbot/ui/`, theme in `.streamlit/config.toml`).
 
 ## Quick start (Windows)
 
@@ -221,6 +223,21 @@ Beyond the curated `rag.*` views, generated SQL may use any discovered table the
 never a sensitive or excluded one (`data/sensitive.py`, `exclude_tables:` in the catalog YAML), and
 always through the guard. Refresh after the database schema changes:
 
+**Opening one database to its own personal columns.** What counts as sensitive is a list of name
+patterns, global by default. A catalog may set its own with one line, and that line governs the
+catalog, the schema index, the router, the prompt and the server-side DENY script together:
+
+```yaml
+sensitive_patterns: [password, pwd, token, secret]   # only credentials stay blocked
+```
+
+Set on the three people databases on 2026-10-13 at the owner's request, so staff can ask about
+salary, attendance, blood group and the rest; deleting the line closes the database again. No other
+database is affected, and credentials stay blocked everywhere. Rebuild that database's schema
+vectors afterwards (`index_schema.py <db>`) and regenerate `private/rag_reader_grants.sql`; the
+rules and their two consequences are in `docs/DATA_ACCESS.md` §1. Note that **who** may ask is not
+yet restricted — see `docs/ROADMAP.md` "Phase S".
+
 ```powershell
 python scripts\discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json   # sys.* only, ~10 s
 python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --json
@@ -267,3 +284,12 @@ python scripts\refresh_aggregates.py --every 24      # or keep it running
 
 The DBA index on `dbo.ExportOrderBack(ExportOrderID)` (`docs/schema/rag_views_bitopisplint.sql`)
 would make the live query fast too; the copy is the no-DDL workaround until then.
+
+**Value index (Phase P2).** The same refresh copies the names the data records — stores, companies, item
+categories, store groups, issue causes (`config/aggregates.yaml` specs with `entity:`) — so a question's
+spelling ("mantainance store of misami") becomes the recorded value ('Maintenance Store (Misami)') in a fixed
+tool's parameter, in the SQL prompt's "Known values" line and in the router's evidence. In Docker the
+`aggregates` service does this daily (`docker compose up -d aggregates`; mount `config/` into it so edited
+specs count). `python scripts\refresh_aggregates.py values_stores values_companies …` refreshes the value
+copies alone (a few hundred rows, seconds). The admin caption's "databases" and `logs/sql_gen.csv` (`repair`
+rows) show when the self-correction after an empty result fired.

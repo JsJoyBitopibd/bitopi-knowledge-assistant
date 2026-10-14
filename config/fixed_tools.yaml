@@ -12,6 +12,10 @@
 # answer written with no model call (agent/templated.py). Placeholders: the tool's params,
 # {value} (the single value), {n} (row count). Use nothing else: the text must pass verify().
 
+# `requires:` regexes that must all match too; `unless:` a regex that, when it matches, skips the tool — for a
+# qualifier its SQL cannot apply (a QC stage, a line, a PO), so the question goes to model-written SQL instead of
+# getting an answer that silently ignores part of it.
+
 # `example:` a question that must reach this tool: scripts/check_catalog.py checks the match offline and
 # runs the tool live with the parameters it extracts (--live). `follow_ups:` next questions shown under a
 # fixed-tool answer, filled with its parameters ({factory}, {window}, {eo}, ...); each should reach a
@@ -360,50 +364,848 @@
     ORDER BY ShipDate, ExportOrderID
 
 # ---- Phase L5: Quality agent, Stage 1. DHU = defects per hundred pieces inspected, computed in the SQL.
-- name: dhu_by_line_by_factory
-  agent: quality
-  database: PlanningTNA
-  example: 'Which TAL lines have the highest DHU?'
+# ---- VistaQ: live sewing quality for RHL, TAL and BGL (config/catalog/VistaQ_Default_RHL.yaml) ----
+# Each question may carry a period: the relative words (today, yesterday, this/last week, this/last month, last N
+# days), a date written day first (6-10-2026, 7th october, 2026-10-06), a range (from 1 Oct to 5 Oct), a month (in
+# September) or a weekday (last monday); without one it means today. `{period}` is that grammar
+# (tools.PERIOD, expanded on load); group 1 of every pattern is the period, captured anywhere in the question by
+# the optional look-ahead; group 2, where present, the factory. A tool whose lead names the factory comes in two
+# variants (the all-factory one refuses a named factory with the leading negative look-ahead); the others take the
+# factory as optional (default '' = all factories, `@factory = '' OR Factory = @factory`).
+# Every grouped result starts with a Date column: the day, or "first to last day" the rows cover.
+# Leads say "{window}" without "for": the label reads "today", "this week", "on 6 Oct 2026", "in October 2026".
+# `heavy: true` (30 s): the first question about a day the server has not read yet can be slow.
+
+# VistaQ's production dashboard (the cards: working styles / lines, planned production / RTT, sewing production /
+# variance vs RTT, WIP, efficiency / average SMV, man hours / plan, SAH, FTP, defective, rectified and reject rate,
+# overall DHU / defects). Definitions: docs/vistaq_questions.md. Every figure is computed here, in SQL.
+# These two come first: a pasted card list ("Line: … Overall DHU …") would otherwise reach dhu_by_line.
+
+- name: production_by_line_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Show the production dashboard yesterday line wise'
   follow_ups:
-    - 'Which lines have the highest DHU?'
-    - 'Which {factory} lines are below target?'
-  description: One factory's sewing lines by DHU on that factory's latest production day in the data, highest first.
-  answer_list: '{factory} lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first ({n} lines)'
-  match: '(?i)\b(TAL|RHL|BGL)\b.*\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\b(TAL|RHL|BGL)\b.*\blines?\b'
+    - 'Show the production dashboard {window}'
+    - 'Show me the defect summary {window} line wise'
+  description: Each sewing line's production for a period from VistaQ — styles, planned production, RTT, sewing output, variance, WIP, efficiency, average SMV, man hours, SAH, FTP, defective, rectified and reject rates and DHU.
+  answer_list: 'Production by line {window}, live from VistaQ ({n} lines)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\b(?:dashboard|production|efficiency|smv|man[\s-]?hours?|sah|wip|rtt)\b)(?=.*\b(?:lines?[\s-]?wise|(?:by|per|for)\s+(?:each\s+|every\s+)?lines?|each\s+line|every\s+line|broken\s+down\s+by\s+lines?|line\s+by\s+line|lines)\b)'
+  unless: &vq_unless '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\blines?\s*(?:no\.?|number|#)?\s*-?\s*\d+\b|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d+\b|\b(?:po|style|order|eo)\s*(?:no\.?|number|#)?\s*[:#-]?\s*[a-z0-9][a-z0-9/-]*\d|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b)|\b(?i:for|of|from|at|in|by)\s+(?!(?i:the|a|an|all|each|every|today|toady|yesterday|this|last|next|rhl|tal|bgl|my|our|vistaq|qc|buyers?|styles?|lines?|stages?|defects?|factory|factories|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|monday|tuesday|wednesday|thursday|friday|saturday|sunday|working|planned|production|sewing|overall|average|avrg|total|man|plan|units?|blocks?|colou?rs?|files?|pos?|eos?|orders?|customers?|brands?)\b)[A-Z][\w&''.-]*'
   params:
-    factory: { from_group: [1, 2], upper: true }
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  # The statement reads every factory; the asked one is kept in Python (data/tools.py _apply_filter). Measured
+  # 11 Oct 2026: all factories 8.1 s, the same statement with (@factory = '' OR Factory = @factory) in its five
+  # subqueries timed out at 30 s. One cached result now serves every factory of a scope.
+  filter:
+    rows: { column: Factory, param: factory }
+  cache_ttl_seconds: 600
   sql: |
     SELECT TOP (200)
-      ProductionDate, Factory, Unit, LineNumber,
-      SUM(InspectedPcs) AS InspectedPcs, SUM(Defects) AS Defects, SUM(DefectivePcs) AS DefectivePcs,
-      CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS DHU
-    FROM rag.vw_LineDailyOutput
-    WHERE Factory = @factory
-      AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory)
-    GROUP BY ProductionDate, Factory, Unit, LineNumber
-    HAVING SUM(InspectedPcs) > 0
+      CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
+        ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
+      p.Factory, p.Unit, p.Line, st.Styles, p.Styles AS StyleCount, p.Planned, CAST(ROUND(p.RTT, 0) AS int) AS RTT,
+      ISNULL(o.OutputPcs, 0) AS SewingOutput, ISNULL(o.OutputPcs, 0) - CAST(ROUND(p.RTT, 0) AS int) AS VarianceVsRTT,
+      w.WIP,
+      CAST(100.0 * o.SAH / NULLIF(mh.ManHours, 0) AS decimal(6,2)) AS EfficiencyPct,
+      CAST(60.0 * o.SAH / NULLIF(o.OutputPcs, 0) AS decimal(6,2)) AS AvgSMV,
+      mh.ManHours, p.PlanManHours, o.SAH,
+      CAST(100.0 * q.Passed / NULLIF(q.Checked, 0) AS decimal(6,2)) AS FTPPct,
+      CAST(100.0 * q.DefectivePcs / NULLIF(q.Checked, 0) AS decimal(6,2)) AS DefectivePct,
+      CAST(100.0 * q.Rectified / NULLIF(q.Checked, 0) AS decimal(6,2)) AS RectifiedPct,
+      CAST(100.0 * q.Rejected / NULLIF(q.Checked, 0) AS decimal(6,2)) AS RejectPct,
+      CAST(100.0 * q.Defects / NULLIF(q.Checked, 0) AS decimal(6,2)) AS DHU
+    FROM (
+      SELECT pd.Factory, MAX(pd.Unit) AS Unit, pd.Line,
+        COUNT(DISTINCT CASE WHEN pd.PlanHours > 0 THEN ISNULL(pd.Buyer, '') + '|' + ISNULL(pd.Style, '') END) AS Styles,
+        SUM(pd.DayTarget) AS Planned,
+        SUM(pd.DayTarget * ISNULL(lm.WorkedHours / NULLIF(lm.SessionHours, 0), 1)) AS RTT,
+        SUM(pd.Manpower * pd.PlanHours) AS PlanManHours
+      FROM rag.vw_PlanDay pd
+      LEFT JOIN rag.vw_LineDayManHours lm ON lm.Factory = pd.Factory AND lm.Line = pd.Line AND lm.WorkDate = pd.PlanDate
+      WHERE pd.Factory IS NOT NULL AND pd.PlanDate >= @from AND pd.PlanDate < @to
+      GROUP BY pd.Factory, pd.Line
+      HAVING SUM(pd.PlanHours) > 0
+    ) AS p
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(OutputPcs) AS OutputPcs, SUM(SAH) AS SAH
+      FROM rag.vw_PlanOutputDay
+      WHERE Factory IS NOT NULL AND OutputDate >= @from AND OutputDate < @to
+      GROUP BY Factory, Line
+    ) AS o ON o.Factory = p.Factory AND o.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(ManHours) AS ManHours
+      FROM rag.vw_LineDayManHours
+      WHERE Factory IS NOT NULL AND WorkDate >= @from AND WorkDate < @to
+      GROUP BY Factory, Line
+    ) AS mh ON mh.Factory = p.Factory AND mh.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+        SUM(Rectified) AS Rectified, SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
+      FROM rag.vw_LineDayQuality
+      WHERE Factory IS NOT NULL AND InspectionDate >= @from AND InspectionDate < @to
+      GROUP BY Factory, Line
+    ) AS q ON q.Factory = p.Factory AND q.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, SUM(CutQty) - SUM(OutputQty) AS WIP
+      FROM rag.vw_CombinationFlowDay
+      WHERE Factory IS NOT NULL AND FlowDate < @to
+        AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
+      GROUP BY Factory, Line
+    ) AS w ON w.Factory = p.Factory AND w.Line = p.Line
+    LEFT JOIN (
+      SELECT Factory, Line, STRING_AGG(Label, ', ') WITHIN GROUP (ORDER BY Label) AS Styles
+      FROM (
+        SELECT DISTINCT Factory, Line, ISNULL(Buyer, '?') + ' / ' + ISNULL(Style, '?') AS Label
+        FROM rag.vw_PlanDay
+        WHERE Factory IS NOT NULL AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+      ) AS d
+      GROUP BY Factory, Line
+    ) AS st ON st.Factory = p.Factory AND st.Line = p.Line
+    ORDER BY p.Factory, p.Line
+
+- name: production_dashboard_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Show the production dashboard yesterday'
+  follow_ups:
+    - 'Show the production dashboard {window} line wise'
+    - 'Show me the QC summary {window}'
+    - 'Which lines are above the DHU target {window}?'
+  description: VistaQ's production dashboard for a period, per factory and in all — working styles, lines, planned production, RTT, sewing production, variance vs RTT, WIP, efficiency, average SMV, man hours (actual and plan), SAH, FTP, defective, rectified and reject rates with quantities, overall DHU and defects.
+  answer_list: 'Production dashboard {window}, live from VistaQ'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?!.*(?:\b(?:buyers?|styles?|colou?rs?|files?|pos?|eos?|orders?|units?)[\s-]*wise\b|\b(?:by|per|each|every)\s+(?:buyers?|styles?|colou?rs?|files?|pos?|eos?|orders?|units?)\b))(?:(?=.*\b(?:production|factory|sewing|line|floor)\s+(?:dashboard|kpis?|scorecard|summary|report|status)\b)|(?=.*\bdashboard\b)|(?=.*\b(?:efficiency|sah|smv|man[\s-]?hours?|wip|rtt|planned\s+production|sewing\s+production)\b))'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  # As production_by_line_window: read every factory, then keep the asked factory's column (the metric list is
+  # one row per figure with a column per factory, so '' keeps all four).
+  filter:
+    columns: { keep: ['Date', 'Metric', '{factory}'] }
+  cache_ttl_seconds: 600
+  sql: |
+    SELECT TOP (30)
+      CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
+        ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
+      m.Metric,
+      MAX(CASE WHEN t.Factory = 'BGL' THEN m.Amount END) AS BGL,
+      MAX(CASE WHEN t.Factory = 'RHL' THEN m.Amount END) AS RHL,
+      MAX(CASE WHEN t.Factory = 'TAL' THEN m.Amount END) AS TAL,
+      MAX(CASE WHEN t.Factory = 'All' THEN m.Amount END) AS [All]
+    FROM (
+      SELECT p.Factory, p.Styles, p.Lines, p.Planned, ROUND(p.RTT, 0) AS RTT, p.PlanManHours,
+        ISNULL(o.OutputPcs, 0) AS OutputPcs, ISNULL(o.SAH, 0) AS SAH, mh.ManHours, w.WIP,
+        q.Checked, q.Passed, q.DefectivePcs, q.Rectified, q.Rejected, q.Defects
+      FROM (
+        SELECT CASE WHEN GROUPING(pd.Factory) = 1 THEN 'All' ELSE pd.Factory END AS Factory,
+          COUNT(DISTINCT CASE WHEN pd.PlanHours > 0 THEN pd.Factory + '|' + pd.Line END) AS Lines,
+          COUNT(DISTINCT CASE WHEN pd.PlanHours > 0 THEN ISNULL(pd.Buyer, '') + '|' + ISNULL(pd.Style, '') END) AS Styles,
+          SUM(pd.DayTarget) AS Planned,
+          SUM(pd.DayTarget * ISNULL(lm.WorkedHours / NULLIF(lm.SessionHours, 0), 1)) AS RTT,
+          SUM(pd.Manpower * pd.PlanHours) AS PlanManHours
+        FROM rag.vw_PlanDay pd
+        LEFT JOIN rag.vw_LineDayManHours lm ON lm.Factory = pd.Factory AND lm.Line = pd.Line AND lm.WorkDate = pd.PlanDate
+        WHERE pd.Factory IS NOT NULL AND pd.PlanDate >= @from AND pd.PlanDate < @to
+        GROUP BY ROLLUP(pd.Factory)
+      ) AS p
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory,
+          SUM(OutputPcs) AS OutputPcs, SUM(SAH) AS SAH
+        FROM rag.vw_PlanOutputDay
+        WHERE Factory IS NOT NULL AND OutputDate >= @from AND OutputDate < @to
+        GROUP BY ROLLUP(Factory)
+      ) AS o ON o.Factory = p.Factory
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory, SUM(ManHours) AS ManHours
+        FROM rag.vw_LineDayManHours
+        WHERE Factory IS NOT NULL AND WorkDate >= @from AND WorkDate < @to
+        GROUP BY ROLLUP(Factory)
+      ) AS mh ON mh.Factory = p.Factory
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory,
+          SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs, SUM(Rectified) AS Rectified,
+          SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
+        FROM rag.vw_LineDayQuality
+        WHERE Factory IS NOT NULL AND InspectionDate >= @from AND InspectionDate < @to
+        GROUP BY ROLLUP(Factory)
+      ) AS q ON q.Factory = p.Factory
+      LEFT JOIN (
+        SELECT CASE WHEN GROUPING(Factory) = 1 THEN 'All' ELSE Factory END AS Factory, SUM(CutQty) - SUM(OutputQty) AS WIP
+        FROM rag.vw_CombinationFlowDay
+        WHERE Factory IS NOT NULL AND FlowDate < @to
+          AND Combination IN (SELECT Combination FROM rag.vw_PlanDay WHERE PlanDate >= @from AND PlanDate < @to AND PlanHours > 0)
+        GROUP BY ROLLUP(Factory)
+      ) AS w ON w.Factory = p.Factory
+    ) AS t
+    CROSS APPLY (VALUES
+      (1, 'Working styles', CAST(t.Styles AS decimal(14,2))),
+      (2, 'Lines', CAST(t.Lines AS decimal(14,2))),
+      (3, 'Planned production', CAST(t.Planned AS decimal(14,2))),
+      (4, 'RTT', CAST(t.RTT AS decimal(14,2))),
+      (5, 'Sewing production', CAST(t.OutputPcs AS decimal(14,2))),
+      (6, 'Variance vs RTT', CAST(t.OutputPcs - t.RTT AS decimal(14,2))),
+      (7, 'WIP', CAST(t.WIP AS decimal(14,2))),
+      (8, 'Efficiency %', CAST(100.0 * t.SAH / NULLIF(t.ManHours, 0) AS decimal(14,2))),
+      (9, 'Average SMV', CAST(60.0 * t.SAH / NULLIF(t.OutputPcs, 0) AS decimal(14,2))),
+      (10, 'Man hours', CAST(t.ManHours AS decimal(14,2))),
+      (11, 'Plan man hours', CAST(t.PlanManHours AS decimal(14,2))),
+      (12, 'SAH', CAST(t.SAH AS decimal(14,2))),
+      (13, 'FTP %', CAST(100.0 * t.Passed / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (14, 'FTP qty', CAST(t.Passed AS decimal(14,2))),
+      (15, 'Defective rate %', CAST(100.0 * t.DefectivePcs / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (16, 'Defective qty', CAST(t.DefectivePcs AS decimal(14,2))),
+      (17, 'Rectified rate %', CAST(100.0 * t.Rectified / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (18, 'Rectified qty', CAST(t.Rectified AS decimal(14,2))),
+      (19, 'Reject rate %', CAST(100.0 * t.Rejected / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (20, 'Reject qty', CAST(t.Rejected AS decimal(14,2))),
+      (21, 'Overall DHU', CAST(100.0 * t.Defects / NULLIF(t.Checked, 0) AS decimal(14,2))),
+      (22, 'Defects', CAST(t.Defects AS decimal(14,2)))
+    ) AS m(Ord, Metric, Amount)
+    GROUP BY m.Ord, m.Metric
+    ORDER BY m.Ord
+
+# Quality grouped the way the question asks, with only the figures it names (owner, 8 Oct 2026: "what the user wants
+# beside the line, that data is shown, not other data"). `dims` (type group_by) and `measures` (type measures) are
+# read from the question by tools.py and filled into {dims} / {measures} from the whitelists below. PO, EO and order
+# mean the file: VistaQ records QC per file (FR number = the ERP's FileRefID), its PO is "TBA"; the companion then
+# adds each file's export orders and POs from the ERP as [D2].
+
+- name: quality_by_eo_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show the DHU of EO TAL-26-1985-1 this week'
+  follow_ups:
+    - 'Which export orders are in file FR-{eo_file}?'
+    - 'Show me the defect summary {window}'
+  description: QC figures for the order file (FR number) that holds an export order or a named file. VistaQ records QC per file, not per export order or PO.
+  answer_list: 'QC {window} for file FR-{eo_file}, live from VistaQ. VistaQ records QC per file, not per export order or PO; the file''s buyer, export orders and POs from the ERP are in the same row'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*?\b(?:TAL|RHL|BGL|KTL|CKDL|FR)-(\d{2}-\d{1,6})(?:-\d{1,4})?\b)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected)\b)'
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    eo_file: { from_group: 2 }
+    measures: &vq_measures
+      type: measures
+      default: [checked, defects, dhu]
+      columns:
+        checked: 'SUM(Checked) AS Checked'
+        defects: 'SUM(Defects) AS Defects'
+        dhu: 'CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU'
+        ftp_pct: 'CAST(100.0 * SUM(Passed) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS FTPPct'
+        ftp_qty: 'SUM(Passed) AS FTPQty'
+        defective: 'SUM(DefectivePcs) AS DefectivePcs'
+        defective_pct: 'CAST(100.0 * SUM(DefectivePcs) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DefectivePct'
+        rectified: 'SUM(Rectified) AS Rectified'
+        rectified_pct: 'CAST(100.0 * SUM(Rectified) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RectifiedPct'
+        rejected: 'SUM(Rejected) AS Rejected'
+        reject_pct: 'CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct'
+        output: 'SUM(EndlineOutput) AS EndlineOutput'
+  heavy: true
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      FileNo, {measures}
+    FROM rag.vw_PlanQualityDay
+    WHERE FileNo = 'FR-' + @eo_file AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY FileNo
+    HAVING SUM(Checked) > 0
+  companion: &vq_file_orders
+    database: BitopiSplint
+    agent: order
+    column: FileNo
+    param: files
+    answer_list: 'Export orders and POs of each file, from the ERP'
+    # P3: the ERP's columns joined onto each VistaQ row by file number — one table from two servers, cited
+    # [D1][D2]; both cards stay (tools.merge_companion)
+    # ("on" is quoted: YAML 1.1 reads a bare `on` as the boolean true)
+    merge: { "on": [FileNo], add: [Buyer, ExportOrders, POs, FirstEO, LastEO] }
+    sql: |
+      SELECT TOP (200)
+        e.FileRefID AS FileNo, MAX(e.Buyer) AS Buyer, COUNT(*) AS ExportOrders, COUNT(DISTINCT e.ExportPONo) AS POs,
+        MAX(CASE WHEN e.FirstNo = 1 THEN e.ExportOrderID END) AS FirstEO,
+        MAX(CASE WHEN e.LastNo = 1 THEN e.ExportOrderID END) AS LastEO, SUM(e.OrderQty) AS OrderQty
+      FROM (
+        SELECT ExportOrderID, ExportPONo, FileRefID, Buyer, OrderQty,
+          ROW_NUMBER() OVER (PARTITION BY FileRefID ORDER BY LEN(ExportOrderID), ExportOrderID) AS FirstNo,
+          ROW_NUMBER() OVER (PARTITION BY FileRefID ORDER BY LEN(ExportOrderID) DESC, ExportOrderID DESC) AS LastNo
+        FROM rag.vw_ExportOrder
+        WHERE FileRefID IN (@files)
+      ) AS e
+      GROUP BY e.FileRefID
+      ORDER BY e.FileRefID
+
+- name: quality_by_group_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'show me Unit, Line and Buyer wise DHU of TAL'
+  follow_ups:
+    - 'Show me the QC summary {window}'
+    - 'Which lines are above the DHU target {window}?'
+  description: QC figures from VistaQ grouped the way the question asks (factory, unit, line, buyer, style, colour or file; PO, EO and order mean the file) with only the figures it names (DHU, defects, checked, FTP, defective, rectified, reject, output).
+  answer_list: 'QC by {by} {window}, live from VistaQ ({n} rows){note}'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected|output|production)\b)(?=.*(?:\bwise\b|\b(?:by|per|each|every)\b|\bbroken\s+down\b|\bbreak\s*-?\s*down\b))'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+    dims:
+      type: group_by
+      default: [factory]
+      columns: { factory: Factory, unit: Unit, line: Line, buyer: Buyer, style: Style, color: Color, file: FileNo }
+      po_eo_note: '. VistaQ records QC per file (FR number), not per PO or export order; each file''s buyer, export orders and POs from the ERP are in the same row'
+    measures: *vq_measures
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      {dims}, {measures}
+    FROM rag.vw_PlanQualityDay
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY {dims}
+    HAVING SUM(Checked) > 0
+    ORDER BY {dims}
+  companion: *vq_file_orders
+
+- name: qc_summary_by_factory_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show the TAL QC summary today'
+  follow_ups:
+    - 'Which {factory} lines have the highest DHU {window}?'
+    - 'Show the {factory} defect summary {window}'
+    - 'QC summary {window}'
+  description: One factory's QC totals for a period from VistaQ — pieces checked, passed, defective, rejected, defects, DHU, reject %, first-pass % and end-line output.
+  answer_list: '{factory} QC summary {window}, live from VistaQ'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(TAL|RHL|BGL)\b)(?:(?=.*\b(?:qc|quality|dhu)\s+(?:summary|status|report|overview|position)\b)|(?!.*\b(?:lines?|target|limit|threshold|buyers?|styles?|stages?|capas?|corrective)\b)(?=.*\bdhu\b))'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true }
+  heavy: true
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+      SUM(Rejected) AS Rejected, SUM(Defects) AS Defects,
+      CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU,
+      CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct,
+      CAST(100.0 * SUM(Passed) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS FirstPassPct,
+      SUM(EndlineOutput) AS EndlineOutput
+    FROM rag.vw_LineDayQuality
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory
+
+- name: qc_summary_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show me the QC summary today'
+  follow_ups:
+    - 'Show me the defect summary {window}'
+    - 'Which lines have the highest DHU {window}?'
+    - 'Show the TAL QC summary {window}'
+  description: QC totals for a period per factory from VistaQ — pieces checked, passed, defective, rejected, defects, DHU, reject %, first-pass % and end-line output.
+  answer_list: 'QC summary by factory {window}, live from VistaQ ({n} factories)'
+  match: '(?i)^(?!.*\b(?:TAL|RHL|BGL)\b)(?=(?:.*?\b({period})\b)?)(?:(?=.*\b(?:qc|quality|dhu)\s+(?:summary|status|report|overview|position)\b)|(?!.*\b(?:lines?|target|limit|threshold|buyers?|styles?|stages?|capas?|corrective)\b)(?=.*\bdhu\b))'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+  heavy: true
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+      SUM(Rejected) AS Rejected, SUM(Defects) AS Defects,
+      CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU,
+      CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct,
+      CAST(100.0 * SUM(Passed) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS FirstPassPct,
+      SUM(EndlineOutput) AS EndlineOutput
+    FROM rag.vw_LineDayQuality
+    WHERE InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory
+    ORDER BY Factory
+
+- name: defect_summary_by_factory_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show the RHL defect summary today'
+  follow_ups:
+    - 'Which {factory} lines have the highest DHU {window}?'
+    - 'Show the {factory} QC summary {window}'
+    - 'Show me the defect summary {window}'
+  description: One factory's defects found in a period from VistaQ, by defect type and category, most frequent first.
+  answer_list: '{factory} defects found {window}, by type, most frequent first ({n} defect types)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(TAL|RHL|BGL)\b).*\b(?:defect\s+summary|top\s+defects|defects?\s+by\s+type|most\s+common\s+defects|defect\s+types?|types?\s+of\s+defects)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CASE WHEN MIN(DefectDate) = MAX(DefectDate) THEN CAST(MIN(DefectDate) AS varchar(10))
+        ELSE CAST(MIN(DefectDate) AS varchar(10)) + ' to ' + CAST(MAX(DefectDate) AS varchar(10)) END AS [Date],
+      Defect, DefectCategory, COUNT(*) AS Defects
+    FROM rag.vw_QCDefect
+    WHERE (@factory = '' OR Factory = @factory) AND DefectDate >= @from AND DefectDate < @to
+    GROUP BY Defect, DefectCategory
+    ORDER BY Defects DESC
+
+- name: defect_summary_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show me the defect summary today'
+  follow_ups:
+    - 'Show me the defect summary {window} line wise'
+    - 'Which styles had the most defects {window}?'
+    - 'Show the RHL defect summary {window}'
+  description: Defects found in a period from VistaQ, all factories, by defect type and category, most frequent first.
+  answer_list: 'Defects found {window} in all factories, by type, most frequent first ({n} defect types)'
+  match: '(?i)^(?!.*\b(?:TAL|RHL|BGL)\b)(?=(?:.*?\b({period})\b)?).*\b(?:defect\s+summary|top\s+defects|defects?\s+by\s+type|most\s+common\s+defects|defect\s+types?|types?\s+of\s+defects)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CASE WHEN MIN(DefectDate) = MAX(DefectDate) THEN CAST(MIN(DefectDate) AS varchar(10))
+        ELSE CAST(MIN(DefectDate) AS varchar(10)) + ' to ' + CAST(MAX(DefectDate) AS varchar(10)) END AS [Date],
+      Defect, DefectCategory, COUNT(*) AS Defects
+    FROM rag.vw_QCDefect
+    WHERE DefectDate >= @from AND DefectDate < @to
+    GROUP BY Defect, DefectCategory
+    ORDER BY Defects DESC
+
+- name: lines_above_dhu_target_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Which lines are above the DHU target today?'
+  follow_ups:
+    - 'Which lines have the highest DHU {window}?'
+    - 'Show me the defect summary {window}'
+  description: Sewing lines whose DHU in a period is above the DHU target set in VistaQ, highest first.
+  answer_list: 'Lines above the DHU target {window}, highest DHU first ({n} lines)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\bdhu\b).*\blines?\b.*\b(?:above|over|exceed(?:s|ed|ing)?|cross(?:es|ed|ing)?|beyond|breach(?:es|ed|ing)?|missed|failed)\b.*\b(?:target|limit|threshold)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, Unit, Line, SUM(Checked) AS Checked, SUM(Defects) AS Defects,
+      CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU,
+      (SELECT TOP (1) DHUTarget FROM rag.vw_QCTarget ORDER BY EffectiveFrom DESC) AS DHUTarget
+    FROM rag.vw_LineDayQuality
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Unit, Line
+    HAVING 100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) > (SELECT TOP (1) DHUTarget FROM rag.vw_QCTarget ORDER BY EffectiveFrom DESC)
+    ORDER BY DHU DESC
+
+- name: dhu_by_line_by_factory
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Which TAL lines have the highest DHU?'
+  follow_ups:
+    - 'Which lines have the highest DHU {window}?'
+    - 'Show the {factory} defect summary {window}'
+  description: One factory's sewing lines by DHU for a period (default today), live from VistaQ, highest first.
+  answer_list: '{factory} lines by DHU (defects per hundred pieces checked) {window}, highest first ({n} lines)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(TAL|RHL|BGL)\b).*(?:\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\blines?\b)'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, Unit, Line, SUM(Checked) AS Checked, SUM(Defects) AS Defects, SUM(Rejected) AS Rejected,
+      CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU
+    FROM rag.vw_LineDayQuality
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Unit, Line
+    HAVING SUM(Checked) > 0
     ORDER BY DHU DESC
 
 - name: dhu_by_line
   agent: quality
-  database: PlanningTNA
+  database: VistaQ_Default_RHL
   example: 'Which lines have the highest DHU?'
   follow_ups:
-    - 'Which TAL lines have the highest DHU?'
-    - 'Which lines are below target?'
-  description: Sewing lines by DHU on the latest production day in the data (all factories in scope), highest first.
-  answer_list: 'Lines by DHU (defects per hundred pieces inspected) on the latest production day in the data, highest first ({n} lines)'
-  match: '(?i)\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\blines?\b'
+    - 'Which TAL lines have the highest DHU {window}?'
+    - 'Which lines are above the DHU target {window}?'
+  description: Sewing lines by DHU for a period (default today), all factories in scope, live from VistaQ, highest first.
+  answer_list: 'Lines by DHU (defects per hundred pieces checked) {window}, highest first ({n} lines)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?).*(?:\blines?\b.*\b(?:dhu|defects?)\b|\b(?:dhu|defects?)\b.*\blines?\b)'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+  heavy: true
   sql: |
     SELECT TOP (200)
-      ProductionDate, Factory, Unit, LineNumber,
-      SUM(InspectedPcs) AS InspectedPcs, SUM(Defects) AS Defects, SUM(DefectivePcs) AS DefectivePcs,
-      CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS DHU
-    FROM rag.vw_LineDailyOutput
-    WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
-    GROUP BY ProductionDate, Factory, Unit, LineNumber
-    HAVING SUM(InspectedPcs) > 0
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, Unit, Line, SUM(Checked) AS Checked, SUM(Defects) AS Defects, SUM(Rejected) AS Rejected,
+      CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU
+    FROM rag.vw_LineDayQuality
+    WHERE InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Unit, Line
+    HAVING SUM(Checked) > 0
     ORDER BY DHU DESC
+
+- name: endline_output_by_line_by_factory_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Show the TAL line output today'
+  follow_ups:
+    - 'Show the line output {window}'
+    - 'Show the {factory} QC summary {window}'
+  description: One factory's sewing lines by end-line output (pieces passed at Output QC) for a period, live from VistaQ.
+  answer_list: '{factory} lines by end-line output (pieces passed at Output QC) {window}, highest first ({n} lines)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(TAL|RHL|BGL)\b).*\b(?:line\s+output|output\s+(?:by|per|of\s+each)\s+line|end[\s-]?line\s+output|lines?\s+output|lines?\s+by\s+output|sewing\s+output)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, Unit, Line, SUM(EndlineOutput) AS EndlineOutput, SUM(Checked) AS Checked
+    FROM rag.vw_LineDayQuality
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Unit, Line
+    ORDER BY EndlineOutput DESC
+
+- name: endline_output_by_line_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Show the line output today'
+  follow_ups:
+    - 'Show the TAL line output {window}'
+    - 'Show me the QC summary {window}'
+  description: Sewing lines by end-line output (pieces passed at Output QC) for a period, all factories, live from VistaQ.
+  answer_list: 'Lines by end-line output (pieces passed at Output QC) {window}, highest first ({n} lines)'
+  match: '(?i)^(?!.*\b(?:TAL|RHL|BGL)\b)(?=(?:.*?\b({period})\b)?).*\b(?:line\s+output|output\s+(?:by|per|of\s+each)\s+line|end[\s-]?line\s+output|lines?\s+output|lines?\s+by\s+output|sewing\s+output)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, Unit, Line, SUM(EndlineOutput) AS EndlineOutput, SUM(Checked) AS Checked
+    FROM rag.vw_LineDayQuality
+    WHERE InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Unit, Line
+    ORDER BY EndlineOutput DESC
+
+- name: rejects_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'How many pieces were rejected today?'
+  follow_ups:
+    - 'Show me the QC summary {window}'
+    - 'Show me the defect summary {window}'
+  description: Pieces rejected at QC in a period per factory, with pieces checked and the reject rate, live from VistaQ.
+  answer_list: 'Rejected pieces {window} by factory, with the reject rate ({n} factories)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*\b(?:rejects|rejected\s+pieces|reject\s+rate|rejection\s+rate|pieces\s+(?:were\s+)?rejected|garments?\s+(?:were\s+)?rejected)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, SUM(Rejected) AS Rejected, SUM(Checked) AS Checked,
+      CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct
+    FROM rag.vw_LineDayQuality
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory
+    ORDER BY Factory
+
+- name: defects_by_buyer_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Which buyers had the most defects this week?'
+  follow_ups:
+    - 'Which styles had the most defects {window}?'
+    - 'Show me the defect summary {window}'
+  description: Defects found in a period per factory and buyer, most first, live from VistaQ.
+  answer_list: 'Defects found {window} by factory and buyer, most first ({n} rows)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*(?:\bdefects?\b.*\b(?:by|per|for\s+each)\s+buyers?\b|\bbuyers?\b.*\b(?:most|highest|more)\s+defects?\b)'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CASE WHEN MIN(DefectDate) = MAX(DefectDate) THEN CAST(MIN(DefectDate) AS varchar(10))
+        ELSE CAST(MIN(DefectDate) AS varchar(10)) + ' to ' + CAST(MAX(DefectDate) AS varchar(10)) END AS [Date],
+      Factory, Buyer, COUNT(*) AS Defects
+    FROM rag.vw_QCDefect
+    WHERE (@factory = '' OR Factory = @factory) AND DefectDate >= @from AND DefectDate < @to
+    GROUP BY Factory, Buyer
+    ORDER BY Defects DESC
+
+- name: defects_by_style_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Which styles had the most defects this week?'
+  follow_ups:
+    - 'Which buyers had the most defects {window}?'
+    - 'Show me the defect summary {window}'
+  description: Defects found in a period per factory, buyer and style, most first, live from VistaQ.
+  answer_list: 'Styles with the most defects {window}, by factory and buyer ({n} rows)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*(?:\bdefects?\b.*\b(?:by|per|for\s+each)\s+styles?\b|\bstyles?\b.*\b(?:most|highest|more)\s+defects?\b)'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CASE WHEN MIN(DefectDate) = MAX(DefectDate) THEN CAST(MIN(DefectDate) AS varchar(10))
+        ELSE CAST(MIN(DefectDate) AS varchar(10)) + ' to ' + CAST(MAX(DefectDate) AS varchar(10)) END AS [Date],
+      Factory, Buyer, Style, COUNT(*) AS Defects
+    FROM rag.vw_QCDefect
+    WHERE (@factory = '' OR Factory = @factory) AND DefectDate >= @from AND DefectDate < @to
+    GROUP BY Factory, Buyer, Style
+    ORDER BY Defects DESC
+
+- name: qc_by_stage_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show the QC results by stage today'
+  follow_ups:
+    - 'Show me the QC summary {window}'
+    - 'Show me the defect summary {window}'
+  description: Pieces checked, passed, defective, rejected and re-checked after repair at each QC stage in a period, per factory, live from VistaQ.
+  answer_list: 'QC results {window} at each QC stage, by factory ({n} rows)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*(?:\b(?:by|per|each|every|for\s+each)\s+(?:qc\s+)?(?:stages?|qc\s+points?|checkpoints?|check\s+points?)\b|\bstage[\s-]?wise\b)'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CASE WHEN MIN(InspectionDate) = MAX(InspectionDate) THEN CAST(MIN(InspectionDate) AS varchar(10))
+        ELSE CAST(MIN(InspectionDate) AS varchar(10)) + ' to ' + CAST(MAX(InspectionDate) AS varchar(10)) END AS [Date],
+      Factory, Stage, SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+      SUM(Rejected) AS Rejected, SUM(RepairedPassed) AS RepairedPassed
+    FROM rag.vw_QCStageDay
+    WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Stage
+    ORDER BY Factory, Stage
+
+- name: corrective_actions_count_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'How many corrective actions were raised this week?'
+  follow_ups:
+    - 'Show the corrective actions {window}'
+    - 'Which lines have the highest DHU {window}?'
+  description: Corrective actions (CAPA) raised in VistaQ in a period, counted per factory.
+  answer_list: 'Corrective actions raised {window}, by factory ({n} factories)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*\bhow\s+many\b.*\b(?:corrective\s+actions?|capas?)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(CAPDate) = MAX(CAPDate) THEN CAST(MIN(CAPDate) AS varchar(10))
+        ELSE CAST(MIN(CAPDate) AS varchar(10)) + ' to ' + CAST(MAX(CAPDate) AS varchar(10)) END AS [Date],
+      Factory, COUNT(*) AS CorrectiveActions
+    FROM rag.vw_CorrectiveAction
+    WHERE (@factory = '' OR Factory = @factory) AND CAPDate >= @from AND CAPDate < @to
+    GROUP BY Factory
+    ORDER BY Factory
+
+- name: corrective_actions_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'Show the corrective actions this week'
+  follow_ups:
+    - 'How many corrective actions were raised {window}?'
+    - 'Show me the defect summary {window}'
+  description: Corrective actions (CAPA) raised in VistaQ in a period, with line, buyer, style, defect and the DHU that triggered them, newest first.
+  answer_list: 'Corrective actions raised {window}, newest first ({n} shown)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*\b(?:corrective\s+actions?|capas?)\b'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  sql: |
+    SELECT TOP (200) CAPDate, Factory, Line, Buyer, Style, Defect, NumberOfDefect, DHU, Deadline
+    FROM rag.vw_CorrectiveAction
+    WHERE (@factory = '' OR Factory = @factory) AND CAPDate >= @from AND CAPDate < @to
+    ORDER BY CAPDate DESC, NumberOfDefect DESC
+
+- name: cutting_output_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'What was the cutting output today?'
+  follow_ups:
+    - 'Show the line output {window}'
+    - 'Show me the QC summary {window}'
+  description: Pieces cut in a period per factory, live from VistaQ.
+  answer_list: 'Pieces cut {window} by factory ({n} factories)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?).*(?:\b(?:cutting\s+(?:output|quantity|qty)|cut\s+(?:quantity|qty|pieces|output)|pieces\s+(?:were\s+)?cut)\b|\bhow\s+(?:much|many)\b.*\bcut\b)'
+  unless: *vq_unless
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  sql: |
+    SELECT TOP (10)
+      CASE WHEN MIN(CuttingDate) = MAX(CuttingDate) THEN CAST(MIN(CuttingDate) AS varchar(10))
+        ELSE CAST(MIN(CuttingDate) AS varchar(10)) + ' to ' + CAST(MAX(CuttingDate) AS varchar(10)) END AS [Date],
+      Factory, SUM(CutQty) AS CutQty
+    FROM rag.vw_CuttingDaily
+    WHERE (@factory = '' OR Factory = @factory) AND CuttingDate >= @from AND CuttingDate < @to
+    GROUP BY Factory
+    ORDER BY Factory
+
+# ---- a named sewing line (Phase Q) --------------------------------------------------------------------------
+# The shared `*vq_unless` hands every question naming a line number to the model, because the tools above cannot
+# filter one line. These four take the line as a parameter instead (data/entities.py reads "line 2102",
+# "line no. 2102", "L-2102", "2102 line"), so "What style is running on TAL line 2102?" is answered from the
+# plan with no model call. Their own unless keeps the qualifiers they still cannot apply (a QC stage, day-wise).
+- name: running_style_by_line
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'What style is running on TAL line 2102?'
+  follow_ups:
+    - 'DHU of {factory_label} line {line} {window}'
+    - 'Show the production dashboard {window} line wise'
+  description: The style (and its buyer) planned on one sewing line for a day, live from VistaQ's production plan — the owner's "which style is running on this line".
+  answer_list: 'Style running on {factory_label} line {line} {window}, live from VistaQ ({n} plan(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|.*\bL-\d{2,4}\b|.*\b\d{3,4}\s+lines?\b)(?=.*\b(?:styles?|buyers?|orders?|running|runs?|ran|sewing|making|producing|planned|plan)\b)'
+  # `unless:` may be one pattern or several; any match hands the question to the model. The second one here is
+  # a figure this tool does not return (output, efficiency, a quality rate): the question wants more than the
+  # plan's style and buyer, so the model writes it rather than this tool answering half of it.
+  unless:
+    - &vq_unless_line '(?i:\b(?:front|back|waist|output|end[\s-]?line|in[\s-]?line)\s*(?:/\s*back\s*)?(?:qc|check(?:ing)?|inspection)\b|\bstation[\s-]?\d+\b|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\b(?:per|by|each|every)\s+(?:day|date)\b|\bday[\s-]by[\s-]day\b|\bhour(?:ly|s)?\b)'
+    - &vq_unless_measure '(?i:\b(?:outputs?|produced|production|pieces|pcs|qty|quantity|efficiency|targets?|smv|manpower|wip|sah|man[\s-]?hours?|dhu|defects?|defective|rejects?|rejected|ftp|first[\s-]?pass|rectified|checked|inspected|cut|cutting)\b)'
+  requires: ['(?i)\b(?:styles?|buyers?|orders?|running|runs?|ran|sewing|making|producing|planned|plan)\b']
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { type: factory, default: '' }
+    line: { type: line }
+  sql: |
+    SELECT TOP (50)
+      CONVERT(varchar(10), PlanDate, 23) AS [Date], Factory, Line, Buyer, Style
+    FROM rag.vw_PlanDay
+    WHERE (@factory = '' OR Factory = @factory) AND Line = @line
+      AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+    ORDER BY Factory, Buyer, Style
+
+- name: quality_by_line_window
+  agent: quality
+  database: VistaQ_Default_RHL
+  example: 'DHU of TAL line 2102 today'
+  follow_ups:
+    - 'What style is running on {factory_label} line {line} {window}?'
+    - 'Show me the defect summary {window} line wise'
+  description: One sewing line's quality for a period from VistaQ — the figures asked for, per buyer and style on that line.
+  answer_list: 'Quality of {factory_label} line {line} {window}, live from VistaQ ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|.*\bL-\d{2,4}\b|.*\b\d{3,4}\s+lines?\b)(?=.*\b(?:dhu|defects?|defective|ftp|first[\s-]?pass|rejects?|rejected|rejections?|rectified|quality|qc|checked|inspected)\b)'
+  unless: *vq_unless_line
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { type: factory, default: '' }
+    line: { type: line }
+    measures: &vq_measures_line
+      type: measures
+      default: [checked, defects, dhu]
+      columns:
+        checked: SUM(Checked) AS Checked
+        defects: SUM(Defects) AS Defects
+        dhu: CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DHU
+        ftp_pct: CAST(100.0 * SUM(Passed) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS FTPPct
+        ftp_qty: SUM(Passed) AS Passed
+        defective: SUM(DefectivePcs) AS DefectivePcs
+        defective_pct: CAST(100.0 * SUM(DefectivePcs) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS DefectivePct
+        rectified: SUM(Rectified) AS Rectified
+        rectified_pct: CAST(100.0 * SUM(Rectified) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RectifiedPct
+        rejected: SUM(Rejected) AS Rejected
+        reject_pct: CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS RejectPct
+        output: SUM(EndlineOutput) AS EndlineOutput
+  sql: |
+    SELECT TOP (100)
+      CASE WHEN DATEDIFF(day, @from, @to) = 1 THEN CONVERT(varchar(10), @from, 23)
+        ELSE CONVERT(varchar(10), @from, 23) + ' to ' + CONVERT(varchar(10), DATEADD(day, -1, @to), 23) END AS [Date],
+      Factory, Line, Buyer, Style, {measures}
+    FROM rag.vw_PlanQualityDay
+    WHERE (@factory = '' OR Factory = @factory) AND Line = @line
+      AND InspectionDate >= @from AND InspectionDate < @to
+    GROUP BY Factory, Line, Buyer, Style
+    HAVING SUM(Checked) > 0
+    ORDER BY Factory, Line, Buyer, Style
+
+- name: lines_running_style
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Which lines are running style 71245 today?'
+  follow_ups:
+    - 'Show the production dashboard {window} line wise'
+  description: The sewing lines a style (or a buyer) is planned on for a day, live from VistaQ's production plan.
+  answer_list: 'Lines running {style_label} {buyer_label} {window}, live from VistaQ ({n} line(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:lines?|where)\b)(?=.*\b(?:running|runs?|ran|sewing|making|producing|planned)\b)(?=.*\bstyles?\s*(?:no\.?|number|#|code)?\s*[:#-]?\s*[A-Za-z0-9][A-Za-z0-9/._-]*\d)'
+  unless: [*vq_unless_line, *vq_unless_measure]
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { type: factory, default: '' }
+    style: { type: style, label: 'style {value}', else_label: '' }
+    buyer: { type: value, entity: buyer, default: '', label: 'for {value}', else_label: '' }
+  sql: |
+    SELECT TOP (100)
+      CONVERT(varchar(10), PlanDate, 23) AS [Date], Factory, Unit, Line, Buyer, Style, DayTarget
+    FROM rag.vw_PlanDay
+    WHERE (@factory = '' OR Factory = @factory) AND Style = @style
+      AND (@buyer = '' OR Buyer = @buyer)
+      AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+    ORDER BY Factory, Line
+
+- name: line_plan_by_factory_window
+  agent: production
+  database: VistaQ_Default_RHL
+  example: 'Line wise style of today'
+  follow_ups:
+    - 'Show the production dashboard {window} line wise'
+    - 'Which lines are above the DHU target {window}?'
+  description: Every sewing line's planned style and buyer for a day, live from VistaQ's production plan — one row per plan, with the day target.
+  answer_list: 'Styles planned by line {window}, live from VistaQ ({n} plan(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=(?:.*?\b(TAL|RHL|BGL)\b)?)(?=.*\b(?:lines?[\s-]?wise|(?:by|per|for)\s+(?:each\s+|every\s+)?lines?|each\s+line|every\s+line|line\s+by\s+line|lines)\b)(?=.*\b(?:styles?|buyers?|plan|planned|running)\b)'
+  # a named line (or two) is not this tool's shape — it answers for every line; running_style_by_line takes one,
+  # and a question naming two goes to the model, which can write the filter
+  unless: '(?i:\bdashboard\b|\b(?:efficiency|sah|smv|man[\s-]?hours?|wip|rtt|dhu|defects?|defective|rejects?|rejected|ftp|first[\s-]?pass|rectified|quality|qc|checked|inspected|cutting|output|production\s+summary)\b|\b(?:day|date)[\s-]?wise\b|\bdaily\b|\bhour(?:ly|s)?\b|\blines?\s*(?:no\.?|number|#)?\s*[-:]?\s*\d{2,4}\b|\bL-\d{2,4}\b|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d+\b)'
+  params:
+    window: { from_group: 1, type: date_window, default: 'today' }
+    factory: { from_group: 2, upper: true, default: '' }
+  sql: |
+    SELECT TOP (200)
+      CONVERT(varchar(10), PlanDate, 23) AS [Date], Factory, Unit, Line, Buyer, Style, DayTarget, PlanHours
+    FROM rag.vw_PlanDay
+    WHERE Factory IS NOT NULL AND (@factory = '' OR Factory = @factory)
+      AND PlanDate >= @from AND PlanDate < @to AND PlanHours > 0
+    ORDER BY Factory, Line, Buyer, Style
 
 - name: buyer_list
   agent: order
@@ -453,6 +1255,27 @@
     FROM rag.vw_CancelledExportOrder
     WHERE CancelledDate >= @from AND CancelledDate < @to
     ORDER BY CancelledDate DESC
+
+- name: orders_by_file_id
+  agent: order
+  database: BitopiSplint
+  example: 'Which export orders are in file FR-26-1985?'
+  follow_ups:
+    - 'Show the DHU of file FR-{file_no} this week'
+  description: >
+    Export orders and POs of one order file by its file number (FileRefID, e.g. FR-26-1985 — the file number VistaQ
+    shows on its QC). FileRefNo is the file's free-text name; this tool needs the structured FR number.
+  answer_list: 'Export orders and POs in file {file} ({n} orders)'
+  match: '(?i)(?=.*\b(?:export\s+orders?|eos?|orders?|pos?|purchase\s+orders?)\b).*?\b(FR-(\d{2}-\d{1,6}))\b'
+  params:
+    file: { from_group: 1, upper: true }
+    file_no: { from_group: 2 }
+  sql: |
+    SELECT TOP (200)
+      ExportOrderID, ExportPONo, Buyer, StyleName, OrderQty, PCD, ShipDate, ExportOrderStatus, Factory
+    FROM rag.vw_ExportOrder
+    WHERE FileRefID = @file
+    ORDER BY LEN(ExportOrderID), ExportOrderID
 
 - name: orders_by_fileref
   agent: order
@@ -512,3 +1335,178 @@
       ExportOrderStatus, ShipmentStatus, Factory, Merchandiser
     FROM rag.vw_ExportOrder
     WHERE ExportOrderID = @eo
+
+# ---------------------------------------------------------------- Inventory (Phase P1, 2026-10-09)
+# The store ledger: stock balance per item, company and store; receipts; issues; the item and store masters.
+# `type: entity` params (company) come from config/reference/entities.yaml — "companyid=02" or "misami" become
+# the bound parameter '02', never the question's text; '' means every company. A store named in the question is
+# NOT a filter yet (P2 adds the value index that corrects spellings): every store of the item is listed, so the one
+# asked for is among the rows with its balance.
+- name: stock_balance_by_item
+  agent: inventory
+  database: Inventory
+  example: 'please find the closing balance of 1178108 this item code for nonproduction iten and companyid=02 and store name mantainance store of misami'
+  follow_ups:
+    - 'Goods receipts of item {item} {company_label}'
+    - 'Issues of item {item} {company_label}'
+    - 'Which stores hold item {item}?'
+  description: Stock balance (closing balance, stock in hand) of one item per company and store — receipts minus issues in the store ledger, in the item's base unit.
+  answer_list: 'Stock balance of item {item} {company_label} {store_label} — receipts minus issues in the store ledger, in the base unit ({n} row(s))'
+  match: '(?i)(?=.*\b(?:closing\s+balance|stock\s+balance|balance|closing\s+stock|opening\s+stock|current\s+stock|stock\s+(?:position|in\s+hand|on\s+hand|level)|available\s+(?:qty|quantity|stock)|how\s+much\b.*\b(?:left|remaining|in\s+stock|do\s+we\s+have))\b)(?=.*\b(\d{6,8})\b)'
+  unless: '(?i)\b(?:ledger\s+balance|account|accounts|voucher|vouchers|payable|receivable|bank|cash|loan|lc|bblc|trial\s+balance)\b|\b[A-Z]{2,4}-\d{2}-\d{2,5}\b'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+    # the store as recorded (value index, P2.1): 'mantainance store of misami' -> 'Maintenance Store (Misami)';
+    # unresolved -> every store of the item is listed
+    store: { type: value, entity: store, default: '', label: 'in {value}', else_label: 'by store' }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CompanyID, CompanyName, StoreName, ItemCode, ItemName, ItemCategory, StoreGroup, NonProductionItem,
+      BaseUOM, ReceivedQty, IssuedQty, ClosingBalance, LastTransaction
+    FROM rag.vw_StockBalance
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company) AND (@store = '' OR StoreName = @store)
+    ORDER BY CompanyID, StoreName
+
+- name: grn_issue_by_item
+  agent: inventory
+  database: Inventory
+  example: 'can you find grnid and issueid of itemcode=1178108 and companyid=02'
+  follow_ups:
+    - 'Stock balance of item {item} {company_label}'
+    - 'Which stores hold item {item}?'
+  description: Every receipt (GRN) and issue of one item in the store ledger, oldest first, with the document ids.
+  answer_list: 'Receipts and issues of item {item} {company_label} in the store ledger ({n} row(s))'
+  match: '(?i)(?=.*\b(?:grn|grns|grnid|grn\s*id|receipts?|received)\b)(?=.*\b(?:issue|issues|issued|issueid|issue\s*id)\b)(?=.*\b(\d{6,8})\b)'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      Movement, DocumentID, MovementDate, CompanyID, StoreName, IssuedTo, Cause, ItemCode, ItemName, UOM, Qty, BaseUOM, BaseQty
+    FROM rag.vw_StockMovement
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY MovementDate, Movement DESC
+
+- name: grn_by_item
+  agent: inventory
+  database: Inventory
+  example: 'goods receipts of item 1178108 at company 02'
+  follow_ups:
+    - 'Stock balance of item {item} {company_label}'
+    - 'Issues of item {item} {company_label}'
+  description: Goods receipts (GRN) of one item, newest first, with store, supplier code, purchase order and quantities.
+  answer_list: 'Goods receipts of item {item} {company_label} ({n} row(s), newest first)'
+  match: '(?i)(?=.*\b(?:grn|grns|grnid|grn\s*id|goods\s+receipts?|goods\s+received|receipts?|received)\b)(?=.*\b(\d{6,8})\b)'
+  unless: '(?i)\b(?:issue|issues|issued|issueid)\b'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      GRNID, GRNDate, CompanyID, StoreName, ReceiveType, SupplierCode, POID, ItemCode, ItemName, UOM, GRNQty, BaseUOM, BaseQty
+    FROM rag.vw_GoodsReceipt
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY GRNDate DESC
+
+- name: issues_by_item
+  agent: inventory
+  database: Inventory
+  example: 'issues of item 1178108 at company 02'
+  follow_ups:
+    - 'Stock balance of item {item} {company_label}'
+    - 'Goods receipts of item {item} {company_label}'
+  description: Store issues of one item, newest first, with the store issued from, where it went, the cause and quantities.
+  answer_list: 'Issues of item {item} {company_label} ({n} row(s), newest first)'
+  match: '(?i)(?=.*\b(?:issue|issues|issued|issueid|issue\s*id)\b)(?=.*\b(\d{6,8})\b)'
+  unless: '(?i)\b(?:grn|grns|grnid|receipts?|received)\b'
+  params:
+    item: { from_group: 1 }
+    company: { type: entity, entity: company, default: '' }
+  heavy: true
+  sql: |
+    SELECT TOP (200)
+      IssueID, IssueDate, CompanyID, StoreName, IssuedTo, IssueCause, RequisitionSlipNo, ItemCode, ItemName, UOM, IssueQty, BaseUOM, BaseQty
+    FROM rag.vw_StockIssue
+    WHERE ItemCode = @item AND (@company = '' OR CompanyID = @company)
+    ORDER BY IssueDate DESC
+
+- name: stores_holding_item
+  agent: inventory
+  database: Inventory
+  example: 'Which stores hold item 1178108?'
+  follow_ups:
+    - 'Stock balance of item {item}'
+    - 'Goods receipts of item {item}'
+  description: The stores (per company) where one item has a non-zero balance.
+  answer_list: 'Stores holding item {item} — balance in the base unit ({n} row(s))'
+  match: '(?i)\b(?:which|what)\s+stores?\b.*\b(\d{6,8})\b|\bstores?\s+(?:hold|holding|have|having|with|stocking|keep|keeping)\b.*\b(\d{6,8})\b'
+  params:
+    item: { from_group: [1, 2] }
+  heavy: true
+  sql: |
+    SELECT TOP (50)
+      CompanyID, CompanyName, StoreName, ItemCode, ItemName, BaseUOM, ClosingBalance, LastTransaction
+    FROM rag.vw_StockBalance
+    WHERE ItemCode = @item AND ClosingBalance <> 0
+    ORDER BY CompanyID, StoreName
+
+- name: item_by_code
+  agent: inventory
+  database: Inventory
+  example: 'What is item 1178108?'
+  follow_ups:
+    - 'Stock balance of item {item}'
+    - 'Which stores hold item {item}?'
+  description: One item's master record — name, unit, category, group, store group, production / non-production flag.
+  answer_list: 'Item {item} in the item master'
+  match: '(?i)^\s*(?:what\s+is|which\s+item\s+is|describe|details?\s+of|info(?:rmation)?\s+(?:on|about))\s+(?:the\s+)?item\s*(?:code\s*)?(\d{6,8})\b\??\s*$|^\s*item\s*(?:code)?\s*[:=]?\s*(\d{6,8})\s*\??\s*$'
+  params:
+    item: { from_group: [1, 2] }
+  sql: |
+    SELECT TOP (5)
+      ItemCode, ItemName, UOM, ItemCategory, ItemGroup, ItemSubGroup, StoreGroup, ProductionItem, NonProductionItem, FixedAsset, Inactive, ReOrderLevel
+    FROM rag.vw_Item
+    WHERE ItemCode = @item
+
+# ---------------------------------------------------------------- HR attendance (Phase R, 2026-10-13)
+# "What is the number of manpower present today?" had no answer for two reasons, both fixed here.
+# (1) DayStatus is a column of CODES (P, L, A, LV, W, H ...), so the model's DayStatus = 'present' matched
+#     no row at all; before that the router sent the question to VistaQ's PLANNED line manpower, which is a
+#     plan and not who came to work.
+# (2) Attendance is not live. The newest WorkDate in dbo.DaywisePayHour is 2026-09-09 and the HWATT punch
+#     log stopped in July 2026 (checked 2026-10-13; both are watched by config/data_quality.yaml now).
+# So the tool answers for the newest day the table holds and puts that date in the first column, where the
+# reader and the citation check both see it. It never claims to be today.
+- name: manpower_present_latest
+  agent: hr
+  database: Hrms5Misami
+  example: 'What is the number of manpower present today?'
+  # No follow-up chips: the one row already answers present, absent, on leave and off day, so every chip
+  # would re-run the same statement for the same numbers. "How many are on leave?" reaches this tool too.
+  description: Present, absent, on-leave and off-day head counts for the newest day in the HRMS attendance table, with that date.
+  answer_list: 'Attendance for the newest day the HRMS holds, shown as WorkDate. Nothing is loaded for today, and this covers only the employees the HRMS runs payroll for, not the whole group.'
+  match: '(?i)(?:\b(?:how\s+many|number\s+of|count\s+of|total\s+(?:number\s+of\s+)?)\b[^?]{0,40}\b(?:present|presence|absent|absentees?|on\s+duty)\b|\b(?:manpower|man\s*power|staff|employees?|workers?|operators?)\s+(?:present|presence|attendance|on\s+duty)\b|\bpresent\s+(?:manpower|man\s*power|staff|employees?|workers?)\b|\battendance\s+(?:today|now|status)\b|\btoday(?:''s)?\s+attendance\b)'
+  unless:
+    # a named day, month or year: the model writes that WHERE itself against the same table
+    - '(?i)\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\b20\d{2}\b|\byesterday\b|\b(?:last|this|next)\s+(?:week|month|year)\b'
+    # a factory, sewing line or unit: the HRMS has no factory or line column, and line manpower is the plan
+    - '(?i)\b(?:TAL|RHL|BGL|KTL|CKDL)\b|\blines?\s*(?:no\.?|number|#)?\s*-?\s*\d|\bunits?\s*(?:no\.?|#)?\s*-?\s*\d|\b(?:planned?|plan|sewing|production)\s+manpower\b|\bmanpower\s+(?:plan|planned|budget|requisition)\b'
+    # a breakdown this single row does not produce
+    - '(?i)\b(?:department|section|designation|grade|floor|shift|company)\b|\b(?:per|each|every|by|group(?:ed)?\s+by|wise)\b'
+    # a named person: that is one employee's attendance, not the day's count
+    - '(?i)\b(?:employees?|emp|staff|worker)\s*(?:id|code|no\.?|number|#)\b'
+  sql: |
+    SELECT TOP (1)
+      CAST(d.WorkDate AS date) AS WorkDate,
+      COUNT(DISTINCT CASE WHEN d.DayStatus IN ('P', 'L', 'PW', 'PH', 'LW', 'LH') THEN d.EmployeeCode END) AS Present,
+      COUNT(DISTINCT CASE WHEN d.DayStatus = 'A' THEN d.EmployeeCode END) AS Absent,
+      COUNT(DISTINCT CASE WHEN d.DayStatus IN ('LV', 'MLV') THEN d.EmployeeCode END) AS OnLeave,
+      COUNT(DISTINCT CASE WHEN d.DayStatus IN ('W', 'H') THEN d.EmployeeCode END) AS OffDay,
+      COUNT(DISTINCT d.EmployeeCode) AS OnRoll
+    FROM dbo.DaywisePayHour d
+    WHERE d.WorkDate = (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour)
+    GROUP BY CAST(d.WorkDate AS date)

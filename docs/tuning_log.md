@@ -109,6 +109,7 @@ starts; seconds, nearest-rank p50 / p95. Stage keys: `ragbot/trace.py`. Files: `
 | 2026-09-28 20:32 (`20260928T2032.json`) | fixed tools (10) | 0.14 / 0.71 | — (templated, no model call) | data 0.14, data.db 0.12, route 0.00 (regex) | Partial baseline: Gemini returned 503 all evening, so the documents, model-SQL, both and not-found groups wait. The p95 is the first question, which also loads the fixed tools and catalogs (0.3 s) and opens the first database connection (0.26 s). |
 | 2026-09-29 09:30 (`20260929T0930.json`) — **I1 baseline, full** | documents (30) | **7.45 / 9.72** | 6.96 / 9.04 | route 1.06 (model call in 16 of 30: 1.40), retrieve 2.93 (rerank 2.81, embed 0.13), answer 3.07 (model first token 3.04 = whole answer) | With the embedding fix, 10 candidates, max length 512. Other groups: fixed tools 0.14 / 0.39; model SQL 8.47 / 13.85 (SQL generation 4.83); both 6.83 / 7.46; not-found 7.86 / 13.12. **Gemini sends the answer in one burst** (first token 3.04 s vs 3.04 s total), so streaming cannot bring the first token near 3 s (I3). |
 | 2026-10-04 10:36 (`20261004T1036.json`, RAG-CHAT-BOT server, Phase J) | model-written SQL (5) | **5.98 / 16.53** | 5.93 / 16.43 (2 of 5 called the answer model) | route 0.11 (model call in 1 of 5: 1.27), data.pick ≈ 0.02, llm.sql 3.50 / 3.87, data.db 0.11, answer 1.38 (n=2) | vs the I1 baseline 8.47 / 13.85 on the laptop: 17 catalogs instead of 2, yet one model call for 3 of 5 questions (templated rows, J3); the p95 is s3 ("most PCD changes in the last 30 days"), whose SQL returned no rows → documents fallback → rerank 8.3 s while another container was loading models on the same 4 cores. Through the app, quiet: "How many employees are there in total?" (Hrms5Misami, raw table) **4.2 s**, no answer-model call; a 0-count question (visitors, vouchers — both genuinely 0) 9.6–11.7 s because a model-written 0 is still judged by the model. |
+| 2026-10-14 15:28 (`20261014T1528.json`, RAG-CHAT-BOT server, v1.13.0 gate) | model-written SQL (9) | **4.97 / 13.79** | 12.48 (1 of 9 called the answer model) | route 0.01 (regex for most; p95 2.38), llm.sql 4.02 / 7.17 (n=7), data.db 0.30 / 3.48, two answered by a fixed tool in 0.2–0.4 s | Inside the P3 rule (p50 within 0.5 s of 5.98 s). The set grew from 5 questions to 9 in Phases P and Q; on 9 Oct the 7-question set gave 4.95, 6.63 and 6.69 in three runs, so about 1.7 s of the spread is the provider. Quiet: no staff questions since 13:00, the aggregates refresh finished at 15:13, all services idle. The p95 is s1 (13.8 s), the first question: a routing model call (2.38 s) and a cold `data.pick` (3.90 s) before its SQL. s4 (12.5 s) is the one documents fallback (rerank 7.0 s) |
 | 2026-09-28 20:40 (`20260928T2040.json`, `--retrieval-only`) | documents + not-found search (33) | 4.16 / 5.91 | — (no model call) | **rerank 3.87** (93%), embed 0.46, vector 0.01, keyword 0.01, fetch 0.00 | Retrieval baseline: ONNX int8 reranker, 10 candidates, max length 512, onnxruntime default threads (10 on this 6P+4E i7-13620H). The reranker is the retrieval cost; a documents answer is ~10 s end to end (B2), so this is ~40% of it. |
 | 2026-09-28 21:11 (`20260928T2111.json`, `--retrieval-only`) | same 33, **8 candidates, max length 384** | **3.22 / 4.43** | — | rerank 2.91, embed 0.27 | I2 candidate: −0.94 s p50 (−23%). Not applied yet: the G and H gate evals run first with the v1.6.0 settings, then the I2 gate eval with these. |
 
@@ -178,3 +179,34 @@ retrieve 2.11 vs 2.04 s (+3%). The other 20 hit the key's per-minute limit, and 
 33-question search-only run (+12% p95) as the larger sample. Throughput: 47.1 chunks/min for 320 chunks
 while giving way (65 s paused).
 
+
+## Phase M — Stage-2 quality risk: the backtest baseline
+
+The Stage-2 → Stage-3 gate is *"several weeks of stored risk levels compared with what actually
+happened"*. The levels began being stored on **2026-10-14**; this section is where the first backtest
+goes, and it cannot be written before roughly late November 2026.
+
+**What the backtest must report**, from `signals.settled("quality")`:
+
+- the share of files predicted red whose final quality was over the VistaQ DHU target, and the same for
+  amber and green — the thing the levels claim;
+- the same split by factory, since TAL carries about two thirds of the files;
+- rows with `revised > 0` excluded and counted separately: those are files that settled, resumed and
+  moved, so their outcome was not final when it was first recorded;
+- the lead time between a prediction and its outcome. A short lead time means the level was a
+  description rather than a warning.
+
+**Read every daily prediction, not only the settled row.** `risk.settle()` writes the outcome onto the
+file's *newest* open prediction (`open_predictions()`), so each row `settled()` returns is the file's
+last daily level, made at most a day before it finished: its lead time is always under a day. The
+earlier predictions for the same file (one per day from `watch.py --risk-daily`, M5b) keep
+`outcome_at` empty. To ask "what did the level say a week before the file finished?", join every
+prediction of a (dimension, factory, subject) to that subject's settled outcome and group by days ahead.
+
+**The starting picture, 2026-10-14** (`scripts/watch.py --risk-only`, 7-day window): 158 files scored,
+151 of them still running and therefore predicted — 52 critical, 55 watch, 32 on target, 12 too few
+checked. 2,058,760 pieces checked in the window, 24% of them in files at the critical level.
+
+**The thresholds this baseline tests.** Amber is VistaQ's own (`dbo.Threshold`: DHU 3.85, reject 1%).
+Red (DHU 6, reject 2%) is provisional and unvalidated — the backtest is the first evidence about
+whether it means anything, and the QC interviews are the second.

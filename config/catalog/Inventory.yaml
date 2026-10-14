@@ -1,29 +1,58 @@
-# Inventory: no curated views yet — answered through schema RAG over the discovered tables
-# (config/catalog/discovered/Inventory.json: 188 tables, discovered 2026-10-04).
-# Written by scripts/gen_catalog.py; edit the description and keywords freely. `keywords:` are the
-# words staff use for this data — the router scores them to pick the database for a question
-# (src/ragbot/data/db_router.py). The last 4 were derived from table names.
-# `connection_database:` opens this database through the login of `connection_env` (docs/DATA_ACCESS.md §1).
+# Inventory: the group's store system — goods receipts (GRN), issues, the stock ledger, fabric rolls and racks,
+# requisitions, transfers, fixed assets. Discovered schema: config/catalog/discovered/Inventory.json (188 tables,
+# 2026-10-04). Curated views (Phase P1, 2026-10-09) are virtual: `definition:` is a T-SQL SELECT over the real
+# tables that the model never sees; at execution the guarded SQL is wrapped as WITH rag_vw_<name> AS (...).
+#
+# Facts checked read-only on 2026-10-09 (docs/PROGRESS.md "Phase P"): store codes in GRNMaster.ReceiveTo,
+# IssueMaster.IssueFrom/IssueTo and StockChild.LocationID are dbo.UserDefined.UdID ('2' = Maintenance Store
+# (Misami)); quantities are converted to the unit group's base unit by dbo.fnGetBaseQty (reads
+# BitopiSplint.dbo.Unit_Master; 'can' = 0.75 L, base 'L1'); company codes are SystemManager.dbo.Company /
+# dbo.vwCompany_Info ('02' = MISAMI Garments Ltd.); dbo.InventoryStock is a TAL-only snapshot that ends on
+# 30 Jun 2025 and dbo.vw_productItemBalance holds production items only (it joins export orders), so neither
+# answers a non-production item's balance; dbo.StockMaster carries a transaction dated 2062 (data owners).
+# The newest GRN on this server is 22 Aug 2026.
 database: Inventory
-description: 'Store and fabric inventory: GRN (goods received), issues, stock by item and batch, fabric rolls (receive,
-  rack, dispatch), requisitions and transfers, fixed assets with barcodes.'
+label: Inventory (store system)
+description: 'Store and fabric inventory: GRN (goods received), issues, stock balance per item, company and store
+  (receipts minus issues in base units), fabric rolls (receive, rack, dispatch), requisitions and transfers, fixed
+  assets with barcodes, item master with categories and store groups.'
 dialect: tsql
 connection_env: SQLSERVER_CONN_PRODUCTION
 connection_database: Inventory
+schema_rag_k: 10                 # no foreign keys and 195 of 286 objects without a key: more candidates per question
 keywords:
 - inventory
 - store
 - stores
+- store name
 - stock
 - stocks
+- stock balance
+- closing balance
+- opening balance
+- balance
+- stock in hand
+- stock position
 - grn
+- grn id
+- grnid
 - goods received
 - goods receive
+- goods receipt
+- goods receipts
+- receipt
+- receipts
 - issue
 - issued
 - issues
+- issue id
+- issueid
 - item
 - items
+- item code
+- itemcode
+- company
+- company id
 - fabric roll
 - roll
 - rolls
@@ -39,6 +68,7 @@ keywords:
 - closing stock
 - opening stock
 - warehouse
+- location
 - material
 - materials
 - trims
@@ -47,6 +77,24 @@ keywords:
 - qty
 - group
 - color
+- non production
+- nonproduction
+- non-production
+- maintenance store
+- central store
+- general store
+- ledger
+# Words staff use that the keywords, tables and columns do not; appended to the question before the router and
+# the schema index score it (db_router.prepared).
+synonyms:
+  closing balance: [closing stock, stock balance]
+  balance: [closing stock, stock]
+  stock in hand: [closing stock, stock balance]
+  store: [location]
+  store name: [location name]
+  nonproduction: [non production]
+  non-production: [non production]
+  grn: [goods received, receipt]
 exclude_tables:
 - '*back'
 - '*back_*'
@@ -74,13 +122,366 @@ exclude_tables:
 - '*.shadow_*'
 - '*.baseline_*'
 - '*._linechange_*'
+# Per-factory copies of a TAL-only snapshot that ends in June 2025: they crowd the selection and answer nothing.
+- 'dbo.InventoryStockTal'
+- 'dbo.InventoryStockTal_Updated'
+- 'dbo.InventoryStockRHL'
+- 'dbo.InventoryStockBGL'
+- 'dbo.InventoryStockMGL'
+- 'dbo.AllstoreAfterClosingFile'
+- 'dbo.StryleWiseStockDetail_V9'
+# Code columns in raw tables that hold another table's key, with no declared foreign key (schema RAG shows the
+# join and pulls the target table in). Checked 2026-10-09: ReceiveTo '2' resolves to UserDefined 'Maintenance
+# Store (Misami)'; CompanyID '02' to vwCompany_Info 'MISAMI Garments Ltd.'.
+hints:
+  - column: ReceiveTo
+    target: dbo.UserDefined.UdID
+    note: "the store the goods were received into; its name is dbo.UserDefined.UdName"
+    tables: [dbo.GRNMaster]
+  - column: IssueFrom
+    target: dbo.UserDefined.UdID
+    note: "the store the goods were issued from; its name is dbo.UserDefined.UdName"
+    tables: [dbo.IssueMaster]
+  - column: IssueTo
+    target: dbo.UserDefined.UdID
+    note: "the section or store the goods went to; its name is dbo.UserDefined.UdName"
+    tables: [dbo.IssueMaster]
+  - column: LocationID
+    target: dbo.UserDefined.UdID
+    note: "the store; its name is dbo.UserDefined.UdName"
+    tables: [dbo.StockChild]
+  - column: CompanyID
+    target: dbo.vwCompany_Info.CompanyID
+    note: "company code ('02' = MISAMI Garments Ltd., '06' = Tarasima, '09' = Remi Holdings); the name is CompanyName"
+    tables: [dbo.GRNMaster, dbo.IssueMaster, dbo.IssueChild, dbo.StockMaster, dbo.IssueChildWithoutGRN]
+  - column: ItemCode
+    target: dbo.ItemMaster.ItemCode
+    note: "the item; name, unit, category and store group are in dbo.ItemMaster"
+    tables: [dbo.GRNChild, dbo.IssueChild, dbo.IssueChildWithoutGRN, dbo.StockChild, dbo.NonProductionItemMapping]
+# One-line descriptions for discovered tables whose JSON description is empty (the SQL prompt and the schema
+# index both see them).
+table_notes:
+  dbo.GRNMaster: goods receipt notes (GRN) — one row per receipt into a store (ReceiveTo is the store code)
+  dbo.GRNChild: the items on each goods receipt note with quantity, unit (UOM), rate and value
+  dbo.IssueMaster: store issues — one row per issue from a store (IssueFrom) to a section or store (IssueTo)
+  dbo.IssueChild: the items on each issue with quantity, unit (UOM), rate and value
+  dbo.IssueChildWithoutGRN: issue lines not tied to a receipt; part of every issue total
+  dbo.UserDefined: the store and location master — UdID is the code used by ReceiveTo, IssueFrom, IssueTo and LocationID, UdName the store name ('Maintenance Store (Misami)')
+  dbo.ItemMaster: item master — code, name, unit, category, store group, production/non-production flag
+  dbo.NonProductionItemMapping: items classed as non-production, with category and group names
+  dbo.StockMaster: stock ledger header (one row per receipt, issue or transfer posting); some dates are wrong
+  dbo.StockChild: stock ledger lines — item, store (LocationID), received and issued quantity; no store name here
+  dbo.InventoryStock: an old stock snapshot for TAL only (ends 30 Jun 2025) — not the current balance
+  dbo.vw_productItemBalance: receipts and issues of production items only (joined to export orders); no non-production items
+  dbo.vwCompany_Info: the companies — CompanyID ('02' = MISAMI Garments Ltd.) and CompanyName
 rules:
 - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
 - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
   Monday.
-- 'This database has no rag.* views: query the tables listed for the question as schema.name and name the columns
-  you need (never SELECT *).'
+- Reference views only as rag.<name> (rag.vw_StockBalance, rag.vw_GoodsReceipt, ...). Prefer them over raw tables.
+- 'The closing balance, stock balance or stock in hand of an item is rag.vw_StockBalance.ClosingBalance: receipts
+  minus issues in the unit group''s base unit (BaseUOM), per company, store and item. Always filter on ItemCode.'
+- 'Company names and codes are CompanyID: ''02'' = MISAMI Garments Ltd. (Misami, MGL), ''06'' = Tarasima (TAL),
+  ''09'' = Remi Holdings (RHL), ''04'' = Baridhi (BGL), ''08'' = Kaifeng (KTL), ''11'' = Croydon-Kowloon (CKDL).'
+- 'Store names are recorded with the company in brackets: ''Maintenance Store (Misami)'', ''Central Store (Tarasima)''.
+  Filter a store with LIKE on its distinctive word (StoreName LIKE ''%Maintenance%'' AND CompanyID = ''02''), never
+  on a spelling copied from the question.'
 - Do NOT compute totals in prose; return the rows or an aggregate (COUNT/SUM in the SQL).
 - Never join to tables outside the catalog. If a question needs a column that is not listed here, return "System
   doesn't have the data."
-views: []
+# `scope_column:` names the column holding the factory short name (TAL, RHL, MGL ...). Per-user row scope filters
+# on it; a view without one is not available to a user limited to some factories.
+views:
+  - name: rag.vw_StockBalance
+    grain: one row per company, store and item (ClosingBalance in the item's base unit)
+    description: Stock balance of an item per company and store — receipts (GRN) minus issues from the store ledger, converted to the unit group's base unit — with the item's name, category, store group and non-production flag and the date of its last movement.
+    key_columns: [CompanyID, StoreID, ItemCode]
+    scope_column: Factory
+    columns:
+      CompanyID: company code, e.g. '02' (MISAMI Garments Ltd.)
+      CompanyName: company name
+      StoreID: store code (dbo.UserDefined.UdID), e.g. '2'
+      StoreName: store name as recorded, e.g. 'Maintenance Store (Misami)'
+      ItemCode: item code, e.g. '1178108'
+      ItemName: item name, e.g. 'Grease (White Lithium)'
+      ItemCategory: item category name (Goods, Chemical, Consumables, ...)
+      StoreGroup: the store group the item belongs to (Maintenance, General Store, Washing, Production, ...)
+      NonProductionItem: Yes when the item is classed as non-production
+      BaseUOM: the unit the quantities are stated in (the unit group's base unit, e.g. L1 = litre)
+      ReceivedQty: total received into the store, in BaseUOM
+      IssuedQty: total issued from the store, in BaseUOM
+      ClosingBalance: ReceivedQty minus IssuedQty, in BaseUOM — the closing balance / stock in hand
+      LastTransaction: date of the latest receipt or issue of the item at the store
+      Factory: company short name (TAL, RHL, BGL, KTL, CKDL, MGL, ...)
+    # The unit conversion (dbo.fnGetBaseQty, a scalar function: factor x qty / base factor, so it is linear) runs
+    # once per company / store / item / unit group, on the summed quantities — per ledger row it ran on 5.9 M rows
+    # and timed out (checked live 2026-10-09).
+    definition: |
+      SELECT
+        t.CompanyID,
+        co.CompanyName,
+        t.StoreID,
+        ud.UdName AS StoreName,
+        t.ItemCode,
+        MAX(COALESCE(im.ItemName, t.ItemName)) AS ItemName,
+        MAX(ca.ItemCategoryName) AS ItemCategory,
+        MAX(sg.StoreGroupName) AS StoreGroup,
+        MAX(CASE WHEN np.ItemCode IS NULL THEN 'No' ELSE 'Yes' END) AS NonProductionItem,
+        MAX(dbo.fnGetBaseUOM(t.UOM)) AS BaseUOM,
+        SUM(dbo.fnGetBaseQty(t.UOM, t.ReceivedQty)) AS ReceivedQty,
+        SUM(dbo.fnGetBaseQty(t.UOM, t.IssuedQty)) AS IssuedQty,
+        SUM(dbo.fnGetBaseQty(t.UOM, t.ReceivedQty)) - SUM(dbo.fnGetBaseQty(t.UOM, t.IssuedQty)) AS ClosingBalance,
+        MAX(t.LastDate) AS LastTransaction,
+        CASE t.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' WHEN '01' THEN 'CORP' WHEN '03' THEN 'RAL' WHEN '05' THEN 'SWL'
+          WHEN '07' THEN 'RFS' WHEN '10' THEN 'THL' WHEN '12' THEN 'TRIA' ELSE t.CompanyID END AS Factory
+      FROM (
+        SELECT gm.CompanyID, gm.ReceiveTo AS StoreID, gc.ItemCode, MAX(gc.ItemName) AS ItemName, gc.UOM,
+               SUM(gc.GRNQty) AS ReceivedQty, CAST(0 AS numeric(26,10)) AS IssuedQty, MAX(gm.GRNDate) AS LastDate
+        FROM dbo.GRNChild gc JOIN dbo.GRNMaster gm ON gm.GRNID = gc.GRNID
+        GROUP BY gm.CompanyID, gm.ReceiveTo, gc.ItemCode, gc.UOM
+        UNION ALL
+        SELECT im2.CompanyID, im2.IssueFrom, ic.ItemCode, MAX(ic.ItemName), ic.UOM,
+               CAST(0 AS numeric(26,10)), SUM(ic.IssueQty), MAX(im2.IssueDate)
+        FROM dbo.IssueChild ic JOIN dbo.IssueMaster im2 ON im2.IssueID = ic.IssueID AND im2.CompanyID = ic.CompanyID
+        GROUP BY im2.CompanyID, im2.IssueFrom, ic.ItemCode, ic.UOM
+        UNION ALL
+        SELECT im3.CompanyID, im3.IssueFrom, iw.ItemCode, MAX(iw.ItemName), iw.UOM,
+               CAST(0 AS numeric(26,10)), SUM(iw.IssueQty), MAX(im3.IssueDate)
+        FROM dbo.IssueChildWithoutGRN iw JOIN dbo.IssueMaster im3 ON im3.IssueID = iw.IssueID AND im3.CompanyID = iw.CompanyID
+        GROUP BY im3.CompanyID, im3.IssueFrom, iw.ItemCode, iw.UOM
+      ) AS t
+      LEFT JOIN dbo.UserDefined ud ON ud.UdID = t.StoreID
+      LEFT JOIN dbo.vwCompany_Info co ON co.CompanyID = t.CompanyID
+      LEFT JOIN dbo.ItemMaster im ON im.ItemCode = t.ItemCode
+      LEFT JOIN dbo.ItemCategory ca ON ca.ItemCategoryID = im.ItemCategoryID
+      LEFT JOIN dbo.ItemStoreGroup sg ON sg.StoreGroupID = im.StoreGroupID
+      LEFT JOIN (SELECT DISTINCT ItemCode FROM dbo.NonProductionItemMapping) AS np ON np.ItemCode = t.ItemCode
+      GROUP BY t.CompanyID, co.CompanyName, t.StoreID, ud.UdName, t.ItemCode
+
+  - name: rag.vw_StockMovement
+    grain: one row per receipt line or issue line of an item at a store
+    description: Every movement of an item in the store ledger — each goods receipt (GRN) into a store and each issue out of it — with the document id, date, store, destination, cause, quantity in its own unit and in the base unit.
+    key_columns: [DocumentID, ItemCode]
+    scope_column: Factory
+    columns:
+      Movement: Receipt or Issue
+      CompanyID: company code
+      CompanyName: company name
+      DocumentID: the GRN id (receipt) or issue id
+      MovementDate: date of the receipt or issue
+      StoreID: store code
+      StoreName: store name as recorded
+      IssuedToID: for an issue, the code of the section or store it went to
+      IssuedTo: for an issue, the name of the section or store it went to
+      Cause: receive type (receipt) or issue cause (issue), e.g. 'Issue Non Production Item'
+      ItemCode: item code
+      ItemName: item name
+      UOM: the unit the document was written in (can, L1, pcs, ...)
+      Qty: quantity in UOM
+      BaseUOM: the unit group's base unit
+      BaseQty: quantity converted to BaseUOM
+      Rate: unit rate
+      Amount: line value
+      Factory: company short name
+    definition: |
+      SELECT 'Receipt' AS Movement, gm.CompanyID, co.CompanyName, gm.GRNID AS DocumentID, gm.GRNDate AS MovementDate,
+             gm.ReceiveTo AS StoreID, ud.UdName AS StoreName, CAST(NULL AS varchar(50)) AS IssuedToID,
+             CAST(NULL AS varchar(50)) AS IssuedTo, gm.ReceiveType AS Cause, gc.ItemCode, gc.ItemName, gc.UOM,
+             gc.GRNQty AS Qty, dbo.fnGetBaseUOM(gc.UOM) AS BaseUOM, dbo.fnGetBaseQty(gc.UOM, gc.GRNQty) AS BaseQty,
+             gc.GRNRate AS Rate, gc.GRNValue AS Amount,
+             CASE gm.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+               WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE gm.CompanyID END AS Factory
+      FROM dbo.GRNChild gc
+      JOIN dbo.GRNMaster gm ON gm.GRNID = gc.GRNID
+      LEFT JOIN dbo.UserDefined ud ON ud.UdID = gm.ReceiveTo
+      LEFT JOIN dbo.vwCompany_Info co ON co.CompanyID = gm.CompanyID
+      UNION ALL
+      SELECT 'Issue', im.CompanyID, co.CompanyName, im.IssueID, im.IssueDate, im.IssueFrom, ud.UdName, im.IssueTo,
+             ud2.UdName, im.IssueCause, ic.ItemCode, ic.ItemName, ic.UOM, ic.IssueQty, dbo.fnGetBaseUOM(ic.UOM),
+             dbo.fnGetBaseQty(ic.UOM, ic.IssueQty), ic.IssueRate, ic.IssueValue,
+             CASE im.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+               WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE im.CompanyID END
+      FROM dbo.IssueChild ic
+      JOIN dbo.IssueMaster im ON im.IssueID = ic.IssueID AND im.CompanyID = ic.CompanyID
+      LEFT JOIN dbo.UserDefined ud ON ud.UdID = im.IssueFrom
+      LEFT JOIN dbo.UserDefined ud2 ON ud2.UdID = im.IssueTo
+      LEFT JOIN dbo.vwCompany_Info co ON co.CompanyID = im.CompanyID
+      UNION ALL
+      SELECT 'Issue', im.CompanyID, co.CompanyName, im.IssueID, im.IssueDate, im.IssueFrom, ud.UdName, im.IssueTo,
+             ud2.UdName, im.IssueCause, iw.ItemCode, iw.ItemName, iw.UOM, iw.IssueQty, dbo.fnGetBaseUOM(iw.UOM),
+             dbo.fnGetBaseQty(iw.UOM, iw.IssueQty), iw.IssueRate, iw.IssueValue,
+             CASE im.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+               WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE im.CompanyID END
+      FROM dbo.IssueChildWithoutGRN iw
+      JOIN dbo.IssueMaster im ON im.IssueID = iw.IssueID AND im.CompanyID = iw.CompanyID
+      LEFT JOIN dbo.UserDefined ud ON ud.UdID = im.IssueFrom
+      LEFT JOIN dbo.UserDefined ud2 ON ud2.UdID = im.IssueTo
+      LEFT JOIN dbo.vwCompany_Info co ON co.CompanyID = im.CompanyID
+
+  - name: rag.vw_GoodsReceipt
+    grain: one row per item line on a goods receipt note (GRN)
+    description: Goods receipts (GRN) with the store received into, the supplier code, the purchase order, the challan and each item's quantity in its own unit and in the base unit.
+    key_columns: [GRNID, ItemCode]
+    scope_column: Factory
+    columns:
+      CompanyID: company code
+      CompanyName: company name
+      GRNID: goods receipt note id, e.g. 'GL/M-02-0920-234'
+      GRNDate: receipt date
+      GRNType: GRN type
+      ReceiveType: how it was received, e.g. 'Receive From Purchase Order'
+      StoreID: store code received into
+      StoreName: store name as recorded
+      SupplierCode: supplier code
+      POID: purchase order id
+      ChallanNo: supplier's challan number
+      ItemCode: item code
+      ItemName: item name
+      UOM: unit on the GRN
+      GRNQty: quantity received in UOM
+      BaseUOM: base unit of the item's unit group
+      BaseQty: quantity in BaseUOM
+      GRNRate: unit rate
+      GRNValue: line value
+      Factory: company short name
+    definition: |
+      SELECT gm.CompanyID, co.CompanyName, gm.GRNID, gm.GRNDate, gm.GRNType, gm.ReceiveType, gm.ReceiveTo AS StoreID,
+             ud.UdName AS StoreName, gm.SupplierCode, gm.POID, gm.ChallanNo, gc.ItemCode, gc.ItemName, gc.UOM, gc.GRNQty,
+             dbo.fnGetBaseUOM(gc.UOM) AS BaseUOM, dbo.fnGetBaseQty(gc.UOM, gc.GRNQty) AS BaseQty, gc.GRNRate, gc.GRNValue,
+             CASE gm.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+               WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE gm.CompanyID END AS Factory
+      FROM dbo.GRNChild gc
+      JOIN dbo.GRNMaster gm ON gm.GRNID = gc.GRNID
+      LEFT JOIN dbo.UserDefined ud ON ud.UdID = gm.ReceiveTo
+      LEFT JOIN dbo.vwCompany_Info co ON co.CompanyID = gm.CompanyID
+
+  - name: rag.vw_StockIssue
+    grain: one row per item line on a store issue
+    description: Store issues with the store issued from, the section or store issued to, the cause, the requisition slip, the export order when the issue was for one, and each item's quantity in its own unit and in the base unit.
+    key_columns: [IssueID, ItemCode]
+    scope_column: Factory
+    columns:
+      CompanyID: company code
+      CompanyName: company name
+      IssueID: issue id, e.g. 'IM/M-02-0222-0247'
+      IssueDate: issue date
+      StoreID: store code issued from
+      StoreName: store name as recorded
+      IssuedToID: code of the section or store issued to
+      IssuedTo: name of the section or store issued to
+      IssueCause: cause, e.g. 'Issue Non Production Item'
+      RequisitionSlipNo: requisition slip number
+      ExportOrderID: export order the issue was for, when any
+      ItemCode: item code
+      ItemName: item name
+      UOM: unit on the issue
+      IssueQty: quantity issued in UOM
+      BaseUOM: base unit of the item's unit group
+      BaseQty: quantity in BaseUOM
+      IssueRate: unit rate
+      IssueValue: line value
+      Factory: company short name
+    definition: |
+      SELECT im.CompanyID, co.CompanyName, im.IssueID, im.IssueDate, im.IssueFrom AS StoreID, ud.UdName AS StoreName,
+             im.IssueTo AS IssuedToID, ud2.UdName AS IssuedTo, im.IssueCause, im.RequisitionSlipNo, im.ExportOrderID,
+             x.ItemCode, x.ItemName, x.UOM, x.IssueQty, dbo.fnGetBaseUOM(x.UOM) AS BaseUOM,
+             dbo.fnGetBaseQty(x.UOM, x.IssueQty) AS BaseQty, x.IssueRate, x.IssueValue,
+             CASE im.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+               WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE im.CompanyID END AS Factory
+      FROM (
+        SELECT CompanyID, IssueID, ItemCode, ItemName, UOM, IssueQty, IssueRate, IssueValue FROM dbo.IssueChild
+        UNION ALL
+        SELECT CompanyID, IssueID, ItemCode, ItemName, UOM, IssueQty, IssueRate, IssueValue FROM dbo.IssueChildWithoutGRN
+      ) AS x
+      JOIN dbo.IssueMaster im ON im.IssueID = x.IssueID AND im.CompanyID = x.CompanyID
+      LEFT JOIN dbo.UserDefined ud ON ud.UdID = im.IssueFrom
+      LEFT JOIN dbo.UserDefined ud2 ON ud2.UdID = im.IssueTo
+      LEFT JOIN dbo.vwCompany_Info co ON co.CompanyID = im.CompanyID
+
+  - name: rag.vw_Item
+    grain: one row per item
+    description: The item master — code, name, unit, category, group, store group, whether it is a production or a non-production item, fixed asset and inactive flags, re-order level.
+    key_columns: [ItemCode]
+    # The item master is group-wide (no factory owns an item). Every curated view carries the scope column, so a
+    # user limited to some factories gets no rows here rather than an unfiltered view (Factory = 'GROUP').
+    scope_column: Factory
+    columns:
+      ItemCode: item code, e.g. '1178108'
+      ItemName: item name
+      UOM: the item's own unit (can, pcs, kg, ...)
+      ItemCategory: category name (Goods, Chemical, Consumables, Production Goods, ...)
+      ItemGroup: group name
+      ItemSubGroup: sub-group name
+      StoreGroup: store group (Maintenance, General Store, Washing, Production, ...)
+      ProductionItem: Yes for a production item
+      NonProductionItem: Yes when classed as non-production
+      FixedAsset: Yes for a fixed asset
+      Inactive: Yes when the item is inactive
+      ReOrderLevel: re-order level
+      Factory: always GROUP (the item master is shared by every company)
+    definition: |
+      SELECT im.ItemCode, im.ItemName, im.UOM, ca.ItemCategoryName AS ItemCategory, g.ItemGroupName AS ItemGroup,
+             sgp.ItemSubGroupName AS ItemSubGroup, sg.StoreGroupName AS StoreGroup,
+             CASE WHEN im.ProductType = 1 THEN 'Yes' ELSE 'No' END AS ProductionItem,
+             CASE WHEN np.ItemCode IS NULL THEN 'No' ELSE 'Yes' END AS NonProductionItem,
+             CASE WHEN im.FixAsset = 1 THEN 'Yes' ELSE 'No' END AS FixedAsset,
+             CASE WHEN im.Inactive = 1 THEN 'Yes' ELSE 'No' END AS Inactive,
+             im.ReOrderLevel, CAST('GROUP' AS varchar(10)) AS Factory
+      FROM dbo.ItemMaster im
+      LEFT JOIN dbo.ItemCategory ca ON ca.ItemCategoryID = im.ItemCategoryID
+      LEFT JOIN dbo.ItemGroup g ON g.ItemCategoryID = im.ItemCategoryID AND g.ItemGroup = im.ItemGroup
+      LEFT JOIN dbo.ItemSubGroup sgp ON sgp.ItemCategoryID = im.ItemCategoryID AND sgp.ItemGroup = im.ItemGroup
+                                     AND sgp.ItemSubGroup = im.ItemSubGroup
+      LEFT JOIN dbo.ItemStoreGroup sg ON sg.StoreGroupID = im.StoreGroupID
+      LEFT JOIN (SELECT DISTINCT ItemCode FROM dbo.NonProductionItemMapping) AS np ON np.ItemCode = im.ItemCode
+
+  - name: rag.vw_Store
+    grain: one row per store or issue destination
+    description: The store master — the code used in receipts, issues and the ledger and the name staff know the store by; Kind says whether it is a store (Inventory Location) or an issue destination (Issue To).
+    key_columns: [StoreID]
+    scope_column: Factory
+    columns:
+      StoreID: store code, e.g. '2'
+      StoreName: store name as recorded, e.g. 'Maintenance Store (Misami)'
+      Kind: Inventory Location (a store) or Issue To (a section or store goods are issued to)
+      Factory: always GROUP (the store master holds every company's stores; the company is in the name)
+    definition: |
+      SELECT UdID AS StoreID, UdName AS StoreName, DisplayMember AS Kind, CAST('GROUP' AS varchar(10)) AS Factory
+      FROM dbo.UserDefined
+      WHERE DisplayMember IN ('Inventory Location', 'Issue To')
+
+  - name: rag.vw_Company
+    grain: one row per company
+    description: The group's companies — code, name and short name.
+    key_columns: [CompanyID]
+    scope_column: Factory
+    columns:
+      CompanyID: company code, e.g. '02'
+      CompanyName: company name, e.g. 'MISAMI Garments Ltd.'
+      Factory: short name (TAL, RHL, BGL, KTL, CKDL, MGL, ...)
+    definition: |
+      SELECT CompanyID, CompanyName,
+             CASE CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+               WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' WHEN '01' THEN 'CORP' WHEN '03' THEN 'RAL' WHEN '05' THEN 'SWL'
+               WHEN '07' THEN 'RFS' WHEN '10' THEN 'THL' WHEN '12' THEN 'TRIA' ELSE CompanyID END AS Factory
+      FROM dbo.vwCompany_Info
+examples:
+  - question: please find the closing balance of 1178108 this item code for nonproduction item and companyid=02 and store name maintenance store of misami
+    sql: |
+      SELECT TOP (50) CompanyID, CompanyName, StoreName, ItemCode, ItemName, NonProductionItem, BaseUOM,
+             ReceivedQty, IssuedQty, ClosingBalance, LastTransaction
+      FROM rag.vw_StockBalance
+      WHERE ItemCode = '1178108' AND CompanyID = '02' AND StoreName LIKE '%Maintenance%'
+  - question: goods receipts of item 1178108 at company 02
+    sql: |
+      SELECT TOP (200) GRNID, GRNDate, StoreName, ItemCode, ItemName, UOM, GRNQty, BaseUOM, BaseQty
+      FROM rag.vw_GoodsReceipt
+      WHERE ItemCode = '1178108' AND CompanyID = '02'
+      ORDER BY GRNDate DESC
+  - question: which stores hold item 1178108
+    sql: |
+      SELECT TOP (50) CompanyID, CompanyName, StoreName, BaseUOM, ClosingBalance, LastTransaction
+      FROM rag.vw_StockBalance
+      WHERE ItemCode = '1178108' AND ClosingBalance <> 0
+      ORDER BY CompanyID, StoreName

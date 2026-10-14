@@ -22,3 +22,83 @@
     FROM rag.vw_PCDChangeHistory
   indexes: [ExportOrderID]
   scope_column: Factory
+
+# ---------------------------------------------------------------- local master copies (Phase P3, 2026-10-09)
+# Small masters from other databases, copied nightly so a fixed tool's `local_sql` can JOIN them in SQLite with a
+# copy of its own data — two production databases joined locally, cited with the copy's as-of time
+# (docs/DATA_ACCESS.md "Cross-database questions").
+- name: company_master
+  database: SystemManager
+  description: The group's 12 companies with code, name, short name and location (SystemManager.dbo.Company).
+  views: []
+  sql: |
+    SELECT CompanyID, CompanyName, CompanyShortName, Loc FROM dbo.Company
+  indexes: [CompanyID]
+
+# ---------------------------------------------------------------- value index (Phase P2.1, 2026-10-09)
+# Names recorded in the data, copied nightly so a question's spelling ("mantainance store of misami") can become
+# the recorded value ('Maintenance Store (Misami)') — src/ragbot/data/values.py. A spec with `entity:` is a value
+# copy: `value_column` is the name, `code_column` its code, `target` the view column the SQL model should filter
+# on. Small read-only SELECTs (a few hundred rows each); the owner approved the nightly refresh on 2026-10-08.
+- name: values_stores
+  database: Inventory
+  entity: store
+  description: Store and issue-destination names (dbo.UserDefined) as receipts, issues and the ledger record them.
+  views: [rag.vw_Store]
+  sql: |
+    SELECT StoreID, StoreName, Kind, Factory FROM rag.vw_Store
+  value_column: StoreName
+  code_column: StoreID
+  target: rag.vw_StockBalance.StoreName
+  indexes: [StoreName]
+  scope_column: Factory
+
+- name: values_companies
+  database: Inventory
+  entity: company
+  description: The group's companies as the store system records them (code and name).
+  views: [rag.vw_Company]
+  sql: |
+    SELECT CompanyID, CompanyName, Factory FROM rag.vw_Company
+  value_column: CompanyName
+  code_column: CompanyID
+  target: rag.vw_StockBalance.CompanyID
+  indexes: [CompanyID]
+  scope_column: Factory
+
+- name: values_item_categories
+  database: Inventory
+  entity: item_category
+  description: Item category names (Goods, Chemical, Consumables, Production Goods, ...).
+  views: [rag.vw_Item]
+  sql: |
+    SELECT ItemCategoryID AS CategoryID, ItemCategoryName AS ItemCategory FROM dbo.ItemCategory
+  value_column: ItemCategory
+  code_column: CategoryID
+  target: rag.vw_Item.ItemCategory
+  indexes: [ItemCategory]
+
+- name: values_store_groups
+  database: Inventory
+  entity: store_group
+  description: Store groups an item belongs to (Maintenance, General Store, Washing, Production, ...).
+  views: [rag.vw_Item]
+  sql: |
+    SELECT StoreGroupID, StoreGroupName AS StoreGroup FROM dbo.ItemStoreGroup
+  value_column: StoreGroup
+  code_column: StoreGroupID
+  target: rag.vw_StockBalance.StoreGroup
+  indexes: [StoreGroup]
+
+- name: values_issue_causes
+  database: Inventory
+  entity: issue_cause
+  description: The causes recorded on store issues since 2024 ('Issue Non Production Item', ...).
+  views: [rag.vw_StockIssue]
+  sql: |
+    SELECT IssueCause, COUNT(*) AS Issues FROM dbo.IssueMaster
+    WHERE IssueDate >= '2024-01-01' AND IssueCause IS NOT NULL
+    GROUP BY IssueCause
+  value_column: IssueCause
+  target: rag.vw_StockIssue.IssueCause
+  indexes: [IssueCause]

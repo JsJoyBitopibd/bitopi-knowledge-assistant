@@ -9,6 +9,10 @@ description: 'HRMS payroll and attendance: employee master, daily attendance fro
   calendar, leave (including maternity), overtime hours, salary/bonus/tax/loan processing, increments, designations
   and departments.'
 dialect: tsql
+# 2026-10-13, the owner opened this database: it answers HR questions, so its business and personal
+# columns (salary, attendance, leave, medical, contact, date of birth, NID, bank) are readable.
+# Only credentials stay blocked. Deleting this line closes the database again (Phase R).
+sensitive_patterns: [password, pwd, token, secret]
 connection_env: SQLSERVER_CONN_PRODUCTION
 connection_database: Hrms5Misami
 keywords:
@@ -51,6 +55,112 @@ keywords:
 - eid
 - config
 - income
+# Phase R: the pay vocabulary. gen_catalog.py strips sensitive words when it writes keywords, so the database
+# that holds salaries never claimed the word "salary" — a regeneration would strip these again.
+- salary
+- salaries
+- wage
+- wages
+- gross
+- net
+- basic
+- pay
+- payslip
+- pay slip
+- bonus
+- festival bonus
+- tax
+- income tax
+- increment
+- loan
+- advance
+- provident fund
+- pf
+- gratuity
+- blood group
+- religion
+- date of birth
+- contact number
+- mobile number
+# Phase R: whole phrases, so an attendance question beats HR's manpower-budget vocabulary. On 2026-10-13
+# "what is the number of manpower present today?" went to HR's requisition table and answered 0.
+- manpower present
+- present today
+- how many present
+- absent today
+- how many absent
+- attendance today
+- manpower today
+- on duty
+schema_rag_k: 10                 # 462 offered tables and no curated views: more candidates per question
+max_rendered_columns: 90         # MonthWiseSalaryInfoExt has 184 columns; 40 would cut the ones a question needs
+table_notes:
+  # Phase R. Which table answers what: several employee views disagree on a headcount (on 2026-10-04 one
+  # department returned 13, 18 and 26 from three of them), so the authoritative one is named here.
+  dbo.tblEmployee: >-
+    this HRMS instance's own employee master, one row per employee (13,199): EmployeeCode, name, joining
+    (DOJ) and separation (DOS) dates, DesignationID, EmployeeStatus and the salary rule. EmployeeStatus is
+    Active, InActive or Separation, and only 992 rows are Active (2026-10-13). It is NOT the group's
+    headcount — it is the population this instance runs attendance and payroll for, and it is what
+    dbo.DaywisePayHour, dbo.DaywiseOTHour and dbo.MonthWiseSalaryInfo are keyed on. For "how many employees
+    do we have", by factory, department or designation, use dbo.vwAllCompanyEmployeeList instead.
+  dbo.vwAllCompanyEmployeeList: >-
+    the GROUP-wide employee list and the one to count headcount from: EmployeeCode, EmployeeName, Unit
+    (TAL, BGL, RHL, MGL, SRSL), Division (GARMENTS, WASHING, CORPORATE), Department, Section Info, Sub
+    Section, Designation, Staff Category, DOJ, DOB and EmployeeStatus. 17,972 rows are Active on 2026-10-13
+    against 992 in dbo.tblEmployee, so the two answer different questions and must never be mixed. Filter
+    EmployeeStatus = 'Active' unless leavers were asked for. Department names are not clean — "HR, Admin &
+    Compliance", "HR & Admin" and the misspelling "HR, Admin & Complaince" are all present, and so are both
+    "IE" and "Industrial Engineering" — so match a department with LIKE and show the names you matched.
+  dbo.tblEmployeeDetails: >-
+    one row per employee with the personal fields — date of birth, blood group, religion, present and
+    permanent address, bank account, national ID, entry salary and the salary rule.
+  dbo.DailyAttendance: >-
+    one row per employee, working day, shift and punch type (13.2 million): the raw in/out punches with
+    IsLate. For "how many were present" prefer dbo.DaywisePayHour, which already has the day status.
+    Loaded to the same day as dbo.DaywisePayHour and no further.
+  dbo.DaywisePayHour: >-
+    one row per employee, working day and shift (8.9 million), about 991 rows a day — the 992 active
+    employees in this HRMS. DayStatus is a CODE, never a word: P present, L present but late (LateHour
+    greater than 0), PW present on a weekly off day, PH present on a holiday, LW and LH late on those
+    days, A absent, LV leave, MLV maternity leave, W weekly off, H holiday. Present on a day therefore
+    means DayStatus IN ('P','L','PW','PH','LW','LH'); DayStatus = 'present' matches nothing. The other
+    columns are PayHour, LateHour, ARADayStatus, in and out time. Always filter on WorkDate.
+    IMPORTANT, checked 2026-10-13: the newest WorkDate in the table is 2026-09-09. There is nothing for
+    today or for any day after that, in this table or in any other attendance source on this server, so a
+    question about today is answered for the newest day in the data and that date is stated, or not at all.
+    It also covers only this instance's 992 active employees, not the group's 17,972, so an answer from it
+    says whose attendance it is.
+  dbo.DaywiseOTHour: >-
+    one row per employee, working day and slab (4.1 million) with OTHour and Rate: the overtime hours.
+    IMPORTANT, checked 2026-10-13: overtime is barely recorded here any more. 992 employees had overtime
+    rows in 2019 and 639 in 2022, then 12 in 2023 and only 6 in all of 2026, and the newest WorkDate is
+    2026-09-08. A total from it is the total for those few people, not for the workforce, so an answer
+    states how many employees it covers (COUNT(DISTINCT EmployeeCode)) alongside the hours.
+  dbo.MonthWiseSalaryInfo: >-
+    one row per employee and salary month with every pay head as a column (GROSS, BASIC, HOUSE RENT,
+    MEDICAL, OT, Bonus, Income Tax and the rest), keyed by EmployeeCode, MonthNo and YearNo: the monthly
+    salary sheet, and the one healthy HR source — 1,063 employees have 2026 sheets, through August 2026
+    (checked 2026-10-13). Join to dbo.SalaryProcess only when a single head's transaction is needed.
+  dbo.SalaryProcess: >-
+    the salary ledger, one row per employee, month and pay head (5.4 million): SalaryHeadId with the amount.
+    Always filter on MonthNo and YearNo; it is far too large to scan.
+  dbo.SalaryHead: >-
+    the pay heads (69) — basic, house rent, medical, conveyance, bonus and the rest, keyed by SalaryHeadID.
+  dbo.LeaveProcessList: >-
+    leave applications and their approvals; dbo.MaternityPaymentDetails holds maternity pay.
+  dbo.Department: >-
+    the department master (Description, Code); dbo.Designation is the designation master. Neither carries
+    an employee, so a headcount by department comes from dbo.vwAllCompanyEmployeeList's own Department
+    column; dbo.vewEmployeeDepartment maps EmployeeCode to Department for this instance's employees only.
+synonyms:
+  present: [attendance, daily attendance]
+  absent: [absentee, absence]
+  ot: [overtime]
+  overtime: [ot hour, ot hours]
+  cl: [casual leave]
+  salary: [pay, gross, net, monthly salary]
+  manpower: [headcount, head count, employee count]
 exclude_tables:
 - '*back'
 - '*back_*'
@@ -78,6 +188,18 @@ exclude_tables:
 - '*.shadow_*'
 - '*.baseline_*'
 - '*._linechange_*'
+# Phase R: scratch and dated copies of the salary family, revealed when the database was opened. They hold
+# real-looking numbers from a processing run, so a wrong total could come back under a correct citation.
+- 'dbo.EmployeeSalaryTemp'
+- 'dbo.tempEmplSalary'
+- 'dbo.tempEmpSalaryTax'
+- 'dbo.TempMonthWiseSalaryInfoExt'
+- 'dbo.TempEmployeeSalaryMedical*'
+- 'dbo.BloodGroupTempTable'
+- 'dbo.EmployeeSalaryIncrement[0-9]*'
+- 'dbo.CompanyWiseEmployeeSalary_ServerBased'
+- 'dbo.WorkOffCalendar_Back*'
+- 'dbo.SalaryProcess[0-9]*'
 rules:
 - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
 - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following

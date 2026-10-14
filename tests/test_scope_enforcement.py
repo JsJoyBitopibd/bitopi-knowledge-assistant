@@ -159,15 +159,30 @@ def test_the_self_check_rejects_a_statement_that_is_not_filtered():
         assert_scoped(outside, cat, TAL, [v])
 
 
-def test_every_real_fixed_tool_runs_filtered_for_a_factory_user():
+def test_every_real_fixed_tool_is_filtered_or_refused_for_a_factory_user():
+    """A factory-scoped user reads a fixed tool's rows only through the factory filter — or not at all.
+
+    A tool over a rag.* view is rewritten with IN ('TAL'). A tool over a discovered table (the HR ones:
+    those databases have no rag schema, and an attendance row has no factory column to filter on) is
+    refused outright, because _guard_for offers no raw table to a user limited to some factories. Both
+    outcomes are the property; silently running an unfiltered raw statement is the one that is not.
+    """
     import yaml
     from pathlib import Path
+    from ragbot.data.tools import _guard_for
     cats = load_catalogs()
+    refused = []
     for tool in yaml.safe_load(Path("config/fixed_tools.yaml").read_text(encoding="utf-8")):
         cat = cats[tool["database"]]
-        sql, views = rewrite_virtual(guard(tool["sql"], cat.view_names, cat.dialect, 200), cat, scope=TAL)
+        try:
+            safe = _guard_for(tool["sql"], cat, 200, TAL)
+        except GuardError:
+            refused.append(tool["name"])
+            continue
+        sql, views = rewrite_virtual(safe, cat, scope=TAL)
         assert "IN ('TAL')" in sql, tool["name"]
         assert sqlglot.parse_one(sql, read="tsql")
+    assert "manpower_present_latest" in refused, "HR attendance has no factory column; it must be refused"
 
 
 # ---------------------------------------------------------------- data: fixed tools, raw tables, aggregates
@@ -251,3 +266,45 @@ def test_a_denied_question_says_not_found_and_why(monkeypatch):
     monkeypatch.setattr(orch, "_log", lambda a, user, scope=None: a)
     a = orch.answer("How many RHL orders ship next week?", scope=TAL)
     assert a.not_found and a.text.startswith("System doesn't have the data.") and "access" in a.text
+
+
+def test_a_question_naming_only_another_factory_is_denied_before_any_query(monkeypatch):
+    """Phase Q: on 11 Oct a TAL question asked with the Factory pill on BGL ran two SQL calls, a document
+    search and an answer call to say nothing. A fixed tool already refused such a question; generated SQL now
+    does too, before anything is read."""
+    monkeypatch.setattr(tools, "generate_and_run", lambda *a, **k: pytest.fail("nothing may be queried"))
+    monkeypatch.setattr(tools, "cached_run", lambda *a, **k: pytest.fail("nothing may be read"))
+    monkeypatch.setattr(tools, "_query_vector", lambda q: pytest.fail("no embedding for a refused question"))
+    out = tools.answer_from_data("What style is running on RHL line 2102?",
+                                 scope=Scope(factories=frozenset({"TAL"})))
+    assert len(out) == 1 and out[0].denied and "RHL" in out[0].error
+
+
+def _no_generation(monkeypatch, seen):
+    """Stop before the SQL model: no embedder (it loads 2 GB), no catalog ranking, no generation."""
+    monkeypatch.setattr(tools, "match_fixed_tool", lambda q, t: None)
+    monkeypatch.setattr(tools, "_query_vector", lambda q: None)
+    monkeypatch.setattr(tools, "pick_catalogs", lambda q, c, v=None, k=None: {})
+    monkeypatch.setattr(tools, "generate_and_run", lambda q, *a, **k: seen.append(q) or _ok())
+
+
+def test_an_order_code_or_a_code_less_company_never_denies(monkeypatch):
+    seen = []
+    _no_generation(monkeypatch, seen)
+    for q in ["Show the DHU of EO TAL-26-1985-1 this week", "how much grease is left in the misami store"]:
+        out = tools.answer_from_data(q, scope=Scope(factories=frozenset({"RHL"})))
+        assert not out[0].denied, q
+    assert len(seen) == 2
+
+
+def test_a_question_naming_two_factories_one_of_them_mine_still_runs(monkeypatch):
+    seen = []
+    _no_generation(monkeypatch, seen)
+    out = tools.answer_from_data("compare TAL and RHL line 2102 today", scope=Scope(factories=frozenset({"TAL"})))
+    assert not out[0].denied and seen
+
+
+def _ok():
+    from ragbot.models import QueryResult
+    return QueryResult(database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1",
+                       columns=["n"], rows=[[1]])

@@ -31,21 +31,51 @@ from ..config import env, log_dir, settings
 
 
 SQL_HEADER = ["ts", "user", "scope", "engine", "tool", "rows", "ms", "error", "params", "sql", "sql_exec",
-              "request_id"]
+              "request_id", "database", "columns"]
 
 
 def _log(engine: str, tool: str, display_sql: str, sql_exec: str, params: dict, rows: int, ms: float,
-         error: str = "", user: str = "", scope: str = "") -> None:
-    """One row per statement in logs/sql.csv (PRD FR-3.8), with the scope it ran under (FR-6.2) and the
-    request that ran it (ragbot/trace.py); its time counts toward the request's "data.db"."""
+         error: str = "", user: str = "", scope: str = "", database: str = "",
+         columns: Optional[list[str]] = None) -> None:
+    """One row per statement in logs/sql.csv (PRD FR-3.8), with the scope it ran under (FR-6.2), the request
+    that ran it (ragbot/trace.py), the database it was opened on (Phase P0: 19 catalogs share one connection
+    line, so the statement alone does not say where it ran) and the column NAMES it returned (Phase R: with
+    the HR databases open, "which fields did it show?" must be answerable without re-parsing the SQL — the
+    values are never logged). Its time counts toward "data.db"."""
     from .. import trace
     from ..logs import append_row
     trace.add("data.db", ms / 1000)
     append_row("sql.csv", SQL_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, engine, tool, rows,
-                                       f"{ms:.0f}", error, params, display_sql, sql_exec, trace.request_id()])
+                                       f"{ms:.0f}", error, params, display_sql, sql_exec, trace.request_id(), database,
+                                       ";".join(columns or [])])
 
 
 _DB_KEY = re.compile(r"((?:^|;)\s*(?:database|initial catalog)\s*=)[^;]*", re.IGNORECASE)
+
+
+def _dsn_key(raw: str, key: str) -> str:
+    m = re.search(rf"(?:^|;)\s*{key}\s*=\s*([^;]*)", raw, re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def server_of(conn_env: str) -> str:
+    """The SQL Server instance a connection line points at (its Server= key, lower-case), so two login lines on
+    one instance count as the same server (Phase P3: BitopiSplint has its own line on the production instance)."""
+    try:
+        return _dsn_key(env(conn_env), "server").lower()
+    except Exception:
+        return ""
+
+
+def sql_database(conn_env: str, connection_database: Optional[str] = None) -> str:
+    """The database name a statement on this catalog runs in: its `connection_database:` or the line's own
+    Database= (the name a three-part reference must use)."""
+    if connection_database:
+        return connection_database
+    try:
+        return _dsn_key(env(conn_env), "database") or _dsn_key(env(conn_env), "initial catalog")
+    except Exception:
+        return ""
 
 
 def dsn(conn_env: str, database: Optional[str] = None) -> str:
@@ -135,6 +165,21 @@ def _is_link_error(e: Exception) -> bool:
     return state.startswith("08")
 
 
+def _bind_varchar(cur: Any, args: list[Any]) -> None:
+    """Bind ASCII string parameters as VARCHAR. pyodbc sends a Python str as NVARCHAR; every code column in these
+    databases is VARCHAR, and `varchar_column = nvarchar_parameter` converts the COLUMN side, which defeats index
+    seeks and predicate push-down: the stock-balance view answered `ItemCode = '1178108'` in 1.2 s and
+    `ItemCode = @item` timed out at 45 s (checked live 2026-10-09). A non-ASCII value (Bangla) keeps the default."""
+    if not args or not any(isinstance(a, str) for a in args):
+        return
+    try:
+        import pyodbc
+        sizes = [(pyodbc.SQL_VARCHAR, max(len(a), 1), 0) if isinstance(a, str) and a.isascii() else None for a in args]
+        cur.setinputsizes(sizes)
+    except Exception:
+        pass           # an old driver or a fake cursor: the default binding still works, only slower
+
+
 def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVER_CONN", display_sql: str = "",
                   tool: str = "generated", user: str = "", timeout: Optional[int] = None,
                   scope: str = "", database: Optional[str] = None) -> tuple[list[str], list[list[Any]]]:
@@ -152,6 +197,7 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
             cn, reused = pool.acquire()
             cn.timeout = timeout
             cur = cn.cursor()
+            _bind_varchar(cur, args)
             cur.execute(q, args)
             cols = [d[0] for d in cur.description] if cur.description else []
             # fetchmany: never pull more than max_rows across the network, whatever the statement returns
@@ -159,13 +205,13 @@ def run_sqlserver(sql: str, params: dict[str, Any], *, conn_env: str = "SQLSERVE
             cur.close()
             ok = True
             _log("sqlserver", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000,
-                 user=user, scope=scope)
+                 user=user, scope=scope, database=database or "", columns=cols)
             return cols, rows
         except Exception as e:
             if attempt == 1 and reused and _is_link_error(e):
                 continue   # a stale pooled connection: drop it (finally) and retry once on a fresh one
             _log("sqlserver", tool, display_sql or sql, sql, params, 0, (time.perf_counter() - t0) * 1000,
-                 error=str(e)[:300], user=user, scope=scope)
+                 error=str(e)[:300], user=user, scope=scope, database=database or "")
             raise
         finally:
             if cn is not None:
@@ -196,11 +242,11 @@ def run_mysql(sql: str, params: dict[str, Any], *, conn_env: str = "MYSQL_CONN",
         cols = [d[0] for d in cur.description] if cur.description else []
         rows = [list(r) for r in cur.fetchall()] if cur.description else []
         _log("mysql", tool, display_sql or sql, sql, params, len(rows), (time.perf_counter() - t0) * 1000, user=user,
-             scope=scope)
+             scope=scope, database=database or "", columns=cols)
         return cols, rows
     except Exception as e:
         _log("mysql", tool, display_sql or sql, sql, params, 0, (time.perf_counter() - t0) * 1000,
-             error=str(e)[:300], user=user, scope=scope)
+             error=str(e)[:300], user=user, scope=scope, database=database or "")
         raise
     finally:
         if cn is not None:

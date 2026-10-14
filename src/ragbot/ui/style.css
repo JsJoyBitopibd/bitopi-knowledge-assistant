@@ -1,0 +1,300 @@
+/* Bitopi Knowledge Assistant — web app styles (docs/design/DESIGN.md, screens 1 and 2).
+   .streamlit/config.toml carries the base theme (colours, fonts, the dark sidebar); this file does the rest.
+   Elements are found by their Streamlit key (class st-key-KEY) where possible, by data-testid otherwise.
+   components.inject_css() strips these comments before sending the sheet to the browser. */
+
+:root {
+  --ink: #18201D; --ink-2: #3C4641; --muted: #5B645F;
+  --page: #F4F5F2; --card: #FFFFFF; --line: #DADDD6; --line-strong: #C5CBC6; --rule: #ECEEEA; --chip: #EEF1EE;
+  --accent: #0E5E50; --accent-dark: #0A4A3F; --badge: #E3EFEB;
+  --side: #14211D; --side-raised: #1C2C27; --side-selected: #22332D; --side-rule: #3A4A44;
+  --side-text: #E8ECE9; --side-text-2: #C9D2CE; --side-label: #9AA8A2; --side-fresh: #8FD3B6; --side-stale: #F5B97A;
+  --warn-bg: #FDF1E3; --warn-line: #F2D2AC; --warn-text: #6E3A06; --watch-text: #7A3E06; --warn-mark: #D9822B;
+  --crit-bg: #FBE7E5; --crit-text: #8E1B12; --red: #B42318; --ok: #1D7A45; --ok-text: #155C34;
+  --mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+}
+
+/* ── page frame ─────────────────────────────────────────────────────────────────────────────────────────── */
+/* Streamlit's own top bar (the viewer menu and the running indicator) gets a strip of its own, so it never
+   sits on the status pill or the conversation's Export button */
+[data-testid="stHeader"] { background: var(--page); height: 2.75rem; min-height: 2.75rem; }
+[data-testid="stMainBlockContainer"] { padding: 3.25rem 2.5rem 2.5rem; max-width: none; }
+.ka-mono { font-family: var(--mono); }
+
+/* st.html blocks: no extra margin of their own */
+[data-testid="stHtml"] { margin: 0; }
+
+/* ── sidebar ────────────────────────────────────────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] { min-width: 272px; }
+[data-testid="stSidebarUserContent"] { padding-top: 0.25rem; }
+.ka-brand { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; }
+.ka-logo { width: 36px; height: 36px; border-radius: 8px; background: var(--accent); color: #fff; display: flex;
+  align-items: center; justify-content: center; font-weight: 700; font-size: 18px; flex: 0 0 36px; }
+.ka-brand-text { display: flex; flex-direction: column; gap: 2px; }
+.ka-brand-name { font-weight: 600; font-size: 15px; line-height: 1.2; color: var(--side-text); }
+.ka-brand-sub { font-size: 12px; color: var(--side-label); }
+.ka-brand-light { margin: 12vh 0 16px; }
+.ka-brand-light .ka-brand-name { color: var(--ink); }
+.ka-brand-light .ka-brand-sub { color: var(--muted); }
+.ka-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--side-label);
+  margin: 10px 0 -6px; }
+.ka-label.ka-label-main { color: var(--muted); font-size: 13px; margin: 0; }
+
+.st-key-new_chat button { background: #fff; color: var(--side); border: 0; min-height: 44px; font-weight: 600; }
+.st-key-new_chat button:hover { background: #E8ECE9; color: var(--side); }
+.st-key-new_chat button p { font-weight: 600; }
+
+/* Factory pills */
+.st-key-factory button[data-variant="pills"] { background: transparent; color: var(--side-text);
+  border: 1px solid var(--side-rule); min-height: 32px; border-radius: 16px; padding: 0 12px; }
+.st-key-factory button[data-variant="pills"] p { color: var(--side-text); font-weight: 500; font-size: 13px; }
+.st-key-factory button[data-variant="pills"][aria-checked="true"] { background: var(--side-text);
+  border-color: var(--side-text); }
+.st-key-factory button[data-variant="pills"][aria-checked="true"] p { color: var(--side); }
+
+.ka-search-in { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--side-text); }
+.ka-search-row { display: flex; align-items: center; gap: 10px; }
+.ka-tick { width: 18px; height: 18px; border-radius: 4px; background: #5FB8A3; color: var(--side); font-size: 12px;
+  font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.ka-search-note { font-size: 12px; color: var(--side-label); }
+
+/* Recent */
+.ka-recent-current { padding: 10px 12px; border-radius: 8px; background: var(--side-selected); color: var(--side-text);
+  font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-recent_"] button { justify-content: flex-start; width: 100%; padding: 8px 12px; min-height: 0;
+  color: var(--side-text-2); border-radius: 8px; }
+[class*="st-key-recent_"] button:hover { background: var(--side-selected); color: var(--side-text); }
+[class*="st-key-recent_"] button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.ka-empty-note { font-size: 13px; color: var(--side-label); padding: 2px 12px; }
+
+/* Data status */
+.ka-status { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 10px;
+  background: var(--side-raised); font-size: 12px; line-height: 1.5; color: var(--side-text-2); }
+.ka-status-title { font-weight: 600; color: var(--side-text); font-size: 13px; }
+.ka-status-row { display: flex; justify-content: space-between; gap: 8px; }
+.ka-status-row .ka-mono { color: var(--side-text-2); white-space: nowrap; }
+.ka-status-row .ka-fresh { color: var(--side-fresh); }
+.ka-status-row .ka-stale { color: var(--side-stale); }
+.ka-status-note { color: var(--side-stale); }
+.ka-status-foot { border-top: 1px solid var(--side-rule); padding-top: 10px; color: var(--side-label); }
+
+/* ── shared pieces ──────────────────────────────────────────────────────────────────────────────────────── */
+.ka-topline { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.ka-date { font-size: 14px; color: var(--muted); }
+.ka-pill-status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 16px;
+  background: #fff; border: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+.ka-dot { width: 8px; height: 8px; border-radius: 4px; background: var(--ok); display: inline-block; }
+.ka-dot-warn { background: var(--warn-mark); }
+
+.ka-banner, .ka-caution { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 14px; padding: 14px 18px; border-radius: 10px;
+  background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn-text); }
+.ka-banner svg, .ka-caution svg { flex: 0 0 auto; margin-top: 1px; }
+.ka-banner p, .ka-caution p { margin: 0; flex: 1 1 260px; font-size: 14px; line-height: 1.5; }
+.ka-banner strong { font-weight: 600; }
+.ka-banner a { font-size: 14px; font-weight: 600; color: var(--warn-text); white-space: nowrap; }
+.ka-caution { padding: 12px 14px; gap: 12px; }
+
+.ka-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ka-section-head h2 { margin: 0; padding: 0; font-size: 18px; font-weight: 600; color: var(--ink); }
+.ka-section-head span { font-size: 13px; color: var(--muted); }
+
+/* pill buttons: suggestions and follow-ups */
+.st-key-try button, [class*="st-key-fu_"] button, .st-key-suggest button {
+  border-radius: 20px; border: 1px solid var(--line); background: #fff; min-height: 40px; padding: 0 14px; }
+.st-key-try button p, [class*="st-key-fu_"] button p, .st-key-suggest button p { font-weight: 400; font-size: 14px; }
+.st-key-try button:hover, [class*="st-key-fu_"] button:hover { border-color: var(--accent); color: var(--accent); }
+.ka-followup-label { font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: -8px; }
+
+/* ── home briefing (screen 1) ───────────────────────────────────────────────────────────────────────────── */
+.st-key-home { max-width: 1040px; margin: 0 auto; gap: 1.5rem; }
+.ka-greeting h1 { margin: 0; padding: 0; font-size: 36px; line-height: 1.15; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--ink); }
+.ka-greeting p { margin: 6px 0 0; font-size: 16px; color: var(--muted); }
+
+[class*="st-key-kpi_"] { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px 14px;
+  height: 100%; justify-content: space-between; gap: 6px; }
+.ka-kpi { display: flex; flex-direction: column; gap: 6px; }
+.ka-kpi-label { font-size: 14px; font-weight: 500; color: var(--muted); }
+.ka-kpi-value { font-size: 44px; font-weight: 600; line-height: 1.1; color: var(--ink); letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums; }
+.ka-kpi-value-sm { font-size: 36px; }
+.ka-kpi-note { font-size: 14px; color: var(--muted); line-height: 1.4; }
+.ka-health { display: flex; align-items: center; gap: 16px; }
+.ka-health-num { display: flex; flex-direction: column; }
+.ka-counts { display: flex; flex-wrap: wrap; gap: 12px; font-size: 14px; color: var(--ink-2); margin-top: 6px; }
+.ka-counts span { display: inline-flex; align-items: center; gap: 6px; }
+.ka-c-red, .ka-c-amber, .ka-c-green { display: inline-block; width: 8px; height: 8px; }
+.ka-c-red { background: var(--red); border-radius: 4px; }
+.ka-c-amber { background: var(--warn-mark); border-radius: 1px; }
+.ka-c-green { background: var(--ok); border-radius: 4px; }
+[class*="st-key-kpi_"] [data-testid="stBaseButton-tertiary"] p,
+[class*="st-key-kpi_"] [data-testid="stPopover"] button p { color: var(--accent); text-decoration: underline;
+  text-underline-offset: 3px; font-weight: 500; font-size: 14px; }
+[class*="st-key-kpi_"] [data-testid="stBaseButton-tertiary"] { padding: 0; min-height: 0; justify-content: flex-start;
+  text-align: left; }
+[class*="st-key-kpi_"] [data-testid="stBaseButton-tertiary"] p { text-align: left; }
+[class*="st-key-kpi_"] [data-testid="stPopover"] button { border: 0; background: transparent; padding: 0; min-height: 0; }
+
+[class*="st-key-attn_"] { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 22px; }
+[class*="st-key-attn_"] [data-testid="stHorizontalBlock"] { align-items: center; }
+.ka-attn { display: flex; align-items: flex-start; gap: 16px; }
+.ka-attn-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ka-attn-title { font-size: 16px; color: var(--ink); line-height: 1.4; }
+.ka-attn-title strong { font-weight: 600; }
+.ka-attn-meta { font-size: 13px; color: var(--muted); }
+.ka-badge { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px;
+  font-size: 12px; font-weight: 600; margin-top: 2px; }
+.ka-badge-crit { background: var(--crit-bg); color: var(--crit-text); }
+.ka-badge-watch { background: var(--warn-bg); color: var(--watch-text); }
+.ka-badge-info { background: var(--chip); color: var(--ink-2); }
+[class*="st-key-attn_"] button { min-height: 44px; font-weight: 600; white-space: nowrap; }
+.st-key-more button { padding: 0; min-height: 0; }
+.st-key-more button p { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; font-weight: 500; }
+.ka-note { font-size: 13px; color: var(--muted); }
+
+/* ── conversation (screen 2) ────────────────────────────────────────────────────────────────────────────── */
+.st-key-convo_head { background: #fff; border-bottom: 1px solid var(--line); border-top: 1px solid var(--line);
+  margin: -0.5rem -2.5rem 0.5rem; padding: 14px 2.5rem; width: calc(100% + 5rem); max-width: none; }
+.st-key-convo_head [data-testid="stHorizontalBlock"] { align-items: center; }
+.ka-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ka-head h1 { margin: 0; padding: 0; font-size: 18px; font-weight: 600; color: var(--ink); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.ka-head span { font-size: 13px; color: var(--muted); }
+.st-key-convo_head button { min-height: 40px; border-color: var(--line-strong); }
+
+/* thread + Sources rail (screen 2). The pair is centred as one block on wide screens — the designer's mock is
+   1440 px wide and sets no max-width, so without this the thread spreads to the window edge and the conversation
+   sits left of centre. 1120 px = thread ~760 + gap + rail ~300, the same optical centre as the 1040 px home.
+   Side by side while both fit; below ~1100 px Streamlit wraps the rail under the thread (design 03 is the phone). */
+.st-key-convo_body { max-width: 1120px; margin: 0 auto; }
+.st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+.st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+  flex: 999 1 520px !important; width: auto !important; min-width: min(520px, 100%); }
+.st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+  flex: 1 1 280px !important; width: auto !important; min-width: min(280px, 100%); max-width: 360px; }
+/* the header band stays full-bleed; only its content lines up with the thread below it */
+.st-key-convo_head > [data-testid="stLayoutWrapper"] { max-width: 1120px; margin: 0 auto; }
+
+.ka-user { display: flex; justify-content: flex-end; }
+.ka-user-bubble { max-width: 560px; padding: 14px 18px; border-radius: 14px 14px 4px 14px; background: var(--side);
+  color: #F2F5F3; font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+[data-testid="stChatMessage"] { background: transparent; padding: 0; gap: 14px; }
+[data-testid="stChatMessage"] img { border-radius: 8px; }
+[data-testid="stChatMessageContent"] { font-size: 15px; line-height: 1.65; }
+[data-testid="stChatMessageContent"] > [data-testid="stVerticalBlock"] { gap: 14px; }
+
+/* the progress line = the design's "✓ Queried rag.vw_X · 432 rows" disclosure */
+[data-testid="stChatMessage"] [data-testid="stExpander"] details { background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; }
+[data-testid="stChatMessage"] [data-testid="stExpander"] summary { font-size: 13px; color: var(--ink-2); padding: 8px 14px; }
+[data-testid="stChatMessage"] [data-testid="stExpander"] summary p { font-size: 13px; }
+.ka-read { font-size: 13px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+
+/* answer tables (view.sortable_table_html): a white card that scrolls inside itself, column names sort it */
+.ka-table-wrap { max-width: 100%; max-height: 480px; overflow: auto; background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; }
+.ka-sortable { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ka-sortable th { position: sticky; top: 0; z-index: 1; background: var(--page); text-align: left; padding: 0; border: 0;
+  white-space: nowrap; }
+.ka-sortable th.ka-num { text-align: right; }
+.ka-sort { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; width: 100%;
+  padding: 10px 14px; cursor: pointer; font: 600 12px 'IBM Plex Sans', system-ui, sans-serif; color: var(--ink-2); }
+.ka-num .ka-sort { justify-content: flex-end; }
+.ka-sort:hover { color: var(--ink); background: var(--rule); }
+.ka-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ka-sort-ic::after { content: "\2195"; font-size: 12px; color: var(--line-strong); }
+.ka-sort:hover .ka-sort-ic::after { color: var(--muted); }
+th[aria-sort="ascending"] .ka-sort-ic::after { content: "\2191"; color: var(--accent); }
+th[aria-sort="descending"] .ka-sort-ic::after { content: "\2193"; color: var(--accent); }
+th[aria-sort] .ka-sort { color: var(--ink); }
+.ka-sortable td { padding: 9px 14px; border-top: 1px solid var(--rule); white-space: nowrap; color: var(--ink); }
+.ka-sortable td.ka-num { text-align: right; }
+.ka-sortable tr.ka-total td { font-weight: 600; border-top: 1px solid var(--line-strong); }
+.ka-sortable tbody tr:hover td { background: #FAFBF9; }
+
+/* action row under an answer */
+[class*="st-key-actions_"] { gap: 4px; align-items: center; }
+[class*="st-key-actions_"] button { border: 0; background: transparent; color: var(--ink-2); min-height: 36px;
+  padding: 0 12px; }
+[class*="st-key-actions_"] button:hover { background: var(--rule); color: var(--ink); }
+[class*="st-key-actions_"] button p { font-size: 13px; font-weight: 500; }
+[class*="st-key-actions_"] [data-testid="stFeedback"] { margin-left: auto; }
+
+/* Sources rail */
+.ka-rail-title { margin: 6px 0 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); }
+[class*="st-key-src_"] { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; gap: 10px; }
+.ka-src-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.ka-src-n { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px;
+  padding: 0 4px; border-radius: 6px; background: var(--badge); color: var(--accent-dark); font-size: 12px; font-weight: 600; }
+.ka-src-kind { font-size: 14px; font-weight: 600; color: var(--ink); }
+.ka-src-name { display: block; font-size: 13px; color: var(--ink); word-break: break-all; margin-bottom: 10px; }
+.ka-src-engine { display: block; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.ka-dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
+.ka-dl dt { color: var(--muted); }
+.ka-dl dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.ka-quote { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--badge); background: var(--page);
+  border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+[class*="st-key-src_"] [data-testid="stExpander"] details { border: 0; }
+[class*="st-key-src_"] [data-testid="stExpander"] summary { padding: 0; font-size: 13px; }
+[class*="st-key-src_"] [data-testid="stExpander"] summary p { color: var(--accent); text-decoration: underline;
+  text-underline-offset: 3px; font-weight: 500; font-size: 13px; }
+[class*="st-key-src_"] button { min-height: 36px; }
+.ka-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex;
+  flex-direction: column; gap: 10px; }
+.ka-card-title { font-size: 14px; font-weight: 600; color: var(--ink); }
+.ka-fresh-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--ink); }
+.ka-fresh-row > span:last-child { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.ka-fresh-fresh { color: var(--ok-text); }
+.ka-fresh-stale { color: var(--watch-text); }
+.ka-fresh-plain { color: var(--ink-2); font-weight: 400 !important; }
+.ka-disclaimer { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.ka-rail-empty { font-size: 13px; color: var(--muted); }
+
+/* ── composer (input card) ──────────────────────────────────────────────────────────────────────────────── */
+.st-key-composer { gap: 0; }
+.st-key-composer [data-testid="stChatInput"] { background: #fff; border: 1px solid var(--line-strong);
+  border-radius: 14px 14px 0 0; border-bottom: 0; box-shadow: 0 6px 24px rgba(20, 33, 29, 0.08); padding: 8px 8px 0 10px; }
+.st-key-composer [data-testid="stChatInput"] > div { background: transparent; border: 0; }
+.st-key-composer [data-testid="stChatInputTextArea"] { font-size: 16px; min-height: 52px; }
+.st-key-composer [data-testid="stChatInputSubmitButton"] { background: var(--accent); color: #fff; width: 44px;
+  height: 44px; border-radius: 10px; }
+.st-key-composer [data-testid="stChatInputSubmitButton"]:disabled { background: var(--accent); opacity: 0.55; }
+.st-key-composer [data-testid="stChatInputSubmitButton"] svg { fill: #fff; color: #fff; }
+.ka-composer-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: #fff;
+  border: 1px solid var(--line-strong); border-top: 0; border-radius: 0 0 14px 14px; padding: 4px 18px 14px;
+  box-shadow: 0 12px 24px rgba(20, 33, 29, 0.06); font-size: 12px; color: var(--ink-2); }
+.ka-chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; background: var(--chip);
+  font-size: 12px; color: var(--ink-2); }
+
+/* ── narrow windows: the rail drops under the thread (Streamlit stacks the columns) ─────────────────────── */
+@media (max-width: 1100px) {
+  /* wrapped under the thread: the rail is a full-width band, not a 360 px column stranded on the left */
+  .st-key-convo_body > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+    max-width: none; }
+}
+@media (max-width: 640px) {
+  [data-testid="stMainBlockContainer"] { padding: 3rem 1rem 2rem; }
+  .st-key-convo_head { margin: -0.5rem -1rem 0.5rem; padding: 12px 1rem; width: calc(100% + 2rem); }
+  .st-key-convo_body, .st-key-convo_head > [data-testid="stLayoutWrapper"] { max-width: none; }
+  .ka-user-bubble { max-width: 300px; }          /* design screen 03 (mobile chat) */
+  .ka-greeting h1 { font-size: 28px; }
+  .ka-kpi-value { font-size: 36px; }
+}
+
+/* ── Stage-2 quality risk (Phase M) ──────────────────────────────────────────────────────────────────────
+   Sits under the KPI row, beside the health score rather than inside it: the score is one check per watch
+   rule per factory, and folding a hundred and fifty per-file levels in would change what it means. */
+.ka-risk { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+  margin: 12px 0; display: flex; flex-direction: column; gap: 10px; }
+.ka-risk-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.ka-risk-title { font-size: 16px; font-weight: 600; color: var(--ink); }
+.ka-risk-count { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ka-risk-counts { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ka-risk-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+  padding-top: 10px; border-top: 1px solid var(--rule); }
+.ka-risk-subject { font-size: 14px; font-weight: 600; color: var(--ink); }
+.ka-risk-detail { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ka-risk-caveat { font-size: 12px; color: var(--muted); line-height: 1.5; padding-top: 8px;
+  border-top: 1px solid var(--rule); }

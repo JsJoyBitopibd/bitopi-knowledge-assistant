@@ -28,10 +28,11 @@ class ScriptedSQL(ChatModel):
     name = "fake"
 
     def __init__(self, replies):
-        self.replies, self.systems = list(replies), []
+        self.replies, self.systems, self.messages_seen = list(replies), [], []
 
     def _chat(self, messages, system, max_tokens, temperature):
         self.systems.append(system)
+        self.messages_seen += list(messages)
         return ChatReply(text=self.replies.pop(0), model="fake", stop_reason="stop")
 
 
@@ -102,3 +103,77 @@ def test_schema_rag_off_shows_no_raw_tables(wired):
     chat, _ = wired(["DATABASE: Demo\nSELECT TOP (5) ExportOrderID FROM rag.vw_ExportOrder"], **{"data.schema_rag": False})
     tools.generate_and_run("How many suppliers are in the supplier data?", _cat(), scope=Scope.unrestricted())
     assert "=== Other tables in" not in chat.systems[0] and "(none selected for this question)" in chat.systems[0]
+
+
+# ---- Phase Q: typed literals on the generated path -----------------------------------------------------------
+def _typed_cat():
+    """A view that declares Line as text, and a raw table whose kind nothing records."""
+    from ragbot.data.catalog import Catalog, Table, View
+    plan = View("rag.vw_PlanDay", "one row per plan and day", "The plan.", ["Line"],
+                {"Factory": "", "Line": "", "Style": "", "PlanDate": "", "DayTarget": ""},
+                column_kinds={"Factory": "text", "Line": "text", "Style": "text", "PlanDate": "date",
+                              "DayTarget": "int"})
+    legacy = Table("dbo.Legacy", "table", 10, "", [], [{"name": "Note", "type": "sql_variant"}])
+    return {"Demo": Catalog("Demo", "tsql", "SQLSERVER_CONN_DEMO", ["Use TOP (n)."], [plan], tables=[legacy])}
+
+
+def test_a_declared_text_column_is_quoted_before_the_statement_ever_runs(wired):
+    """The 11 Oct failure, prevented: the model writes Line = 2102 and the server never sees it."""
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (10) Buyer, Style FROM rag.vw_PlanDay "
+                       "WHERE Factory = 'TAL' AND Line = 2102"])
+    r = tools.generate_and_run("What style is running on TAL line 2102?", _typed_cat(), scope=Scope.unrestricted())
+    assert r.error is None and len(ran) == 1 and len(chat.replies) == 0      # one statement, one model call
+    assert "Line = '2102'" in ran[0] and "Line = '2102'" in r.sql
+
+
+def test_a_conversion_error_is_repaired_once_with_no_model_call(wired, monkeypatch):
+    """When no kind is recorded, the server's 22018 is answered by quoting every unknown literal and running
+    again — still inside the first attempt, so the model is not asked a second time."""
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (10) Note FROM dbo.Legacy WHERE Note = 2102"])
+    calls = {"n": 0}
+
+    def flaky(engine, sql, params, **kw):
+        calls["n"] += 1
+        ran.append(sql)
+        if "Note = 2102" in sql:
+            raise Exception("DataError: ('22018', \"Conversion failed when converting the nvarchar value "
+                            "'Remi Holdings Ltd.' to data type int. (245)\")")
+        return ["Note"], [["ok"]], datetime.now()
+
+    monkeypatch.setattr(tools, "cached_run", flaky)
+    r = tools.generate_and_run("note 2102", _typed_cat(), scope=Scope.unrestricted())
+    assert r.error is None and r.rows == [["ok"]]
+    assert calls["n"] == 2 and len(chat.replies) == 0            # two statements, still one model call
+    assert "Note = '2102'" in r.sql
+
+
+def test_a_failure_that_is_not_a_conversion_still_reaches_the_model_with_the_column_kinds(wired, monkeypatch):
+    chat, ran = wired(["DATABASE: Demo\nSELECT TOP (10) Style FROM rag.vw_PlanDay WHERE Line = '2102'",
+                       "DATABASE: Demo\nSELECT TOP (10) Style FROM rag.vw_PlanDay WHERE Line = '2102'"])
+    monkeypatch.setattr(tools, "cached_run",
+                        lambda *a, **k: (_ for _ in ()).throw(Exception("('HYT00', 'Query timeout expired (0)')")))
+    r = tools.generate_and_run("what style is on line 2102", _typed_cat(), scope=Scope.unrestricted())
+    assert r.error and "HYT00" in r.error
+    asked = [m["content"] for m in chat.messages_seen if m["role"] == "user"]
+    assert any("Column kinds of what the query read" in c and "Line (text)" in c for c in asked)
+
+
+def test_the_database_line_is_read_though_the_model_copies_the_dialect_label():
+    """Golden case 100 (2026-10-13). The prompt lists each database with its dialect, so the model wrote
+    "DATABASE: Hrms5Misami (tsql)". The name was matched exactly, found nothing, and the statement fell
+    through to the keyword-best database — BitopiSplint — whose guard then refused the HR view the model
+    had correctly chosen, and the question answered not-found."""
+    cats = {"BitopiSplint": None, "Inventory": None, "Hrms5Misami": None, "HR": None}
+
+    def pick(line):
+        return tools._split_database_line(f"{line}\nSELECT 1 FROM dbo.T", cats, "BitopiSplint")[0]
+
+    assert pick("DATABASE: Hrms5Misami (tsql)") == "Hrms5Misami"       # the reply that failed
+    assert pick("DATABASE: Hrms5Misami") == "Hrms5Misami"              # and the plain form still works
+    assert pick("DATABASE: [Hrms5Misami]") == "Hrms5Misami"
+    assert pick("DATABASE: hrms5misami (t-sql, read only)") == "Hrms5Misami"
+    assert pick("DATABASE: HR (tsql)") == "HR"                         # a label never matches a sibling
+    assert pick("DATABASE: Payroll2") == "BitopiSplint"                # nothing offered by that name
+    db, sql = tools._split_database_line("SELECT 1 FROM dbo.T", cats, "BitopiSplint")
+    assert db == "BitopiSplint" and sql == "SELECT 1 FROM dbo.T"       # no line at all: SQL kept whole
+    assert tools._split_database_line("DATABASE: HR\nSELECT 1", cats, "BitopiSplint")[1] == "SELECT 1"

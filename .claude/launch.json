@@ -15,6 +15,16 @@
       "name": "bitopi-chat-docker",
       "url": "http://localhost:8501",
       "port": 8501
+    },
+    {
+      "name": "bitopi-chat-dev",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "run", "--rm", "--no-deps", "--name", "ka-ui-dev", "-p", "8502:8501",
+                      "-v", "./src:/app/src", "-v", "./.streamlit:/app/.streamlit",
+                      "app", "streamlit", "run", "src/ragbot/app.py",
+                      "--server.port", "8501", "--server.address", "0.0.0.0",
+                      "--server.fileWatcherType", "poll", "--server.runOnSave", "true"],
+      "port": 8502
     }
   ]
 }

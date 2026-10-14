@@ -111,12 +111,14 @@ def test_answer_equals_stream_final(wire):
 
 def test_data_miss_clears_draft_before_documents_retry(wire, monkeypatch):
     """A data answer that ends not-found is retried against the documents; the not-found draft must
-    be cleared BEFORE the (slow) document search starts, not after it."""
+    be cleared BEFORE the (slow) document search starts, not after it. (Two results with real but irrelevant
+    rows reach the model; a single blank 0/NULL result takes the shorter path tested below.)"""
     import ragbot.data.tools as tools
     from ragbot.models import QueryResult
     wire("data", ["System doesn't have the data.", GOOD])
-    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
-        database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["n"], rows=[[0]])])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [
+        QueryResult(database="DB", engine="sqlserver", views=["rag.vw_X"], sql="SELECT 1", columns=["n"], rows=[[5]]),
+        QueryResult(database="DB", engine="sqlserver", views=["rag.vw_Y"], sql="SELECT 2", columns=["m"], rows=[[3]])])
     evs = list(orch.answer_stream("how many licences does the Group have?", scope=Scope.unrestricted()))
     names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
     retry_search = names.index("Stage:searching")
@@ -132,3 +134,145 @@ def test_the_writing_stage_names_its_sources_before_the_answer_arrives(wire):
     assert writing.sources == ["SOP p. 4"]
     first_token = next(i for i, e in enumerate(evs) if isinstance(e, Token))
     assert evs.index(writing) < first_token
+
+
+def test_a_blank_generated_scalar_goes_straight_to_the_documents(wire, monkeypatch):
+    """P0: SUM over no rows returns [[None]] — truthy, so it used to cost an answer-model call that said
+    not-found, and only then the documents search. Now it is no rows: one search, no model call for the data."""
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    logged = wire("data", [GOOD])                       # one reply: a data-side answer call would exhaust it
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
+        database="Inventory", engine="sqlserver", views=["dbo.vw_productItemBalance"], sql="SELECT SUM(x)",
+        columns=[""], rows=[[None]], databases_considered=["FM", "Inventory"])])
+    evs = list(orch.answer_stream("closing balance of 1178108 at company 02", scope=Scope.unrestricted()))
+    names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
+    assert "Replace" not in names and names.count("Stage:searching") == 1
+    assert evs[-1].answer.text == GOOD
+    assert logged[-1].databases_considered == ["FM", "Inventory"]
+
+
+def test_a_blank_generated_scalar_with_no_documents_is_not_found_without_a_model_call(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    logged = wire("data", [])                           # no reply available: any model call would raise
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
+        database="Inventory", engine="sqlserver", views=["dbo.X"], sql="SELECT COUNT(*)", columns=["n"], rows=[[0]])])
+    evs = list(orch.answer_stream("how many x", scope=Scope.unrestricted()))
+    assert evs[-1].answer.not_found and evs[-1].answer.text.startswith("System doesn't have the data.")
+
+
+def _repaired(monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    lookup = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="lookup",
+                         sql="SELECT DISTINCT TOP (20) [SLolcation] FROM dbo.Balance WHERE ItemCode = '1178108'",
+                         columns=["SLolcation"], rows=[["Central Store (Misami)"], ["Maintenance Store (Misami)"]])
+    main = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="generated",
+                       sql="SELECT TOP (200) SUM(GRNQty) - SUM(IssueQty) AS Balance FROM dbo.Balance WHERE ItemCode = '1178108' AND SLolcation = 'Maintenance Store (Misami)'",
+                       params={"SLolcation": "Maintenance Store (Misami)"}, columns=["Balance"], rows=[[0.875]],
+                       filters={"ItemCode": "1178108", "SLolcation": "Maintenance Store (Misami)"},
+                       corrections=[["SLolcation", "mantainance store", "Maintenance Store (Misami)"]], checked=True)
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [main, lookup])
+
+
+def test_a_repaired_result_is_templated_with_a_cited_note_and_no_model_call(wire, monkeypatch):
+    """P2: the misspelled store was corrected from the recorded values; the answer says so, citing the lookup."""
+    wire("data", [])
+    _repaired(monkeypatch)
+    evs = list(orch.answer_stream("closing balance of 1178108 in the mantainance store", scope=Scope.unrestricted()))
+    a = evs[-1].answer
+    assert not a.not_found and a.usage.calls == 0 and a.text.startswith("Balance: 0.875 [D1].")
+    assert '"mantainance store" in the question was matched to "Maintenance Store (Misami)" as recorded in the data [D2].' in a.text
+    assert [r.marker for r in a.references] == ["D1", "D2"] and a.results[1].tool == "lookup"
+
+
+def test_a_checked_empty_result_is_not_found_in_the_users_words_with_chips_and_no_document_search(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: pytest.fail("the documents cannot rescue a checked data question"))
+    empty = QueryResult(database="Inventory", engine="sqlserver", views=["dbo.Balance"], tool="generated", sql="SELECT 1",
+                        columns=["Balance"], rows=[[None]], filters={"ItemCode": "1178108", "SLolcation": "xyz store"},
+                        candidates=["Central Store (Misami)", "Maintenance Store (Misami)"], checked=True)
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [empty])
+    evs = list(orch.answer_stream("closing balance of 1178108 in the xyz store", scope=Scope.unrestricted()))
+    a = evs[-1].answer
+    assert a.not_found and a.usage.calls == 0
+    assert a.text == ("System doesn't have the data. I checked Inventory (store system) for '1178108', 'xyz store' and found "
+                      "no matching records; please check the number, name or spelling in the question.")
+    assert a.follow_ups[:2] == ["closing balance of 1178108 in the Central Store (Misami)",
+                                "closing balance of 1178108 in the Maintenance Store (Misami)"]
+
+
+def test_a_fixed_tool_zero_is_still_an_answer(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    from ragbot.models import QueryResult
+    wire("data", [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [QueryResult(
+        database="P", engine="sqlserver", views=["rag.vw_PPMMeeting"], sql="SELECT 1", tool="some_count_tool",
+        columns=["Meetings"], rows=[[0]])])
+    evs = list(orch.answer_stream("how many meetings", scope=Scope.unrestricted()))
+    assert not evs[-1].answer.not_found and "0" in evs[-1].answer.text
+
+
+# ---- Phase Q: a query that FAILED (not one that returned nothing) ------------------------------------------
+_HYT00 = "('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]Query timeout expired (0) (SQLExecDirectW)')"
+_CAST = ("DataError: ('22018', \"[22018] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Conversion failed "
+         "when converting the nvarchar value 'Remi Holdings Ltd.' to data type int. (245) (SQLExecDirectW)\")")
+
+
+def _failed(tool, error, database="VistaQ_Default_RHL", **kw):
+    from ragbot.models import QueryResult
+    return QueryResult(database=database, engine="sqlserver", views=[], sql="SELECT 1", tool=tool,
+                       columns=[], rows=[], error=error, **kw)
+
+
+def test_a_timed_out_fixed_tool_says_what_happened_and_never_searches_the_documents(wire, monkeypatch):
+    """The 11 Oct 2026 TAL dashboard question: the tool timed out at 30 s, then a 10 s document search and an
+    answer-model call produced a generic not-found — 45.3 s in all. Now the reason is the answer."""
+    import ragbot.data.tools as tools
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve",
+                        lambda q, where=None, scope=None: pytest.fail("a failed tool must not search the documents"))
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [
+        _failed("production_by_line_window", _HYT00, params={"window": "today", "factory": "TAL"})])
+    a = orch.answer("TAL line wise production summary of today with style showing", scope=Scope.unrestricted())
+    assert a.not_found and a.usage.calls == 0 and a.error_kind == ""
+    assert a.text == ("System doesn't have the data. The query took longer than the time allowed. "
+                      "The records may still be in VistaQ; press Refresh data to try again.")
+    assert any("HYT00" in w for w in a.warnings)
+
+
+def test_a_failed_query_on_a_question_that_names_a_line_skips_the_documents(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve",
+                        lambda q, where=None, scope=None: pytest.fail("the documents hold no line plans"))
+    monkeypatch.setattr(tools, "answer_from_data",
+                        lambda q, user="", refresh=False, scope=None: [_failed("generated", _CAST)])
+    a = orch.answer("What style is running on TAL line 2102?", scope=Scope.unrestricted())
+    assert a.not_found and a.usage.calls == 0
+    assert a.text.startswith("System doesn't have the data. The query could not match a number in the question")
+
+
+def test_a_failed_query_without_a_named_record_still_falls_back_to_the_documents(wire, monkeypatch):
+    """The router sends policy questions phrased as counts to the database; a PDF may still answer them."""
+    import ragbot.data.tools as tools
+    wire("data", [GOOD])
+    monkeypatch.setattr(tools, "answer_from_data",
+                        lambda q, user="", refresh=False, scope=None: [_failed("generated", _CAST, database="FM")])
+    evs = list(orch.answer_stream("how many licences does the Group have?", scope=Scope.unrestricted()))
+    names = [type(e).__name__ + (":" + e.name if isinstance(e, Stage) else "") for e in evs]
+    assert names.count("Stage:searching") == 1 and evs[-1].answer.text == GOOD
+
+
+def test_a_guard_refusal_is_not_a_database_failure_so_the_agent_sentence_speaks(wire, monkeypatch):
+    import ragbot.data.tools as tools
+    wire("data", [])
+    monkeypatch.setattr(orch, "retrieve", lambda q, where=None, scope=None: [])
+    monkeypatch.setattr(tools, "answer_from_data", lambda q, user="", refresh=False, scope=None: [
+        _failed("generated", "GuardError: forbidden token 'update'")])
+    a = orch.answer("What style is running on TAL line 2102?", scope=Scope.unrestricted())
+    assert a.not_found and "Refresh data" not in a.text and "time allowed" not in a.text

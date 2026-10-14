@@ -5,6 +5,7 @@ paths:
   catalog_dir: config/catalog
   fixed_tools: config/fixed_tools.yaml
   agents_dir: config/agents         # domain agents (Phase K, docs/AGENTS_DESIGN.md)
+  reference_dir: config/reference   # entity dictionaries: companies, store aliases, metrics (Phase P1)
   golden_set: tests/golden.jsonl
   scopes_file: config/scopes.yaml   # AD group -> what its members may see (copy scopes.example.yaml)
   users_file: config/users.yaml     # local sign-in users, auth.provider: local only (copy users.example.yaml)
@@ -60,9 +61,23 @@ data:
   sql_retries: 1
   result_cache_ttl_seconds: 180   # SQL result cache; hits keep their original as-of time; 0 = off
   schema_rag: true                # show generated SQL the discovered tables a question needs (Phase C5)
-  schema_rag_k: 6                 # tables selected per database (+ up to 6 foreign-key neighbours)
+  schema_rag_k: 6                 # tables selected per database (+ up to 6 foreign-key neighbours); a catalog may set its own
+  schema_rag_max_tables: 14       # at most this many tables per database in the prompt, neighbours included (P1)
   big_table_rows: 1000000         # raw tables above this need a WHERE clause (guard)
   max_databases_per_question: 2   # catalogs shown to the SQL model per question, ranked by data/db_router.py (J1)
+  max_databases_per_question_max: 3   # one more when the next catalog ties the last pick on keywords (P1)
+  cross_database_names: false     # P3: let a model-written statement read a sibling database on the same SQL Server
+                                  # instance as Database.schema.table (raw offered tables only, never rag.* views,
+                                  # unrestricted users only; the guard checks each against its own catalog). Owner's call.
+  values:                         # value index (P2.1, data/values.py): recorded names matched against the question
+    enabled: true
+    fuzzy_cutoff: 0.85            # difflib ratio a close match must reach ('mantainance store' ~ 'Maintenance Store' = 0.88)
+  empty_retry:                    # self-correction after a model-written statement returns nothing (P2.2, data/empty_retry.py)
+    enabled: true
+    max_model_calls: 2            # extra SQL-model calls per question, only after an empty or failed first try (owner, 2026-10-08)
+    max_seconds: 20               # wall clock from the first statement; no re-ask starts after it
+    lookup_values: 20             # DISTINCT values read per filtered text column
+    lookup_columns: 3             # text columns looked up per statement
   sql_cache_ttl_seconds: 86400    # question -> generated SQL replayed within the day (J2); 0 = off
 
 llm:
@@ -70,8 +85,18 @@ llm:
   max_tokens_answer: 2048      # Gemini counts thinking tokens against this budget
   max_tokens_rewrite: 256
   max_tokens_route: 64
-  max_tokens_sql: 1536
+  max_tokens_sql: 4096         # Gemini thinks before writing SQL; at 1536 a third of the calls hit the limit and retried (+3 s)
   max_chunks_to_llm: 8
+  # Phase N4: which tier runs which task (the call's `purpose`). A task named here runs on that tier;
+  # one that is not runs on main — the safe end, never the cheap one. Changing a task's tier is config.
+  tiers:
+    small: [rewrite, route, extract]
+    main: [answer, sql, judge, repair]
+    executive: [recommend, prioritise]
+  daily_budget: 500            # provider requests per day this deployment may spend (free tier: 500 per model);
+                               # the admin caption shows "calls since 13:00 n/budget", scripts/eval.py --budget refuses to overspend
+  quota_reset_tz: America/Los_Angeles   # where the provider's day starts: Gemini resets at midnight Pacific,
+                                        # 13:00 in Dhaka under US daylight time and 14:00 otherwise
 
 answer:
   not_found_text: "System doesn't have the data."
@@ -84,9 +109,10 @@ answer:
 ui:
   title: "Bitopi Knowledge Assistant · pilot"
   suggestions:
-    - "What is the PCD approval SOP?"
+    - "Show me the QC summary today"
+    - "Which lines are above the DHU target today?"
     - "Which export orders ship this month?"
-    - "How many Kaspersky licences does the Group have?"
+    - "What is the PCD approval SOP?"
     - "What is the password change policy?"
   utc_offset_hours: 6             # factory time for the greeting (Bangladesh, no daylight saving)
 

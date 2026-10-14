@@ -14,6 +14,8 @@ _CONTEXT_DEP = re.compile(r"\b(it|its|it's|that|this|those|these|they|them|their
 
 
 def _needs_rewrite(latest: str) -> bool:
+    if re.match(r"^\s*(select|with)\b", latest, re.I):
+        return False          # a pasted SQL statement stands alone; "this"/"that" inside it is not a reference
     if _CONTEXT_DEP.search(latest) or re.match(r"^\s*(and|also|what about|how about|then|so)\b", latest, re.I):
         return True
     # A short question that fully matches a fixed tool ("What is the next PCD?", "TAL next PCD") already

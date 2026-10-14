@@ -50,10 +50,11 @@ keywords:
 - costs
 - bill
 - bills
-- item
 - group
 - check
 - balance
+- ledger balance
+- account balance
 - periodic
 - sku
 exclude_tables:

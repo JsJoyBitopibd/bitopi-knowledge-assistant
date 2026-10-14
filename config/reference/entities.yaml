@@ -1,0 +1,36 @@
+# Entity dictionaries (Phase P1) — loaded by src/ragbot/data/entities.py; bind-mounted into the app, so an edit
+# needs no rebuild. The companies were read from SystemManager.dbo.Company (12 rows) on 2026-10-09 and match
+# Inventory.dbo.vwCompany_Info; `factory` is the code in scope.factory_codes whose users may see that company's
+# rows (companies without one are visible to all-factory users only — Misami has no factory code yet).
+# `aliases` are matched as whole words, case-insensitively; keep them to names staff really type.
+companies:
+  - { code: "01", name: BITOPI GROUP,                    short: CORP, aliases: [bitopi group, corporate] }
+  - { code: "02", name: MISAMI Garments Ltd.,            short: MGL,  aliases: [misami, misami garments] }
+  - { code: "03", name: REMI Apparels Ltd.,              short: RAL,  aliases: [remi apparels] }
+  - { code: "04", name: Baridhi Garments Ltd.,           short: BGL,  aliases: [baridhi, baridhi garments], factory: BGL }
+  - { code: "05", name: STELLENT Washing Ltd.,           short: SWL,  aliases: [stellent, stellent washing] }
+  - { code: "06", name: TARASIMA APPARELS LTD.,          short: TAL,  aliases: [tarasima, tarasima apparels], factory: TAL }
+  - { code: "07", name: Remi Farms,                      short: RFS,  aliases: [remi farms] }
+  - { code: "08", name: Kaifeng Textiles Ltd,            short: KTL,  aliases: [kaifeng, kaifeng textiles], factory: KTL }
+  - { code: "09", name: REMI HOLDINGS LTD.,              short: RHL,  aliases: [remi holdings, remi holding], factory: RHL }
+  - { code: "10", name: TAR Holdings Limited,            short: THL,  aliases: [tar holdings] }
+  - { code: "11", name: CROYDON-KOWLOON DESIGNS LIMITED, short: CKDL, aliases: [croydon kowloon, croydon-kowloon, ckd], factory: CKDL }
+  - { code: "12", name: Tria Industries Ltd,             short: TRIA, aliases: [tria, tria industries] }
+
+# Store names as recorded in Inventory.dbo.UserDefined (DisplayMember 'Inventory Location'), with the words staff
+# use for them. The recorded names carry the company in brackets: "Maintenance Store (Misami)".
+store_aliases:
+  maintenance store: [maint store, mnt store, maintenance, mantainance store, maintainance store]
+  central store: [main store, central]
+  general store: [general]
+  utility store: [utility, civil and utility store]
+
+# What a metric word means in the data (P2 feeds these to the schema index and the SQL prompt).
+metrics:
+  closing balance: { columns: [ClosingBalance, ClosingStock, Balance], view: rag.vw_StockBalance, database: Inventory }
+  stock balance:   { columns: [ClosingBalance, ClosingStock, Balance], view: rag.vw_StockBalance, database: Inventory }
+  stock in hand:   { columns: [ClosingBalance, ClosingStock], view: rag.vw_StockBalance, database: Inventory }
+  store:           { columns: [StoreName, LocationName, LocationID, ReceiveTo, IssueFrom, IssueTo] }
+  company:         { columns: [CompanyID, Com, CompanyName, CompanyShortName] }
+  item code:       { columns: [ItemCode] }
+  non production:  { columns: [NonProductionItem, ItemCategoryName, ProductType] }

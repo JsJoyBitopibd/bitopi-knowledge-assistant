@@ -41,8 +41,54 @@ def test_document_nouns_still_win(cats, monkeypatch):
     assert router.route("Which SOP covers GRN approval?") == "documents"     # 'sop' is a document noun
 
 
+def test_find_get_fetch_are_list_cues_even_after_please(cats, monkeypatch):
+    """P1: 'please find the closing balance …' used to pay a routing call (1.09 s on 8 Oct 2026)."""
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    assert router.route("please find the GRN of item 1178108") == "data"
+    assert router.route("Can you get the stock of fabric roll 12?") == "data"
+    assert router.route("fetch the vouchers of September") == "data"
+
+
 def test_generic_words_and_statements_still_ask_the_model(cats, monkeypatch):
     small = SaysData()
     monkeypatch.setattr(router, "get_small_chat", lambda: small)
     assert router.route("List all file") == "data" and small.calls == 1        # 'file' is too generic to decide
     assert router.route("Tell me about vouchers") == "data" and small.calls == 2   # no count/list cue
+
+
+
+
+def test_a_named_line_or_a_running_question_is_data_without_the_model(cats, monkeypatch):
+    """Phase Q: no PDF records which style a sewing line runs today, so these need no routing call."""
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    for q in ["What style is running on TAL line 2102?", "DHU of line 2322 yesterday",
+              "output of unit 03 today", "which style is running on line 2102"]:
+        assert router.route(q) == "data", q
+
+
+def test_a_document_noun_still_wins_over_a_line_number(cats, monkeypatch):
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    assert router.route("Which SOP covers line 2102 balancing?") == "documents"
+    assert router.route("What is the TAL holiday policy?") == "documents"
+
+
+def test_a_factory_with_database_vocabulary_is_data_but_a_factory_alone_asks_the_model(cats, monkeypatch):
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    assert router.route("TAL stock of fabric roll") == "data"
+    small = SaysData()
+    monkeypatch.setattr(router, "get_small_chat", lambda: small)
+    assert router.route("Tell me about TAL") == "data" and small.calls == 1
+
+
+def test_an_overtime_rate_is_data_without_the_model_and_policy_words_still_win(cats, monkeypatch):
+    """Phase R / golden case 44: the HRMS holds the overtime slab (dbo.OTSlab). Left to the model, the same
+    question was routed documents on 13 Oct and data on 14 Oct from an identical prompt."""
+    monkeypatch.setattr(router, "get_small_chat", lambda: NoModel())
+    for q in ["What is the overtime rate for cutting staff?", "what is the OT rate", "show the EOT slab",
+              "Overtime rates for sewing operators"]:
+        assert router.route(q) == "data", q
+    assert router.route("What is the overtime policy for cutting staff?") == "documents"
+    assert router.route("Who approves overtime for the cutting section?") == "documents"
+    small = SaysData()
+    monkeypatch.setattr(router, "get_small_chat", lambda: small)
+    assert router.route("How much overtime did cutting do?") == "data" and small.calls == 1   # no rate: the model

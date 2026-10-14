@@ -3,3 +3,7 @@
 {"id": "s3", "group": "sql", "q": "Which factory had the most PCD changes in the last 30 days?"}
 {"id": "s4", "group": "sql", "q": "How many PPM meetings were rescheduled this month?"}
 {"id": "s5", "group": "sql", "q": "How many active buyers are there in the group?"}
+{"id": "s6", "group": "sql", "q": "Which company received the most of item 1178108, by base quantity?"}
+{"id": "s7", "group": "sql", "q": "How many non-production items are mapped for company 02?"}
+{"id": "s8", "group": "sql", "q": "What is the number of manpower present today?"}
+{"id": "s9", "group": "sql", "q": "how many employees are in the ERP and IT department?"}

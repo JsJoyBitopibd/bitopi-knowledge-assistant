@@ -80,6 +80,16 @@ def test_single_day_windows():
     assert tools._date_window("today") == (today, today + timedelta(days=1))
     assert tools._date_window("yesterday") == (today - timedelta(days=1), today)
     assert tools._date_window("tomorrow") == (today + timedelta(days=1), today + timedelta(days=2))
+    assert tools._date_window("toady") == (today, today + timedelta(days=1))      # the typo staff type
+
+
+def test_last_week_and_last_month():
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    assert tools._date_window("last week") == (monday - timedelta(days=7), monday)
+    first = today.replace(day=1)
+    start, end = tools._date_window("last month")
+    assert end == first and start.day == 1 and start < end and (end - start).days in (28, 29, 30, 31)
 
 
 def test_default_window_and_today_param():
@@ -185,3 +195,31 @@ def test_sql_prompt_carries_the_charter_only_with_an_agent():
     raw = prompt("sql_generate")
     assert "{agent}" in raw
     assert charter_text("") == ""   # no agent: the placeholder becomes an empty line
+
+
+def test_a_keyword_tie_is_broken_by_the_catalogs_the_router_picked():
+    """Phase Q: "What style is running on TAL line 2102?" gives production ("line") and order ("style") one hit
+    each. The router picked VistaQ, which only the production agent owns, so its charter reaches the prompt."""
+    from ragbot.domain_agents.registry import load_agents, pick_agent
+    agents = load_agents()
+    q = "What style is running on TAL line 2102?"
+    assert pick_agent(q, agents=agents) is None                       # a tie, as before
+    picked = pick_agent(q, agents=agents, prefer_catalogs=["VistaQ_Default_RHL", "PlanningTNA"])
+    assert picked is not None and picked.name == "production"
+    # a preference neither tied agent owns leaves the tie unbroken
+    assert pick_agent(q, agents=agents, prefer_catalogs=["HR"]) is None
+
+
+def test_a_headcount_question_that_names_a_factory_still_reaches_hr():
+    """The miss found by the 2026-10-13 gate eval (golden case 100). "how many active employees does the
+    group have, by factory?" gave hr one hit (employees) and order one (factory). The tie went to order
+    because the router had already ranked BitopiSplint first, so Hrms5Misami was never put in front of the
+    SQL model, the guard refused dbo.vwAllCompanyEmployeeList, and the question answered not-found. The
+    tie-break reads the ranking, so a wrong ranking confirmed itself: hr has to win on its own words."""
+    agents = load_agents()
+    q = "how many active employees does the group have, by factory?"
+    assert pick_agent(q, agents=agents).name == "hr"
+    # the ranking that caused the miss must not be able to take the question back
+    assert pick_agent(q, agents=agents, prefer_catalogs=["BitopiSplint", "Inventory"]).name == "hr"
+    # and the new words stay inside this domain: an order question that names a factory is untouched
+    assert pick_agent("How many orders shipped from the TAL factory last week?", agents=agents).name != "hr"

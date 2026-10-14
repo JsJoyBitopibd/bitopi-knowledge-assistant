@@ -33,6 +33,8 @@ services:
     image: bitopi-assistant:1.0
     depends_on:
       - app
+    healthcheck:
+      disable: true     # the image's probe is the Streamlit port; this service has none (it showed "unhealthy")
     command: ["python", "scripts/ingest_worker.py"]
     env_file: .env
     volumes:
@@ -43,9 +45,13 @@ services:
     restart: unless-stopped
 
   aggregates:
+    # Also the value index (config/aggregates.yaml `entity:` specs, Phase P2): recorded store, company and category
+    # names the app matches a question against. Mount config/ (docker-compose.override.yml) so edited specs count.
     image: bitopi-assistant:1.0
     depends_on:
       - app
+    healthcheck:
+      disable: true
     command: ["python", "scripts/refresh_aggregates.py", "--every", "24"]
     env_file: .env
     volumes:
@@ -56,12 +62,23 @@ services:
   watch:
     # Phase L: runs every agent's watch rules (config/agents/*.yaml) every 60 minutes and stores the signals in
     # data/index/signals.db for the morning brief. Guarded SELECTs over rag.* views only; no model call.
+    # Phase M: --risk-daily also scores and stores the quality risk levels, on the first tick of each day.
+    # Without it no level is stored and the Stage-2 backtest has nothing to read.
     image: bitopi-assistant:1.0
     depends_on:
       - app
-    command: ["python", "scripts/watch.py", "--every", "60"]
+    healthcheck:
+      disable: true
+    command: ["python", "scripts/watch.py", "--every", "60", "--risk-daily"]
     env_file: .env
     volumes:
       - ./data/index:/app/data/index
+      # The rules the watcher runs live in config/, not in the image: without these mounts it keeps
+      # running the rule set that was baked in at build time and nothing says so. Confirmed on
+      # 2026-10-14 — the running watcher had none of the day's new rules. Only directories that
+      # exist in the repo are mounted here: naming a missing FILE makes Docker create a directory.
+      - ./config/agents:/app/config/agents:ro
+      - ./config/rules:/app/config/rules:ro
+      - ./config/catalog:/app/config/catalog:ro
     mem_limit: 1g
     restart: unless-stopped

@@ -588,7 +588,38 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
   day, all and by factory. `rag.vw_LineDailyOutput` now has `Defects` (DHU numerator) and
   `DefectivePcs`; it had called the defect count "defective pieces".
 
-## Phase M — Stage 2: risk levels → v1.13.0
+## Phase M — Stage 2: risk levels — **built 2026-10-14, scoped to the Quality domain**
+
+Built for Quality only, because the Stage-1 gate is per domain and only Quality passes it: the other
+five rest on data that has stopped (order shipment status unmaintained on every past-ship order,
+goods receipts 52 days stale, the LC close flag wrong on 96%, the daily line copy 23 days stale, HR
+attendance 34 days stale). A risk engine on those would publish confident levels from data weeks old.
+`config/data_quality.yaml` now has six `agent: quality` checks so that gate is evidenced rather than
+merely asserted; the one finding is a VistaQ summary job 15 days behind, on tables no answer reads.
+
+**Two deviations from the plan above, both deliberate.**
+
+1. *Thresholds are not "rules from the interviews".* Amber is read live from VistaQ's own
+   `dbo.Threshold` (DHU 3.85, reject 1%), so the factories are measured against the number they set
+   for themselves, and `risk.drift()` reports when the two stop matching. Only red is provisional,
+   and it is labelled as such everywhere it appears. First pass is deliberately not a rule at all:
+   `FTPRateThreshold` is NULL, so inventing an amber for it would fabricate the one number this
+   design is careful not to fabricate.
+2. *Levels are not folded into the health score*, which this plan asked for. The score is one check
+   per watch rule per factory — about a dozen numbers; adding 151 per-file levels would swamp it,
+   change what it means overnight and make it incomparable with the history already stored. The risk
+   block stands beside it with its own denominator.
+
+**The outcome is final quality at completion**, not ship dates: the order data is unmaintained, so a
+shipping outcome would measure the wrong thing badly. Settlement is measured against the newest day
+VistaQ itself holds, never the clock, or a feed outage would settle every open file at once.
+
+What was built: M0 the VistaQ reachability probe · M1 six checks + a data-age watch rule ·
+M2 `config/rules/quality.yaml` + validator · M3 the pure engine · M4 `risk_run`/`prediction` sibling
+tables · M5 the daily job and the outcome pass · M6 the brief block and the cited note on an answer.
+Detail and evidence per step: `docs/PROGRESS.md` Phase M.
+
+### The plan as originally written
 
 - **M1 rules from the interviews** (run alongside K and L): `config/rules/<dimension>.yaml` for
   material, production, quality, shipping, finance (thresholds and the reason text);
@@ -610,10 +641,16 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
   `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged.
 - **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
   recommendation); the outcome is recorded as in M3.
-- **N4 model gateway.** `get_model(task)` in `src/ragbot/llm/__init__.py` with tiers in
-  `settings.yaml` (small: rewrite, route; main: answers, SQL; executive: recommendations,
-  cross-domain ranking); on `LLMError` quota or timeout, one retry on a fallback provider from
-  `.env`. `get_chat()` and `get_small_chat()` stay as thin wrappers. Every call still logged.
+- **N4 model gateway — built 2026-10-14, ahead of N1–N3.** `get_model(task)` in
+  `src/ragbot/llm/__init__.py` with tiers in `settings.yaml` (`llm.tiers`; small: rewrite, route;
+  main: answers, SQL, judge; executive: recommendations, cross-domain ranking). On an `LLMError`
+  of kind quota or timeout, one retry on a fallback provider from `.env` (`LLM_FALLBACK_*`);
+  never on auth, which would fail identically and hide the cause, and never on a stream that has
+  already shown deltas, which would write the answer twice. `get_chat()` and `get_small_chat()`
+  stay as thin wrappers. Every call still logged — a fallback appears as two rows in `calls.csv`.
+  Taken out of order because Phase M is blocked on stale data and on the interviews, while this is
+  pure code, and because its absence stopped the work three times (28 Sep outage, 29 Sep and 9 Oct
+  spent quota, 13 Oct gate deferred overnight). Not armed: `LLM_FALLBACK_PROVIDER` is empty.
 - Gate: as above, plus gateway tests with fake providers (fallback on quota, no fallback on auth),
   and recommendation eval cases at 100% citations.
 
@@ -626,3 +663,194 @@ Prerequisite: the server-side DENYs regenerated for the 15 newer databases (open
   "delete" requests are still refused.
 - Gate: as above, plus a test that the code has no mail, webhook or ticket-system client, and the
   existing refusal tests unchanged.
+
+---
+
+# Phase P — right the first time, then self-correct (after v1.12.0)
+
+Asked for on 2026-10-08: "optimize the chatbot so it can reply faster with critical operations and with
+accurate data; if the user needs data from joining one database to another it can give". The case that
+prompted it (request `394796addf6e`, 8 Oct 15:08) — the closing balance of item 1178108 at Misami's
+maintenance store — was answered "System doesn't have the data." in 23.3 s and 4 model calls although the
+item has 8 receipts and 22 issues. The full diagnosis, the owner's decisions (closing balance = live ledger
+receipts minus issues in base units; nightly value sampling approved; at most 2 extra model calls, only after
+an empty or failed first try) and the design are in the approved plan (session of 2026-10-08/09); the
+stages and gates are tracked in `docs/PROGRESS.md` "Phase P".
+
+- **P0 hygiene and observability.** A model-written statement that returned nothing (0 rows, or one
+  NULL/0/empty cell) is no longer the day's cached answer: it is kept only `data.result_cache_ttl_seconds`
+  (180 s), so a repeat within minutes replays without a model call and a repeat later is generated afresh
+  (the 15:17 follow-up replayed the NULL for nine minutes). `TTLCache.pop` replaces the no-op
+  `put(key, None, 0)`. The orchestrator treats such a result as no rows (`[[None]]` is truthy) and goes to
+  the documents directly instead of spending an answer-model call first. Logs: `sql.csv` gains `database`;
+  new `logs/sql_gen.csv` records every SQL attempt (kind generate/replay/retry/guard/error, the databases
+  shown, the model's `DATABASE:` line, the raw reply, guard and database errors, stop reason); `chat.csv`
+  gains `databases_considered` (filled on a not-found too). A quota gauge (`ragbot/quota.py`: today's rows in
+  `calls.csv` against `llm.daily_budget`) in the admin caption and `scripts/eval.py --budget`. Tests write
+  their logs to a temp folder (`tests/conftest.py`). Compose mounts for prompts, tools, agents, aggregates
+  and `config/reference` so P1's config edits need no rebuild.
+- **P1 right the first time, config-first.** Read-only fact finding (store master, company 02, the user's
+  own sums); Inventory vocabulary (keywords, `synonyms:`, `hints:`, `table_notes:`), FM drops the bare `item`
+  keyword, `config/reference/entities.yaml`; router fixes (compound tokens `companyid` → `company id`,
+  SQL reserved words stripped from pasted statements, tie-break by table-name share, an adaptive third
+  catalog, list cues `find/get/fetch/give/show`, pasted SQL guarded as-is); a column-word signal in the schema
+  index with a per-catalog `schema_rag_k`; curated Inventory views (`rag.vw_StockBalance` = receipts minus
+  issues per company, store, item and UOM; snapshot, receipts, issues, item, store, company); Inventory
+  fixed tools (stock balance, GRN, issues, GRN+issue, stores holding an item, item by code) and an
+  Inventory agent that states the data age; scope and golden cases.
+- **P2 self-correction on an empty result, bounded.** Nightly value index (`values_*` aggregate specs,
+  scope-filtered fuzzy lookup); `data/empty_retry.py`: guarded DISTINCT lookups on text filters, exact hit =
+  true zero, unique close match = corrected re-run with a cited disclosure sentence, one table-swap re-ask
+  for digit-only filters, one informed re-ask with ≤ 50 values; templated not-found in the user's words with
+  candidate chips and Refresh; at most 2 extra model calls, 20 s wall clock, `both` route excluded.
+- **P3 cross-database.** A decision table per connection group in `docs/DATA_ACCESS.md`; fixed-tool
+  companion merge in Python (`[D1][D2]`, both results kept so every value verifies); nightly local master
+  copies joined in SQLite; three-part names for same-server catalogs behind `data.cross_database_names`
+  (default off, raw offered tables only, never `rag.*`, unrestricted scope only) — the owner decides.
+- Gate per stage: `pytest`; `scope_check.py` 0 leaks; data/both eval no drop > 5 points; the two 8 Oct
+  questions through `scripts/ask.py`; `latency.py --group sql` p50 within 0.5 s of 5.98 s; P3 ends with the
+  full golden set and `v1.13.0`.
+
+# Phase Q — questions understood the way staff ask them (after Phase P)
+
+Asked for on 2026-10-11, after three questions in the app. "What style is running on TAL line 2102?" was
+answered "System doesn't have the data." twice (13.2 s, then 26.0 s). "TAL line wise production summary of
+today with style showing" was answered the same way after 45.3 s, while the identical question for *all*
+factories answered in 8.3 s. The owner asked for the chat to be centred on every screen, for the assistant to
+understand that TAL is a factory and 2102 a line, for it to join line → style → buyer by itself, and for all
+of this across every database, accurately and in time.
+
+The logs gave four causes, none of them about missing data:
+
+1. **Nothing read the question's nouns.** "TAL" and "line 2102" reached the SQL model as plain words. It wrote
+   the right query on the right view with `Line = 2102` — and `Line` holds `dbo.Workspace.WorkspaceName`, so
+   SQL Server cast every workspace name and failed on 'Remi Holdings Ltd.' (22018/245). Its one retry moved to
+   another database and hit the same thing on 'Pilot 1'.
+2. **A factory outside the user's scope was silent.** The first ask ran with the Factory pill on BGL, so every
+   view was filtered to BGL and a TAL question could only return nothing. Fixed tools say so; generated SQL did
+   not.
+3. **A failed query fell through to the documents.** `orchestrator.py` dropped errored results before asking
+   "did a tool run?", so a 30 s timeout or a type error was followed by a 10 s document rerank and an
+   answer-model call that could only repeat the not-found. `data/errors.py:friendly_db` was never called.
+4. **The factory-filtered dashboard was pathologically slow**, and no tool could answer a question about one
+   named line at all — the shared `unless` handed every such question to the model by design.
+
+What was built, in the order it was built (`docs/PROGRESS.md` "Phase Q" carries the evidence per task):
+
+- **U3 centred chat.** The thread and the Sources rail are one block capped at 1,120 px and centred, with the
+  designer's own proportions; below ~1,100 px the rail wraps under the thread and spans its width; the phone
+  keeps its 16 px gutters and the 300 px bubble. Stylesheet only.
+- **Q5 a failed query says why.** The error list and "did a tool run" are read before errored results are
+  dropped. A data question whose query failed, and which named a record or matched a tool, is answered with the
+  reason and Refresh data — no document search, no model call. `error_kind` stays empty so the action row and
+  the chips survive.
+- **Q4 fast factory filter.** The two dashboard tools drop the `(@factory = '' OR …)` catch-all that SQL Server
+  planned so badly; they read every factory and keep the asked one in Python. Only parameters a statement uses
+  are bound, so one cached result serves every factory of a scope (10-minute TTL, the read time always shown).
+- **Q3 a named line is answered from the plan.** Four tools take the line, factory or style as a parameter:
+  the style running on a line, that line's quality, the lines a style runs on, and every line's planned style.
+  `rag.vw_PlanDay` gains StyleName, Color, FileNo and OrderQty; the per-line dashboard names each line's buyer
+  and style; the catalog gains the plan vocabulary, table notes and the rule that Line is text. The `VISTAQ`
+  prototype catalog is out of routing.
+- **Q1/Q6 the records a question names.** One parser (`data/entities.py`) reads factory, line, unit, style,
+  EO/PO/file and company, with no model call: it feeds the tools' parameters, a "Records the question names"
+  block in the SQL prompt, the scope refusal for generated SQL, the router (a named line or unit needs no
+  routing call) and the agent tie-break.
+- **Q2 typed literals.** Curated views declare what their columns hold and raw tables take it from the
+  database; a bare number compared to a text column is quoted before the guard runs again, and once more after
+  a conversion error — with no model call. The retry message carries the column kinds. The SQL retry and the
+  empty-result repair share one budget of two extra calls.
+- **Q7 joins that exist.** A bare `Id` primary key no longer proposes `A.Id = B.Id` for every pair; a generic
+  key proposes the column naming the table it points at, a distinctive key keeps the same-name rule, and a
+  declared foreign key is not repeated. The table covering a question's records is selected.
+
+Deferred on purpose, with the reason recorded in PROGRESS: the static sqlglot type resolver and a `--live`
+types file for every catalog's views (the declared kinds cover the hot path, the aggressive pass covers the
+rest), and 2-hop join paths with `relations:` between curated views (the acceptance questions reach a tool).
+
+## Phase R — the people databases, opened (unreleased)
+
+Asked for on 2026-10-13: *"Give the full permission of HR database also. After successful implementation of
+the project, we will set rule, who will get which permission."* Confirmed with the owner: all three people
+databases (`HR`, `Hrms5Misami`, `HWATT`) and every business and personal column, with **only credentials
+blocked** (password, pwd, token, secret).
+
+Two facts shaped the design. The catalog trusts the `"sensitive": true` flag the discovery JSON stores, not
+the function that wrote it, so re-deriving the flags at load carries the catalog, the schema index, the
+router, the prompt and the DENY generator with it. And the guard has no database identity: its column check
+is one pass over every `exp.Column` with no way to attribute a column to a table, so an opened catalog's
+looser list would apply to a sibling database's columns too.
+
+- **R1 per-catalog sensitivity.** `sensitive_patterns:` in a catalog file opens that database and no other,
+  reusing the `is_sensitive(name, pats)` escape hatch that already existed and that no caller passed.
+  `_load_discovered` re-derives the table and column flags when, and only when, a catalog overrides them, so
+  a later `discover_schema.py` run cannot re-close them. `guard()` takes the list; `_guard_for` passes
+  `allowed_catalogs=None` whenever a catalog has its own list, so an opened database is neither read nor read
+  through a three-part name. The `offered_tables` memo key and the schema-index cache key both carry the
+  pattern tuple, or a running process would keep serving the closed index. `max_rendered_columns:` because the
+  40-column render cap becomes binding once columns open (`MonthWiseSalaryInfoExt` has 184).
+  Absent the key, the other sixteen databases behave bit for bit as before — the proof is that the seven
+  guard, catalog and index test files stay green **and unedited**.
+- **R2 the catalogs answer well.** Permission is not an answer: two of the four lost questions were never
+  blocked by sensitivity at all. Schema vectors rebuilt (opening changes `offered_tables`, so the saved `.npz`
+  no longer matches and is silently discarded). The pay vocabulary added by hand, because `gen_catalog.py`
+  strips sensitive words when it writes keywords — so the database holding salaries never claimed the word
+  "salary". `table_notes` naming the authoritative table where several compete. Ten more `exclude_tables` for
+  the scratch and dated salary copies that opening revealed. An `employee` entity kind in the Phase Q parser.
+  A new HR agent, because "manpower" was owned by production.
+- **R3 audit.** `logs/sql.csv` gains the result's column **names**. `auth.open_groups` is left alone: adding
+  `KA-Admins` there would make every anonymous visitor an administrator in the same change that opens payroll.
+- **R4** scope cases `s39`–`s42` fixed (a nested `expect:` the checker never read, so they asserted nothing),
+  five HR cases added, golden and latency cases for the acceptance questions.
+- **R5** the reader-grants file regenerated. `grants.py` has no REVOKE path, so re-running it does not remove
+  DENYs already applied: the runbook step is the rollback's `DROP USER` for the three databases first.
+
+### What the data turned out to be
+
+Opening the databases was the smaller half. Every acceptance question needed the catalog to say what the data
+actually is, and four findings are now written into `table_notes`, the agent charter and `config/data_quality.yaml`:
+
+| Finding | Why it matters |
+|---|---|
+| `DayStatus` holds codes (P, L, A, LV, W, H, and the PW/PH/LW/LH pairs), not words | `DayStatus = 'present'` matched no row; presence is `IN ('P','L','PW','PH','LW','LH')`, late included |
+| Attendance stops on 2026-09-09; punch devices in July 2026; a third copy in 2022 | "Today" has no answer. The reply gives the newest day the data holds and names that date |
+| The HRMS master holds 992 active people; the group list holds 17,972 | A headcount from the wrong one is out by a factor of eighteen, under a correct citation |
+| Overtime: 992 employees in 2019, six in 2026 | A monthly total reads like a company figure and is five people, so the answer states the count |
+
+### Phase S — the per-user rule (mechanism built 2026-10-13, not yet armed)
+
+The problem as first written: `Scope` carried no groups, so a catalog's `restricted_to: [KA-HR]` could not be
+evaluated at either enforcement point, and `scope_for_groups` **unions** group scopes, so a `databases: [HR]`
+key would be cancelled by the same user's membership in `KA-Managers`. A gate that cannot deny is worse than
+none.
+
+**The design changed when it was built, and this is why.** The plan above said `Scope.databases` with
+**intersection** semantics. Taken literally it cannot express the rule the owner wants: to deny the HR
+databases to `KA-Managers`, that group would have to list *every other database* and keep that list in step
+with each new one, and a group membership would then **reduce** access — the opposite of what
+`config/scopes.yaml` promises in its own header ("a group can only add access"). What is built instead:
+
+- a catalog names the groups that may read it, `restricted_to: [KA-HR]` (`data/catalog.py`); a catalog that
+  names none is open to everyone, which is how all nineteen behave today;
+- `Scope.groups` carries the user's groups, and `Scope.allows_database()` is the single check. A group still
+  only ever grants. Being an admin is **not** a master key: the admin flag shows the timings and the audit
+  panel, and making it open every database would hand every administrator the payroll in the same change;
+- `Scope.key()` includes the groups, so an answer cached for someone who may read a restricted database is
+  never served to someone who may not;
+- enforcement in two places: `answer_from_data` drops the denied databases **before the router**, so their
+  tables are never rendered into a prompt, their fixed tools never match and the model is not told they
+  exist; and `_run_guarded` refuses again, for whatever arrives by another road (the day's question→SQL
+  cache, a companion, a repair). A not-found reply also stops describing a database the user may not read.
+
+**Not armed, deliberately.** `auth.provider` is `none`, so every visitor is the one open user built from
+`auth.open_groups: [KA-Managers]`. Adding `restricted_to: [KA-HR]` to the people catalogs today would deny
+the HR questions to *everybody* and break what Phase R just shipped. Switching it on is therefore two
+changes made together: the `restricted_to:` line on `Hrms5Misami`, `HR` and `HWATT`, and a real sign-in
+provider (`local` with `config/users.yaml`, or `ldap` once BITOPI-PDC serves LDAPS). Until that day,
+**anyone who can reach the app can ask for any employee's salary** — the direct consequence of the owner's
+decision of 2026-10-13, recorded rather than worked around.
+
+Also deferred: re-running discovery for the other sixteen databases. The JSONs were written at 10:03 on
+2026-10-04 and the patterns gained `medical, tax, bonus, increment, pay` at 17:17 the same day, so those
+databases offer the model tables the guard then refuses. Read-only, about a minute, and it changes what they
+offer — so it is a decision, not a chore.

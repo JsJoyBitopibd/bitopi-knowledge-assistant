@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Iterator, Optional
 
 from .. import trace
+from . import not_found
 from ..auth.models import Scope
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
@@ -31,6 +32,7 @@ from .citations import normalize_markers, sources_block, verify
 from .events import Event, Final, Replace, Stage, Token
 from .rewrite import standalone_question
 from .router import _DOC_HINT, route
+from .templated import is_blank_result
 
 _MARK = re.compile(r"\[([PD]\d+)\]")
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="answer")
@@ -140,13 +142,16 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             out.text, out.route = ask, "clarify"
             yield Final(_log(out, user, scope)); return
     if r in ("data", "both"):
+        from ..data import empty_retry
         from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
     if r == "both":
         # Independent sources: search the documents while the database query (and its SQL-generation
         # call) runs, instead of one after the other. A worker's exception re-raises in .result().
+        # No empty-result repair here (P2): a document search already runs, and the 4 cores are shared.
         yield Stage("searching+querying", "Searching documents and querying the database…")
         docs_f = trace.submit(_POOL, retrieve, q, where=where, scope=scope)
-        data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope)
+        with empty_retry.allowed(False):
+            data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope)
         chunks = docs_f.result()[:top]
         results = list(data_f.result())
     elif r == "documents":
@@ -154,33 +159,65 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         chunks = retrieve(q, where=where, scope=scope)[:top]
     elif r == "data":
         yield Stage("querying", "Querying the database…")
-        results = list(answer_from_data(q, user, refresh, scope=scope))
+        with empty_retry.allowed(True):
+            results = list(answer_from_data(q, user, refresh, scope=scope))
     if r in ("data", "both"):
         out.agent = next((x.agent for x in results if x.agent), "")   # domain agent (Phase K), for the log
+        # which catalogs the SQL model was shown, kept on the answer so a not-found row in chat.csv says it too
+        out.databases_considered = list(dict.fromkeys(d for x in results for d in x.databases_considered))
         # a failed query is not a source: never let the model cite an error message
         out.warnings += [f"data {x.database}: {x.error}" for x in results if x.error]
         denied = any(x.denied for x in results)
+        # Read before the errored results are dropped (Phase Q). A fixed tool that timed out is still proof
+        # that this is a database question — it matched a tool's pattern — and the error itself is what the
+        # user needs to be told. Until 2026-10-11 `_tool_answered` was evaluated after the drop, so a 30 s
+        # timeout was followed by a 10 s document search and an answer-model call, 45 s to say nothing.
+        failed = [x for x in results if x.error and not x.denied]
+        tool_ran = _tool_answered(results)
+        checked = any(x.checked for x in results)
         results = [x for x in results if not x.error]
-        if r == "data" and denied and not any(x.rows for x in results):
+        if r == "data" and denied and not _has_rows(results):
             # The question names a factory outside the user's scope: say so now. A document search and a
             # model call cannot answer it, and would only hide the reason behind a generic not-found.
             out.text, out.not_found = nf + " " + prompt("scope_denied").strip(), True
             yield Final(_log(out, user, scope)); return
-        if r == "data" and not any(x.rows for x in results) and not chunks:
-            # data route found nothing usable: fall back to documents once (a PDF may hold it)
+        if r == "data" and failed and not _has_rows(results) \
+                and (tool_ran or checked or _names_a_record(q)):
+            # The query failed (a timeout, a type conversion). The PDFs hold no production rows, so a document
+            # search and an answer-model call would only hide the reason behind a generic not-found: say what
+            # happened and offer Refresh data. `error_kind` stays empty on purpose — the UI renders an
+            # error_kind turn as a warning box without the action row, which would take Refresh and the chips
+            # away (app.py answer_body).
+            out.text = nf + " " + (not_found.failed(failed) or not_found.general(q, scope))
+            out.not_found = True
+            out.follow_ups = not_found.suggestions(q, results)
+            yield Final(_log(out, user, scope)); return
+        if r == "data" and not _has_rows(results) and not chunks and not tool_ran and not checked:
+            # data route found nothing usable: fall back to documents once (a PDF may hold it). Not when a fixed
+            # tool or a pasted statement ran: the question is a data question by construction (it matched a tool's
+            # pattern), and the PDFs hold no stock balances — the search cost 54 s on this VM for "item 9999999"
+            # and ended in a model-written not-found instead of the plain "I checked … and found no records" (P1).
             yield Stage("searching", "Searching documents…")
             chunks = retrieve(q, where=where, scope=scope)[:top]
 
-    if not chunks and not any(x.rows for x in results):
+    if not chunks and not _has_rows(results):
+        # one plain sentence after the fixed line (agent/not_found.py): what was checked, or where else to look
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
-                               else "No document or database view in the system covers this question.")
+                               else not_found.empty(results) or not_found.empty_filter(results) or not_found.general(q, scope))
         out.not_found = True
+        if not denied:
+            out.follow_ups = not_found.suggestions(q, results)
         yield Final(_log(out, user, scope)); return
 
     # A single data result is written from a template, no model call: fixed tools (C7) and, unless
     # answer.templated_generated is off, model-written SQL too (J3) — the rows are the answer.
-    if r == "data" and not chunks and len(results) == 1 and s.get("answer.templated", True):
-        if _templated_answer(out, results[0], nf, allow_generated=bool(s.get("answer.templated_generated", True))):
+    # A fixed tool's companion (e.g. each VistaQ file's export orders from the ERP) is written the same way: [D2].
+    companion = len(results) == 2 and results[1].tool.endswith(":companion")
+    # a repaired model-written result comes with the DISTINCT lookups that fixed it ([D2]…, P2): still templated
+    with_lookups = len(results) > 1 and all(x.tool == "lookup" for x in results[1:])
+    if r == "data" and not chunks and (len(results) == 1 or companion or with_lookups) and s.get("answer.templated", True):
+        if _templated_answer(out, results, nf, allow_generated=bool(s.get("answer.templated_generated", True)),
+                             scope=scope):
             yield Final(_log(out, user, scope)); return
 
     yield _writing(chunks, results)
@@ -207,13 +244,40 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             out = retry
 
     if out.not_found and not out.text:
-        out.text = nf + " The retrieved sources did not support a verifiable answer."
+        out.text = nf + " " + not_found.unverified()
         _log_verify_failure(question, q, out.warnings)
+    if out.not_found and not out.follow_ups and not out.error_kind:
+        out.follow_ups = not_found.suggestions(q, results)
     # Cache only verified documents answers: database rows go stale in minutes (they have their own
     # short cache in data/cache.py) and a not-found may become answerable after the next ingest.
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _names_a_record(question: str) -> bool:
+    """Does the question name something only a database holds — a line, a unit, a style, an export order, a PO
+    or a file (data/entities.py)? A factory alone does not: "What is the TAL holiday policy?" is a document
+    question. Used to decide whether a failed query may still be rescued by the documents."""
+    try:
+        from ..data.entities import question_entities      # lazy: the data package pulls in the SQL libraries
+        return question_entities(question).names_a_record
+    except Exception:
+        return False
+
+
+def _tool_answered(results: list[QueryResult]) -> bool:
+    """Did a fixed tool or a pasted statement run (whatever it returned)? Such a question needs no documents fallback."""
+    return any(x.tool not in ("generated", "lookup") for x in results)
+
+
+def _has_rows(results: list[QueryResult]) -> bool:
+    """Did any data result answer something? A model-written statement that returned one NULL/0/empty cell
+    (SUM over no rows) is treated as no rows (P0): `[[None]]` is truthy, so `any(x.rows)` used to call it an
+    answer, spend an answer-model call on it and only then search the documents. A fixed tool's 0 stays an
+    answer (C7). A DISTINCT lookup (P2) is evidence of what is recorded, never an answer by itself."""
+    return any(x.rows and x.tool != "lookup" and not (x.tool == "generated" and is_blank_result(x.columns, x.rows))
+               for x in results)
 
 
 def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) -> Stage:
@@ -232,23 +296,53 @@ def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) ->
     return Stage("writing", "Writing the answer…", sources=names[:limit])
 
 
-def _templated_answer(out: Answer, result: QueryResult, nf: str, allow_generated: bool = False) -> bool:
-    """Fill `out` from agent/templated.py when the result qualifies and the text verifies."""
-    from ..data.tools import load_fixed_tools
+def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_generated: bool = False,
+                      scope: Optional[Scope] = None) -> bool:
+    """Fill `out` from agent/templated.py when the results qualify and the text verifies: one result, or a fixed
+    tool's result [D1] followed by its companion [D2] (an empty companion is left out)."""
+    from ..data.tools import companion_tool, load_fixed_tools, merge_companion
     from .templated import try_template
-    tool = next((t for t in load_fixed_tools() if t.get("name") == result.tool), None)
-    text = try_template(result, tool, allow_generated)
+    tool = next((t for t in load_fixed_tools() if t.get("name") == results[0].tool), None)
+    comp = companion_tool(tool) if tool is not None else None
+    merged = None
+    if comp is not None and comp.get("merge") and len(results) > 1 and not results[1].error and results[1].rows:
+        # P3: the companion's columns joined onto the main rows — one table from two databases, cited [D1][D2];
+        # both results stay in `used`, so every merged cell is licensed by the row set it came from
+        merged = merge_companion(results[0], results[1], comp["merge"])
+    text = try_template(merged or results[0], tool, allow_generated, marker="D1][D2" if merged else "D1")
     if not text:
         return False
-    block, refs = sources_block([], [result])
-    ok, problems = verify(text, [], [result], nf)
+    used = [results[0]] + ([results[1]] if merged else [])
+    if merged is None and len(results) > 1 and tool is not None and not results[1].error and results[1].rows:
+        more = try_template(results[1], comp, marker="D2")
+        if more:
+            text += "\n\n" + more
+            used.append(results[1])
+    for col, asked, matched in results[0].corrections:
+        # P2: a literal of the question was replaced by a recorded value — say so, citing the lookup that holds it
+        holder = next((x for x in results[1:] if x.tool == "lookup" and any(str(v) == matched for row in x.rows for v in row)),
+                      None)
+        if holder is not None:
+            used.append(holder)
+            text += "\n\n" + prompt("matched_value_note").strip().format(asked=asked, matched=matched, marker=f"D{len(used)}")
+    # Phase M: the stored Stage-2 level for the file this answer is about. Appended exactly as the
+    # P2 note above is — a sentence from prompts/, the result that holds its numbers added to
+    # `used`, cited [D#], and left to verify(). The level is computed in Python from VistaQ rows,
+    # never by the model, and every figure the sentence states is in the cited rows.
+    risk_result = _risk_note(text, used, scope)
+    if risk_result is not None:
+        note_text, source = risk_result
+        used.append(source)
+        text += "\n\n" + note_text.replace("[D1]", f"[D{len(used)}]")
+    block, refs = sources_block([], used)
+    ok, problems = verify(text, [], used, nf)
     if not ok:
         out.warnings.append(f"template failed verification, using the model: {problems}")
         return False
     out.text, out.sources_text, out.not_found = text, block, False
-    out.results = [result]
+    out.results = used
     out.references = [x for x in refs if x.marker in set(_MARK.findall(text))]
-    out.follow_ups = _suggest([result], out.question)
+    out.follow_ups = _suggest(used, out.question)
     out.warnings.append("templated answer (no model call)")
     return True
 
@@ -269,7 +363,8 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
     """Assemble the <sources> block, stream the model's answer as Tokens, verify it, and fill `out`
     in place. Two attempts: a draft that fails verification is voided with Replace and the second
     attempt uses the stricter prompt. Leaves out.not_found=True with no text if both attempts fail."""
-    block, refs = sources_block(chunks, results, int(s["data.max_rows_to_llm"]))
+    # the row budget per provider call is shared by every result (a companion or a lookup used to add its own 50)
+    block, refs = sources_block(chunks, results, max(5, int(s["data.max_rows_to_llm"]) // max(1, len(results))))
     out.sources_text = block
     hist = "\n".join(f"{t['role']}: {t['text']}" for t in history[-2 * int(s["answer.history_turns"]):])
     user_msg = ((f"Earlier in this conversation:\n{hist}\n\n" if hist else "") + block +
@@ -342,7 +437,7 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str
     """Thumbs up/down from the UI go to logs/chat.csv as a feedback row (docs/PLAN.md M5)."""
     append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "feedback",
                                           f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}",
-                                          "", request_id, "", "", ""])
+                                          "", request_id, "", "", "", ""])
 
 
 # `scope` (PRD FR-6.2): what the user was allowed to see when they asked, so an administrator can
@@ -350,7 +445,8 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str
 # `seconds` and `timings` (JSON, ragbot/trace.py) say where the time went; `agent` is the domain agent
 # that answered a data question (Phase K).
 _CHAT_HEADER = ["ts", "user", "scope", "route", "question", "rewritten", "not_found", "refs", "in_tokens",
-                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings", "agent"]
+                "out_tokens", "warnings", "error_kind", "request_id", "seconds", "timings", "agent",
+                "databases_considered"]
 
 
 def _log(a: Answer, user: str, scope: Scope) -> Answer:
@@ -362,10 +458,43 @@ def _log(a: Answer, user: str, scope: Scope) -> Answer:
         datetime.now().isoformat(timespec="seconds"), user, scope.key(), a.route, a.question, a.rewritten_question,
         a.not_found, ";".join(r.marker + ":" + (r.source or r.database or "") for r in a.references),
         a.usage.input_tokens, a.usage.output_tokens, " | ".join(a.warnings), a.error_kind, a.request_id,
-        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else "", a.agent])
+        a.timings.get("total", ""), json.dumps(a.timings, separators=(",", ":")) if a.timings else "", a.agent,
+        ";".join(a.databases_considered)])
     return a
 
 
 def _log_verify_failure(question: str, rewritten: str, problems: list[str]) -> None:
     with open(log_dir() / "verify_failures.csv", "a", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerow([datetime.now().isoformat(timespec="seconds"), question, rewritten, " | ".join(problems)])
+
+
+# A file number as VistaQ and the ERP both write it (FR-26-1985); the risk store is keyed on it.
+_FILE_NO = re.compile(r"\bFR-\d{2}-\d{1,6}\b", re.I)
+
+
+def _risk_note(text: str, used: list[QueryResult], scope: Optional[Scope]):
+    """The stored Stage-2 level for the one file this answer is about, as (sentence, citable result).
+
+    Only when the answer is about exactly ONE file. A table of sixty files would otherwise grow sixty
+    sentences, and "the risk for this order" means nothing when the answer covers many. Returns None
+    whenever there is nothing certain to say — no file, several files, no stored level, or no risk run
+    yet — so an answer is never blocked by this.
+    """
+    if scope is None or not used:
+        return None
+    try:
+        from ..domain_agents import risk
+        subjects = {m.upper() for m in _FILE_NO.findall(text)}
+        for r in used:                       # a file can be in the rows without being in the prose
+            if "fileno" in [c.lower() for c in r.columns]:
+                i = [c.lower() for c in r.columns].index("fileno")
+                subjects |= {str(row[i]).upper() for row in r.rows if i < len(row) and row[i]}
+        if len(subjects) != 1:
+            return None
+        found = risk.for_subjects(subjects, scope)
+        a = next(iter(found.values()), None)
+        if a is None:
+            return None
+        return risk.note(a, marker="D1", as_of_day=str(getattr(used[0], "as_of", "") or "")[:10]), risk.note_source(a)
+    except Exception:
+        return None                          # a missing or unreadable risk store must never break an answer

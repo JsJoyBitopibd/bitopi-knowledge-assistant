@@ -151,3 +151,13 @@ def test_missing_order_id_asks_instead_of_querying(wired, monkeypatch):
     monkeypatch.setattr(tools, "answer_from_data", lambda *a, **k: pytest.fail("must not query the database"))
     a = orch.answer("What is the status of the order?", scope=Scope.unrestricted())
     assert a.route == "clarify" and a.text.startswith("Which export order") and a.usage.calls == 0
+
+
+def test_is_blank_result():
+    from ragbot.agent.templated import is_blank_result
+    assert is_blank_result([], [])
+    assert is_blank_result(["n"], [])
+    assert is_blank_result(["n"], [[None]]) and is_blank_result(["n"], [[0]]) and is_blank_result(["n"], [[" "]])
+    assert not is_blank_result(["n"], [[1]])
+    assert not is_blank_result(["a", "b"], [[None, None]])      # two columns: a row, whatever it holds
+    assert not is_blank_result(["n"], [[0], [0]])

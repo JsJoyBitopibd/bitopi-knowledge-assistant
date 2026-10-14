@@ -171,6 +171,118 @@ checks:
     fix: information; this table appears retired — the agent uses the VistaQ copy instead
     sql: SELECT MAX(HourlyPdate) AS last_date FROM dbo.tblHourlyLineWiseProductionDetail
 
+  # ---- HR (Phase R, 2026-10-13: the people databases were opened, and the first question asked of them —
+  # "how many are present today?" — turned out to have no answer because every attendance source has stopped)
+  - name: hrms_attendance_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 2
+    what: Newest working day in the HRMS day-status table (presence and absence)
+    fix: HR/IT restart the attendance load; until then presence is answered for the newest day in the table, with that date
+    sql: SELECT MAX(WorkDate) AS last_date FROM dbo.DaywisePayHour
+
+  - name: hrms_punches_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 2
+    what: Newest working day in the raw punch table behind the day status
+    fix: HR/IT; this stops on the same day as dbo.DaywisePayHour, so the break is upstream of both
+    sql: SELECT MAX(WorkDate) AS last_date FROM dbo.DailyAttendance
+
+  - name: hwatt_punches_fresh
+    agent: hr
+    database: HWATT
+    kind: freshness
+    max_age_days: 2
+    what: Newest card read in the HWATT attendance devices
+    fix: information; this device system appears retired, and its last month is partial
+    sql: SELECT MAX(CardTime) AS last_date FROM dbo.KQZ_Card
+
+  - name: hrms_overtime_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 2
+    what: Newest working day with overtime hours
+    fix: HR/IT; overtime is derived from attendance and stops with it
+    sql: SELECT MAX(WorkDate) AS last_date FROM dbo.DaywiseOTHour
+
+  - name: hrms_active_staff_without_attendance
+    agent: hr
+    database: Hrms5Misami
+    kind: share
+    max_share: 0.05
+    what: Active employees with no attendance row on the newest working day in the table
+    fix: HR; an active employee who never appears cannot be counted present or absent
+    sql: |
+      SELECT
+        SUM(CASE WHEN d.EmployeeCode IS NULL THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.tblEmployee e
+      LEFT JOIN dbo.DaywisePayHour d
+        ON d.EmployeeCode = e.EmployeeCode
+       AND d.WorkDate = (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour)
+      WHERE e.EmployeeStatus = 'Active'
+
+  - name: hrms_unknown_day_status
+    agent: hr
+    database: Hrms5Misami
+    kind: count
+    max: null
+    what: Attendance rows in the last 60 loaded days whose DayStatus is not one of the codes the HR agent knows
+    fix: information; a new code means prompts/agents/hr.txt and the Hrms5Misami table note must learn it, or presence is counted wrong
+    sql: |
+      SELECT COUNT(*) AS n
+      FROM dbo.DaywisePayHour
+      WHERE WorkDate >= DATEADD(day, -60, (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour))
+        AND DayStatus NOT IN ('P', 'L', 'PW', 'PH', 'LW', 'LH', 'A', 'LV', 'MLV', 'W', 'H')
+
+  - name: hrms_overtime_barely_recorded
+    agent: hr
+    database: Hrms5Misami
+    kind: share
+    max_share: 0.5
+    what: Employees with no overtime row in the last 365 loaded days, out of those who had one in 2019
+    fix: HR/payroll say where overtime is recorded now; a total from this table is six people, not the workforce
+    sql: |
+      SELECT
+        SUM(CASE WHEN r.EmployeeCode IS NULL THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM (SELECT DISTINCT EmployeeCode FROM dbo.DaywiseOTHour
+            WHERE WorkDate >= '2019-01-01' AND WorkDate < '2020-01-01') o
+      LEFT JOIN (SELECT DISTINCT EmployeeCode FROM dbo.DaywiseOTHour
+                 WHERE WorkDate >= DATEADD(day, -365, (SELECT MAX(WorkDate) FROM dbo.DaywiseOTHour))) r
+        ON r.EmployeeCode = o.EmployeeCode
+
+  - name: hrms_attendance_covers_the_group
+    agent: hr
+    database: Hrms5Misami
+    kind: share
+    max_share: 0.2
+    what: Active employees on the group list with no attendance row on the newest working day in the table
+    fix: HR/IT; attendance here is one instance's population, so "how many are present" cannot be answered for the group
+    sql: |
+      SELECT
+        SUM(CASE WHEN d.EmployeeCode IS NULL THEN 1 ELSE 0 END) AS bad,
+        COUNT(*) AS total
+      FROM dbo.vwAllCompanyEmployeeList g
+      LEFT JOIN dbo.DaywisePayHour d
+        ON d.EmployeeCode = g.EmployeeCode
+       AND d.WorkDate = (SELECT MAX(WorkDate) FROM dbo.DaywisePayHour)
+      WHERE g.EmployeeStatus = 'Active'
+
+  - name: hrms_salary_month_fresh
+    agent: hr
+    database: Hrms5Misami
+    kind: freshness
+    max_age_days: 70
+    what: Newest salary month on the monthly salary sheet (dated to the first of that month)
+    fix: HR/payroll; a sheet is written when payroll is processed, so this passes at about 40 days and flags once a whole month is missing
+    sql: |
+      SELECT MAX(DATEFROMPARTS(YearNo, MonthNo, 1)) AS last_date FROM dbo.MonthWiseSalaryInfo
+
   # ---- Other (seen while building)
   - name: visitor_dates_missing
     agent: other
@@ -182,3 +294,96 @@ checks:
     sql: |
       SELECT SUM(CASE WHEN DateAdded IS NULL THEN 1 ELSE 0 END) AS bad, COUNT(*) AS total
       FROM dbo.VisitorInformation
+
+  # ---- Quality (VistaQ). The Stage-1 -> Stage-2 gate (docs/AGENTS_DESIGN.md §4) is per domain: a domain
+  # starts Stage 2 only once its data-quality report is clean enough to trust. Quality is the one domain
+  # whose data is live, but it had no checks at all, so it could not evidence the gate either way.
+  # These are the FIRST checks to run against the VistaQ host (SQLSERVER_CONN_VISTAQ); every other check
+  # reads the production server. dbo.QualityInspection holds ~88 million rows: only ever filter or
+  # aggregate on the date-only indexed columns, never on InspectionDate/ActivityDate.
+  - name: vistaq_inspections_fresh
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: freshness
+    max_age_days: 2
+    what: Newest sewing-line inspection recorded in VistaQ
+    fix: IT/VistaQ; line quality, DHU and the quality risk level are all read from this table, so they stop with it
+    sql: |
+      SELECT MAX(InspectionDateOnly) AS last_date FROM dbo.QualityInspection
+
+  - name: vistaq_defects_fresh
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: freshness
+    max_age_days: 2
+    what: Newest defect recorded against an inspection
+    fix: IT/VistaQ; DHU is defects divided by pieces checked, so defects stopping while inspections continue makes every DHU read low
+    sql: |
+      SELECT MAX(InspectionDefectDateOnly) AS last_date FROM dbo.QualityInspectionDefect
+
+  - name: vistaq_factory_coverage
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: share
+    max_share: 0
+    what: Factories that inspected in the last 7 days but have nothing on the newest inspection day
+    fix: IT/QC; a factory missing from the newest day makes a group DHU the DHU of only the factories that did report
+    sql: |
+      SELECT SUM(CASE WHEN f.OnLatest = 0 THEN 1 ELSE 0 END) AS bad, COUNT(*) AS total
+      FROM (
+        SELECT qi.WorkspaceFactoryId,
+               MAX(CASE WHEN qi.InspectionDateOnly = m.LatestDay THEN 1 ELSE 0 END) AS OnLatest
+        FROM dbo.QualityInspection qi
+        CROSS JOIN (SELECT MAX(InspectionDateOnly) AS LatestDay FROM dbo.QualityInspection) AS m
+        WHERE qi.InspectionDateOnly >= DATEADD(day, -7, m.LatestDay)
+        GROUP BY qi.WorkspaceFactoryId
+      ) AS f
+
+  - name: vistaq_summary_job_lag
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: count
+    max: 2
+    what: Days the DefectSummary / QCSummary job is behind the live inspection tables (the worse of the two)
+    fix: IT/VistaQ restart or re-point the summary job; it was reported behind on 7 Oct 2026 (29 Sep / 5 Oct) and nothing has measured it since
+    sql: |
+      SELECT CASE WHEN x.qc_lag >= x.defect_lag THEN x.qc_lag ELSE x.defect_lag END AS n
+      FROM (
+        SELECT
+          ISNULL(DATEDIFF(day, (SELECT MAX(InspectionDate) FROM dbo.QCSummary),
+                               (SELECT MAX(InspectionDateOnly) FROM dbo.QualityInspection)), 9999) AS qc_lag,
+          ISNULL(DATEDIFF(day, (SELECT MAX(InspectionDefectDate) FROM dbo.DefectSummary),
+                               (SELECT MAX(InspectionDefectDateOnly) FROM dbo.QualityInspectionDefect)), 9999) AS defect_lag
+      ) AS x
+
+  - name: vistaq_targets_sane
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: count
+    max: 0
+    what: Problems in the VistaQ quality targets that the amber level is read from
+    fix: QC/VistaQ admin; amber comes from this row, so a missing, duplicated, expired or impossible target silently moves every amber level
+    sql: |
+      SELECT
+        CASE WHEN (SELECT COUNT(*) FROM dbo.Threshold WHERE ISNULL(IsActive, 0) = 1) <> 1 THEN 1 ELSE 0 END
+        + (SELECT COUNT(*) FROM dbo.Threshold
+           WHERE ISNULL(IsActive, 0) = 1
+             AND (DHUThreshold <= 0 OR DHUThreshold > 100
+                  OR RejectRateThreshold < 0 OR RejectRateThreshold > 100
+                  OR EffectiveFrom > CAST(GETDATE() AS date)
+                  OR (EffectiveTo IS NOT NULL AND EffectiveTo < CAST(GETDATE() AS date)))) AS n
+
+  - name: vistaq_inspections_without_a_file
+    agent: quality
+    database: VistaQ_Default_RHL
+    kind: share
+    max_share: 0.05
+    what: Inspections on the newest day whose production plan carries no ERP file number (FR)
+    fix: IE/planning set the file on every plan; quality grouped by file, and the order-level risk level, cover only the inspections whose plan carries one
+    sql: |
+      SELECT SUM(CASE WHEN p.Id IS NULL OR p.FileId IS NULL OR LTRIM(RTRIM(p.FileId)) = ''
+                      THEN 1 ELSE 0 END) AS bad,
+             COUNT(*) AS total
+      FROM dbo.QualityInspection qi
+      LEFT JOIN dbo.ProductionPlan p ON p.Id = qi.ProductionPlanId
+      WHERE qi.InspectionDateOnly = (SELECT MAX(InspectionDateOnly) FROM dbo.QualityInspection)

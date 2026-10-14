@@ -27,6 +27,33 @@ principal that is not sysadmin. After a new discovery, regenerate and re-run the
 Rotation: `ALTER LOGIN rag_reader WITH PASSWORD = N'…'`, update `.env`, recreate the containers.
 Removal: `private/rag_reader_rollback.sql`.
 
+**The sensitive-name rule is per database (Phase R, 2026-10-13).** By default it is the global list in
+`src/ragbot/data/sensitive.py`. A catalog may override it for its own database with one line:
+
+```yaml
+# 2026-10-13, owner's decision: this database answers HR questions. Only credentials stay blocked.
+sensitive_patterns: [password, pwd, token, secret]
+```
+
+That one line governs all six enforcement points at once — which tables the catalog offers, which columns it
+renders, what the schema index and the router see, what the guard accepts, and what `gen_reader_grants.py`
+denies at the server. Deleting it closes the database again. The discovery JSON keeps recording what the
+**default** rule says, and the catalog re-derives at load, so a later `discover_schema.py` run cannot
+re-close an opened database. Set today on `HR`, `Hrms5Misami` and `HWATT`, and on no other catalog.
+
+Two consequences worth knowing before touching it:
+
+- **An opened database is never read across a three-part name.** The guard's column check is one pass over
+  every column in a statement with no way to attribute a column to a table, so the looser list would reach a
+  sibling database's columns. `_guard_for` therefore withholds siblings entirely from such a catalog.
+- **`grants.py` has no REVOKE path.** Regenerating the script does not remove DENYs already applied at the
+  server, so opening a database at the server means running `private/rag_reader_rollback.sql`'s `DROP USER`
+  for that database first, then the new script. This matters the day the app stops signing in as `sa`.
+
+A catalog edit clears the question-to-SQL cache (it keys on `catalog_stamp()`), but the **result** cache does
+not carry a catalog component, so a pre-change result can still be served for up to
+`data.result_cache_ttl_seconds` (180 s by default). Restart the app or wait it out.
+
 The strict variant — SELECT on a `rag` schema of real views only — is the target once a DBA has created
 the views (section 6, Phase F2b): `CREATE SCHEMA rag AUTHORIZATION dbo; GRANT SELECT ON SCHEMA::rag TO
 rag_reader;` and then `REVOKE SELECT ALL USER SECURABLES` once nothing reads base tables any more. A view:
@@ -121,14 +148,32 @@ the guard allows exactly the catalog's offered tables. Three fields matter for s
 use for this data — the router scores them) and `exclude_tables` (dated copies, backups, scratch tables).
 `connection_database` is described in section 1.
 
+Three more optional keys (Phase P1, `config/catalog/Inventory.yaml` shows all three): `synonyms:` maps a phrase
+staff use to the phrases the catalog knows (`closing balance: [closing stock, stock balance]`) and is appended to
+the question before the router and the schema index score it; `table_notes:` gives a one-line description to a
+discovered table whose JSON description is empty (the SQL prompt and the schema index both see it);
+`schema_rag_k:` sets how many tables the schema index selects for this database (a catalog with no foreign keys
+needs more candidates). `config/reference/entities.yaml` holds the group's companies (code, name, short name,
+aliases) and store aliases; a fixed tool's `type: entity` parameter turns "companyid=02" or "misami" into the
+bound parameter `'02'`, never question text (`src/ragbot/data/entities.py`).
+
 **Which database a question goes to** (`src/ragbot/data/db_router.py`). Before any SQL is written the
 catalogs are ranked, with no model call, on: hand-written keywords found in the question as whole words
 (3 points each) and curated view/column names (1); how much of a discovered table's own name the
 question mentions (up to 2); and, once most catalogs have schema vectors, the closest table vector
-(2 for the best database, 1 for the next). The SQL model is shown the best
-`data.max_databases_per_question` (default 2) and still names its choice with `DATABASE:`. A question
-in nobody's vocabulary goes to the curated catalogs (tie-break) and, if no rows come back, falls through
-to the documents as before. `python scripts/index_schema.py --try "<question>"` prints the ranking.
+(2 for the best database, 1 for the next). The question is scored with its compound tokens split on real
+column names (`companyid` → company id), the catalog's synonyms added and, for a pasted SQL statement, its
+reserved words removed ("ORDER BY" is not the word "order"). Ties go to the database whose table names the
+question uses, then to more keyword hits. The SQL model is shown the best `data.max_databases_per_question`
+(default 2) — one more when the next catalog ties the last pick on keywords (`data.max_databases_per_question_max`)
+— and still names its choice with `DATABASE:`. A question in nobody's vocabulary goes to the curated catalogs
+(tie-break) and, if no rows come back, falls through to the documents as before.
+`python scripts/index_schema.py --try "<question>"` prints the ranking.
+
+**A question that is itself a SQL statement** (it starts with SELECT or WITH) runs as written
+(`tools.run_pasted`): the same guard, scope and row cap as a model-written statement, against the catalog that
+offers the most of the tables it names; bare table names are qualified with `dbo.` and `TOP (200)` is added. It
+is never rewritten and never scored on its words. No catalog offers its tables → "System doesn't have the data."
 
 ## 3. Fixed tools — `config/fixed_tools.yaml`
 
@@ -153,10 +198,24 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
   TRUNCATE EXEC EXECUTE GRANT REVOKE DENY BACKUP RESTORE OPENROWSET OPENQUERY OPENDATASOURCE
   BULK xp_ sp_ INTO OUTFILE LOAD_FILE LOAD DATA INFORMATION_SCHEMA sys. mysql. performance_schema
   `--` `/*` `;`
-- Every table/view referenced must be in the catalog's `views` list (parse with `sqlglot`).
-- Add `TOP (200)` / `LIMIT 200` when absent. Reject `SELECT *` on more than one view.
+- Every table/view referenced must be in the catalog's `views` list, or among the discovered tables that
+  catalog offers (parse with `sqlglot`).
+- **The sensitive-name check, per database.** A table or column whose name matches the catalog's effective
+  pattern list is refused — `restricted table:` / `restricted column:` — whatever the prompt showed. The list
+  is the global default in `src/ragbot/data/sensitive.py` unless the catalog sets `sensitive_patterns:`
+  (§2, Phase R); a three-part reference into a sibling database is checked the same way, and a catalog that
+  sets its own list is given no siblings at all, because this check is one pass over every column in the
+  statement with no way to say which table a column came from.
+- Add `TOP (200)` / `LIMIT 200` when absent. Reject `SELECT *` on more than one view. A discovered table with
+  more rows than `data.big_table_rows` needs a `WHERE` clause.
+- A user limited to some factories is offered **no** discovered table (there is no common factory column to
+  filter on), so a database with no `rag.*` views answers nothing for them.
 - Timeout 10 s; on error return the message to the model for one retry, then give up.
-- Log every statement (user, tool/generated, SQL, params, rows, ms) to `logs/sql.csv`.
+- Log every statement (user, tool/generated, SQL, params, rows, ms, database, result column names) to
+  `logs/sql.csv`; refusals and the raw reply go to `logs/sql_gen.csv`.
+- **Fixed tools do not pass through the guard** — their SQL is hand-written, not model output — but they are
+  held to the same rules by `tests/test_virtual.py` and `tests/test_scope_enforcement.py`, which run every one
+  of them through `_guard_for`.
 
 ## 5. What the assistant tells the user about data
 
@@ -164,6 +223,36 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
   and the SQL on request. Never the connection string, never column lists beyond the catalog.
 - If a question needs a table that is not in the catalog: "System doesn't have the data." plus
   "This may be in <system>; ask IT to add a view."
+- When a model-written statement returns nothing (Phase P2, `src/ragbot/data/empty_retry.py`): the recorded
+  values of the text columns it filtered on are looked up (guarded `SELECT DISTINCT`, shown as their own
+  `[D#]` cards); a unique close spelling is corrected and the answer carries a cited note saying which word was
+  matched to which recorded value; at most two further model calls may be spent (the owner's bound), only after
+  that empty first try, never on the `both` route. If still nothing: "System doesn't have the data. I checked
+  <system> for '<the user's own words>' and found no matching records…" — never a column, table or recorded
+  value in the sentence; the recorded values are offered as questions to click.
+
+## 5a. Cross-database questions (Phase P3) — every combination, decided
+
+The catalogs fall into three connection groups (checked read-only on 2026-10-09 with `@@SERVERNAME`):
+
+| Group | Catalogs | How they are reached |
+|---|---|---|
+| **A — RND-SERVER\MSSQLSERVER2019** | BIMOB_MVC, BIMOB_MVC_TAL, BiMob, Dashboard, DiskManager, FM, HR, HWATT, Hrms5Misami, Inventory, PlanningTNA, Production, SystemManager, VISTAQ, Washing, erp (line `SQLSERVER_CONN_PRODUCTION`, one database each) and BitopiSplint (its own line `SQLSERVER_CONN_BITOPISPLINT`, the same instance) | one login, one instance: a statement opened on one database can name another as `Database.schema.table` |
+| **B — VISTAQ host** | VistaQ_Default_RHL, VistaQ_Logging_RHL (`SQLSERVER_CONN_VISTAQ`) | a different server: nothing crosses on the server side |
+| **C — MySQL** | none configured today (`MYSQL_CONN`) | — |
+
+The mechanism for a question that needs two databases, in the order they are tried:
+
+| Pair | Mechanism | Where |
+|---|---|---|
+| Any two, a known question shape | **Fixed tool + companion**: the main statement runs in A's database, the companion in B's with the main rows' keys and the main tool's parameters bound; `merge: {on, add}` joins the companion's columns onto the main rows in Python, one table cited `[D1][D2]` with both cards kept (every cell is licensed by the row set it came from). VistaQ + ERP (`quality_by_group_window`) is the live example | `config/fixed_tools.yaml` `companion:`, `tools.merge_companion` |
+| Any two, small masters | **Local copies joined in SQLite**: `config/aggregates.yaml` copies a master (`company_master` from SystemManager) nightly; a fixed tool's `local_sql` joins it with a copy of its own data, cited with the copy's as-of time | `aggregate:` + `local_sql`, `data/aggregates.py` |
+| Two of group A, model-written SQL | **Three-part names**, off by default (`data.cross_database_names`): when on and the picked catalogs share the instance, the SQL prompt says a sibling's listed table may be read as `Database.schema.table`; the guard accepts it only for a raw table that sibling offers (never a `rag.*` view — virtual views are CTEs local to one catalog — never a sensitive name; SELECT * and the big-table WHERE rules apply), unrestricted users only (restricted scopes are offered no raw tables at all). The `[D#]` card names both tables. Turning it on is the owner's decision; with `rag_reader`, re-run `scripts/gen_reader_grants.py` so the login may read every sibling | `guard(allowed_catalogs=…)`, `tools.siblings_of` |
+| Group A with group B, model-written SQL | Not possible in one statement (different servers): a fixed tool with a companion is the way |
+| Anything with MySQL | A fixed tool with a companion when a MySQL catalog exists |
+
+What never happens: a three-part name for a restricted user, a foreign `rag.*` view, a merge computed by the
+model (the join runs in SQL Server, in Python or in SQLite — the model only sees the rows).
 
 ## 6. Virtual views (this build, until a DBA runs the DDL above)
 

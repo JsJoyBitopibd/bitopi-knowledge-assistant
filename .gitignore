@@ -25,3 +25,9 @@ private/
 # real AD group -> scope mapping and local users (password hashes): copies of the *.example.yaml files
 config/scopes.yaml
 config/users.yaml
+
+# Word lock files (left behind by an open .docx)
+~$*
+
+# Local to this server: host paths and the git-ignored sign-in config (see the file header)
+docker-compose.override.yml

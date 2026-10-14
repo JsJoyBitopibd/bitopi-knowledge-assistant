@@ -8,7 +8,8 @@ from ragbot.auth.models import Scope
 from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.data.guard import GuardError
-from ragbot.data.tools import load_fixed_tools, match_fixed_tool, run_fixed_tool, _views_in
+from ragbot.data.tools import (companion_tool, load_fixed_tools, match_fixed_tool, run_companion, run_fixed_tool,
+                               tool_sql, _views_in)
 from ragbot.data.virtual import validate_definition
 from ragbot.domain_agents import load_agents, validate_agents
 
@@ -33,7 +34,9 @@ def offline(cats) -> int:
     for tool in tools:
         # a pattern that fails to compile breaks match_fixed_tool() for every question, not just
         # this tool's — re.search() is called unconditionally down the tool list.
-        for key, pats in (("match", [tool.get("match")]), ("requires", tool.get("requires", []))):
+        unless = tool.get("unless")
+        for key, pats in (("match", [tool.get("match")]), ("requires", tool.get("requires", [])),
+                          ("unless", [unless] if isinstance(unless, str) else (unless or []))):
             for pat in pats:
                 if not pat:
                     continue
@@ -47,9 +50,15 @@ def offline(cats) -> int:
             problems += 1
             continue
         cat = cats[tool["database"]]
-        views = _views_in(tool["sql"], cat)
+        views = _views_in(tool_sql(tool), cat)          # group_by / measures placeholders filled with defaults
         if not views:
             print(f"[offline] fixed tool {tool['name']}: no catalog view referenced")
+            problems += 1
+        comp = companion_tool(tool)
+        if comp is not None and (comp.get("database") not in cats or not comp.get("column") or not comp.get("sql")
+                                 or not _views_in(comp["sql"].replace("@" + comp.get("param", "values"), "''"),
+                                                  cats.get(comp.get("database"), cat))):
+            print(f"[offline] fixed tool {tool['name']}: companion needs a loaded database, a column and SQL over its views")
             problems += 1
         # the example question must reach this tool: tools are tried in file order and the first match
         # wins, so a broader tool placed earlier can shadow this one
@@ -65,11 +74,14 @@ def offline(cats) -> int:
     # Phase K: every agent's catalogs and charter exist, every tool names a known agent that owns its database
     agents = load_agents()
     from ragbot.domain_agents.watch import validate as validate_watch
-    for p in validate_agents(agents, cats, tools) + validate_watch(agents, cats):
+    from ragbot.domain_agents.risk import load_rule_sets, validate as validate_risk
+    rule_sets = load_rule_sets()
+    for p in validate_agents(agents, cats, tools) + validate_watch(agents, cats) + validate_risk(rule_sets):
         print(f"[offline] {p}")
         problems += 1
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "
-          f"{len(tools)} fixed tools, {len(agents)} agents — {problems} problem(s)")
+          f"{len(tools)} fixed tools, {len(agents)} agents, "
+          f"{sum(len(r.rules) for r in rule_sets.values())} risk rules — {problems} problem(s)")
     return problems
 
 
@@ -77,9 +89,11 @@ def live(cats) -> int:
     problems = 0
     for name, cat in cats.items():
         for v in cat.views:
-            sql = f"SELECT TOP (1) * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q" \
+            # `WHERE 1 = 0`: the server compiles the view and returns its columns without reading a row. TOP (1) alone
+            # made an aggregating view total every row first (VistaQ: 88 million inspections) on a live server.
+            sql = f"SELECT TOP (1) * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q WHERE 1 = 0" \
                 if cat.dialect == "tsql" else \
-                f"SELECT * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q LIMIT 1"
+                f"SELECT * FROM (\n{v.definition or f'SELECT * FROM {v.name}'}\n) AS q WHERE 1 = 0 LIMIT 1"
             try:
                 cols, rows = run(cat.engine, sql, {}, conn_env=cat.connection_env, tool="check_catalog",
                                  database=cat.connection_database)
@@ -106,6 +120,10 @@ def live(cats) -> int:
                 problems += 1
             else:
                 print(f"[live] fixed tool {tool['name']}: OK ({len(qr.rows)} row(s))")
+                extra = run_companion(tool, qr, cats, user="check_catalog", scope=Scope.unrestricted())
+                if extra is not None:
+                    print(f"[live]   companion: {'FAILED — ' + extra.error if extra.error else f'OK ({len(extra.rows)} row(s))'}")
+                    problems += 1 if extra.error else 0
         except Exception as e:
             print(f"[live] fixed tool {tool['name']}: FAILED — {e.__class__.__name__}: {e}")
             problems += 1

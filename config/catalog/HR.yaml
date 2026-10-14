@@ -8,6 +8,10 @@ database: HR
 description: 'Human resources planning: manpower budgets by position and category, employee matrix, competency and
   assessment records (PMS), KPIs, visitor register, merchandiser and marketing assignments.'
 dialect: tsql
+# 2026-10-13, the owner opened this database: it answers HR questions, so its business and personal
+# columns (salary, attendance, leave, medical, contact, date of birth, NID, bank) are readable.
+# Only credentials stay blocked. Deleting this line closes the database again (Phase R).
+sensitive_patterns: [password, pwd, token, secret]
 connection_env: SQLSERVER_CONN_PRODUCTION
 connection_database: HR
 keywords:
@@ -47,6 +51,37 @@ keywords:
 - marketing
 - role
 - final
+# Phase R: the pay and people words gen_catalog.py strips when it writes keywords.
+- salary
+- salaries
+- mobile bill
+- blood group
+- religion
+- date of birth
+- contact number
+- applicant
+- recruitment
+table_notes:
+  # Phase R. HR is the planning database: manpower budget, PMS competency and assessment, the visitor
+  # register and employee master copies. Attendance, leave and payroll live in Hrms5Misami.
+  dbo.Employee_Information: >-
+    an employee master copy (21,718) with the personal fields — email, date of birth, religion, blood group,
+    present and permanent address, bank account and mobile. Hrms5Misami.dbo.tblEmployee is the live master.
+  dbo.EmployeeProfile: >-
+    a second employee master copy (13,191) with date of birth, addresses, bank, blood group, religion and
+    entry salary. Prefer Hrms5Misami for anything current.
+  dbo.ManpowerBudget_Employee_Salary: >-
+    the salary line of the manpower budget, one row per budgeted employee (12,733) — budget figures, not
+    what was paid; the paid amounts are in Hrms5Misami.
+  dbo.ManpowerBudget_Employee_Budget: one row per employee and budget code (78,745) — the manpower budget itself.
+  dbo.Category_Wise_Manpower: manpower totals per company, unit, category and date (70,490).
+  dbo.VisitorInformation: >-
+    the visitor register (64,558). DateAdded is NULL in every row, so visitor questions cannot be answered
+    by date (reported to the data owners on 2026-10-06).
+  PMS.CompetencyInformation: PMS competency scores per quarter; PMS.AssesmentInformation holds the assessments.
+synonyms:
+  manpower: [headcount, head count, budgeted employee]
+  salary: [pay, gross, basic]
 exclude_tables:
 - '*back'
 - '*back_*'

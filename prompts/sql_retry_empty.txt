@@ -1,0 +1,5 @@
+That query ran and returned no rows. The values recorded in the column(s) it filtered on are listed below; the
+question's spelling is not among them. Write the query again using one of these recorded values exactly as
+written (or LIKE on its distinctive word), keep the other filters, and return DATABASE: <name> on the first
+line, then the SQL only.
+{lookups}

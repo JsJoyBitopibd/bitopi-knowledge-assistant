@@ -1,29 +1,67 @@
-# Quality agent (docs/AGENTS_DESIGN.md, Phase L5). Owns the DHU tools (config/fixed_tools.yaml `agent: quality`).
+# Quality agent (docs/AGENTS_DESIGN.md, Phase L5). Owns the quality tools (config/fixed_tools.yaml `agent: quality`).
 name: quality
 title: Quality agent
-description: Sewing-line quality — pieces inspected, defects, defective pieces and DHU per line and factory.
+description: Sewing-line quality live from VistaQ — pieces checked, defects, defective and rejected pieces, DHU, QC stages and corrective actions per line and factory.
 stage: 1
-catalogs: [PlanningTNA, BiMob, Production]
-keywords: [dhu, defect, defects, defective, rejection, rejections, rework, alteration, alterations, qc, quality,
-           inspection, inspected, aql, audit]
+catalogs: [VistaQ_Default_RHL, PlanningTNA, BiMob, Production]
+keywords: [dhu, defect, defects, defective, rejection, rejections, reject, rejected, rework, alteration, alterations,
+           qc, quality, inspection, inspected, aql, audit, capa, corrective, first pass, vistaq]
 charter: agents/quality
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'Quality data I can read is VistaQ''s live line inspections (defects, rejects, DHU, QC stages and corrective actions); AQL and buyer audit results are not in any system yet, so the QC department keeps them.'
 status: >-
-  Line quality comes from the same daily line record as production (last updated 20 Sep 2026 on this server). No AQL
-  or audit results are in any database yet.
-# Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the QC interviews set them.
+  Line quality is live from VistaQ for RHL, TAL and BGL (inspections since 22 May 2025, corrective actions since late
+  July 2026). No AQL or final-audit results are in any database yet.
+# Watch rules (scripts/watch.py, Phase L). amber = VistaQ's own targets (rag.vw_QCTarget: DHU 3.85, reject 1 %);
+# red is provisional until the QC interviews set it. GETDATE() runs on the VistaQ server (Dhaka time).
 watch:
-  - name: dhu_latest_day
-    title: 'DHU {dhu} on {day}'
-    question: 'Which {factory} lines have the highest DHU?'
-    database: PlanningTNA
+  - name: dhu_today
+    title: 'DHU {dhu} today ({checked} pieces checked)'
+    question: 'Show the {factory} QC summary today'
+    database: VistaQ_Default_RHL
     sql: |
-      SELECT Factory, MAX(ProductionDate) AS day, SUM(InspectedPcs) AS inspected, SUM(Defects) AS defects,
-             CAST(100.0 * SUM(Defects) / SUM(InspectedPcs) AS decimal(6,2)) AS dhu
-      FROM rag.vw_LineDailyOutput
-      WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
+      SELECT Factory, SUM(Checked) AS checked, SUM(Defects) AS defects,
+             CAST(100.0 * SUM(Defects) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS dhu
+      FROM rag.vw_LineDayQuality
+      WHERE InspectionDate = CAST(GETDATE() AS date)
       GROUP BY Factory
-      HAVING SUM(InspectedPcs) > 0
+      HAVING SUM(Checked) > 0
     value: dhu
-    amber: 5
-    red: 8
+    amber: 3.85
+    red: 6
     weight: 2
+  - name: reject_rate_today
+    title: 'Reject rate {reject_pct}% today ({rejected} pieces rejected)'
+    question: 'How many {factory} pieces were rejected today?'
+    database: VistaQ_Default_RHL
+    sql: |
+      SELECT Factory, SUM(Rejected) AS rejected, SUM(Checked) AS checked,
+             CAST(100.0 * SUM(Rejected) / NULLIF(SUM(Checked), 0) AS decimal(6,2)) AS reject_pct
+      FROM rag.vw_LineDayQuality
+      WHERE InspectionDate = CAST(GETDATE() AS date)
+      GROUP BY Factory
+      HAVING SUM(Checked) > 0
+    value: reject_pct
+    amber: 1
+    red: 2
+    weight: 1
+  # Phase M. Without this a VistaQ stall reads as "DHU 0" or "no rows" rather than as a warning: the
+  # Production agent has line_data_age for the PlanningTNA copy, but nothing watched VistaQ itself, which
+  # is the live source for every quality answer AND for the Stage-2 risk level. A factory that stops
+  # reporting still has historical rows, so its MAX(InspectionDate) ages and this turns red — which is the
+  # failure that actually happens; a factory that never reported at all would have no row, and all three
+  # have reported since May 2025.
+  - name: vistaq_data_age
+    kind: data          # about the data, not the factory: a warning line, not in the health score
+    title: 'VistaQ line quality last updated {day} ({age} day(s) ago)'
+    question: 'Show the {factory} QC summary today'
+    database: VistaQ_Default_RHL
+    sql: |
+      SELECT Factory, MAX(InspectionDate) AS day,
+             DATEDIFF(day, MAX(InspectionDate), CAST(GETDATE() AS date)) AS age
+      FROM rag.vw_LineDayQuality
+      GROUP BY Factory
+    value: age
+    amber: 2
+    red: 7
+    weight: 1

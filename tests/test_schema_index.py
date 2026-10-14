@@ -1,5 +1,6 @@
 """C3: schema index — keyword and hybrid selection, FK expansion, stale vectors ignored, join hints.
 Offline: a hashing embedder (bag of words) stands in for bge-m3."""
+import re
 import hashlib
 from types import SimpleNamespace as NS
 
@@ -36,6 +37,38 @@ def _hash_vec(text, dim=256):
     for w in words(text):
         v[int(hashlib.md5(w.encode()).hexdigest(), 16) % dim] += 1
     return v / (np.linalg.norm(v) or 1)
+
+
+def test_column_words_rank_the_table_whose_columns_the_question_names():
+    """P1: 'closing balance of item code for company id and store name' names four columns of one table."""
+    stock = _t("dbo.InventoryStock", ["CompanyID", "LocationName", "ItemCode", "ItemName", "ClosingStock"])
+    other = _t("dbo.ItemMaster", ["ItemCode", "ItemName", "UOM"])
+    cat = Catalog("Demo", "tsql", "X", [], [], tables=[stock, other, _t("dbo.Unrelated", ["X", "Y"])])
+    idx = si.build(cat, embed=False)
+    assert idx.col_words[0] >= {"company", "id", "location", "name", "item", "code", "closing", "stock"}
+    got = si._column_scores("closing stock of an item code for a company id and location name", idx.names, idx.col_words)
+    assert got[0] == "dbo.InventoryStock" and "dbo.Unrelated" not in got     # one shared word is no evidence
+    assert si.select_tables("closing stock of an item code for a company id and location name", cat, 1)[0] == "dbo.InventoryStock"
+
+
+def test_table_notes_reach_the_index_and_its_cache_key(tmp_path, monkeypatch):
+    cat = Catalog("Demo", "tsql", "X", [], [], tables=[_t("dbo.T1", ["A"]), _t("dbo.T2", ["B"]), _t("dbo.T3", ["C"])])
+    first = si.get_index(cat)
+    cat.table_notes = {"dbo.t2": "the stock ledger"}
+    cat.tables[1].description = "the stock ledger"             # what _load_catalogs does with a note
+    monkeypatch.setattr(si, "_RECHECK_SECONDS", 0.0)
+    second = si.get_index(cat)
+    assert second is not first                                   # the note changed the key: rebuilt
+    assert second.search("stock ledger", 1) == ["dbo.T2"]
+
+
+def test_a_catalog_may_set_its_own_k_and_the_total_is_capped():
+    tables = [_t(f"dbo.Stock{i}", ["ItemCode", "Qty"]) for i in range(12)]
+    cat = Catalog("Demo", "tsql", "X", [], [], tables=tables)
+    assert len(si.select_tables("stock item code qty", cat, 3)) == 3
+    cat.schema_rag_k = 10
+    assert len(si.select_tables("stock item code qty", cat, 3)) == 10
+    assert len(si.select_tables("stock item code qty", cat, 3, max_total=4)) == 4
 
 
 @pytest.fixture(autouse=True)
@@ -96,3 +129,52 @@ def test_table_name_matches_rank_above_column_matches():
     noisy = [_t(f"dbo.Order{i}", ["OrderID", "BuyerName", "BuyerCode"]) for i in range(12)]
     cat = Catalog("Demo3", "tsql", "E", [], [], tables=[*noisy, _t("dbo.tblBuyerMaster", ["BuyerMasterID", "Buyer"])])
     assert si.select_tables("list all buyers", cat, k=3)[0] == "dbo.tblBuyerMaster"
+
+
+# ---- Phase Q: join hints that are true, and the table a question is really about ----------------------------
+def _vistaq_like():
+    """Every table has a primary key named Id and a column named Id — the shape that produced 66 false hints."""
+    from ragbot.data.catalog import Catalog, Table
+    def t(name, cols, pk="Id", fks=()):
+        return Table(name, "table", 100, "", [pk],
+                     [{"name": c, "type": "int"} for c in cols], list(fks))
+    tables = [
+        t("dbo.ProductionPlan", ["Id", "WorkspaceLineId", "BuyerId", "StyleId", "PlanDate", "DayTarget"]),
+        t("dbo.Style", ["Id", "StyleNumber", "BuyerId"]),
+        t("dbo.Buyer", ["Id", "BuyerName"]),
+        t("dbo.Workspace", ["Id", "WorkspaceName", "ParentId", "ShortName"]),
+        t("dbo.StyleClosingTracker", ["Id", "StyleId", "WorkspaceLineId"]),
+    ]
+    return Catalog("VistaQ", "tsql", "X", [], [], tables=tables)
+
+
+def test_a_bare_id_key_never_joins_id_to_id():
+    cat = _vistaq_like()
+    names = [t.name for t in cat.tables]
+    hints = si.join_hints(names, cat)
+    assert not [h for h in hints if re.search(r"\.Id = dbo\.\w+\.Id$", h)], hints
+    assert "dbo.ProductionPlan.StyleId = dbo.Style.Id" in hints
+    assert "dbo.ProductionPlan.BuyerId = dbo.Buyer.Id" in hints
+    assert "dbo.Style.BuyerId = dbo.Buyer.Id" in hints
+    assert "dbo.ProductionPlan.WorkspaceLineId = dbo.Workspace.Id" in hints
+
+
+def test_a_declared_foreign_key_is_not_repeated_as_a_hint():
+    from ragbot.data.catalog import Catalog, Table
+    plan = Table("dbo.ProductionPlan", "table", 10, "", ["Id"],
+                 [{"name": "Id", "type": "int"}, {"name": "StyleId", "type": "int"}],
+                 [{"columns": ["StyleId"], "ref_table": "dbo.Style", "ref_columns": ["Id"]}])
+    style = Table("dbo.Style", "table", 10, "", ["Id"], [{"name": "Id", "type": "int"}])
+    cat = Catalog("V", "tsql", "X", [], [], tables=[plan, style])
+    assert si.join_hints(["dbo.ProductionPlan", "dbo.Style"], cat) == []   # Table.render prints it as "Joins:"
+
+
+def test_the_table_that_covers_the_questions_records_is_selected():
+    """The style/line question selected twelve tables on 11 Oct and not dbo.ProductionPlan, which has all of
+    factory, line, style and buyer."""
+    cat = _vistaq_like()
+    chosen = si.select_tables("What style is running on TAL line 2102?", cat, k=3)
+    assert "dbo.ProductionPlan" in chosen
+    # a question naming no record is ranked exactly as before
+    assert si.select_tables("how many buyers are there", cat, k=3) == \
+        si.select_tables("how many buyers are there", cat, k=3)

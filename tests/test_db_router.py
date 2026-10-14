@@ -93,3 +93,79 @@ def test_no_vector_bonus_while_most_databases_lack_vectors(cats):
 def test_explain_is_one_readable_line(cats):
     line = explain("How many GRN this week?", cats)       # keyword 3 + the whole name of dbo.GRNMaster (2)
     assert line.startswith("Inventory 5.0 (kw 3, name 1.00)") and " > " in line
+
+
+# ---------------------------------------------------------------- P1: vocabulary the question actually used
+def test_compound_tokens_split_on_real_column_names(cats):
+    from ragbot.data.db_router import compound_map, split_compounds
+    inv = _cat("Inventory", ["company id", "item code", "grn"],
+               [_t("dbo.GRNChild", ("GRNID", "ItemCode")), _t("dbo.GRNMaster", ("GRNID", "CompanyID"))])
+    cmap = compound_map(inv)
+    assert cmap["companyid"] == "company id" and cmap["itemcode"] == "item code" and cmap["grnchild"] == "grn child"
+    assert "grnid" not in cmap                    # an all-caps name has no word boundary: the keywords carry 'grnid'
+    q = "grnid and issueid of itemcode=1178108 and companyid=02"
+    assert split_compounds(q, inv).endswith("item code company id")
+    assert keyword_score(q, inv) == 6                                           # company id, item code
+
+
+def test_catalog_synonyms_score_keywords(cats):
+    inv = _cat("Inventory", ["closing stock", "store"])
+    inv.synonyms = {"closing balance": ["closing stock"], "balance": ["stock"]}
+    assert inv.expand("the closing balance please").endswith(" closing stock stock")
+    assert keyword_score("the closing balance please", inv) == 3               # 'closing stock' via the synonym
+    assert keyword_score("the closing balancer", inv) == 0                     # whole phrases only
+
+
+def test_ties_are_broken_by_table_name_share_then_keywords_not_the_alphabet(cats):
+    a = _cat("Alpha", ["item", "balance"], [_t("dbo.Unrelated")])
+    b = _cat("Beta", ["item", "balance"], [_t("dbo.ItemBalance")])
+    ev = evidence("item balance", {"Alpha": a, "Beta": b})
+    assert ev[0].database == "Beta" and ev[0].name_share == 1.0                # same keywords (6), Beta names it
+    c = _cat("Gamma", ["item"], [_t("dbo.ItemBalance")])
+    ev = evidence("item balance", {"Gamma": c, "Beta": b})
+    assert ev[0].database == "Beta"                                             # 8 vs 5
+
+
+def test_a_third_catalog_joins_only_when_it_ties_the_last_pick_on_keywords(cats, monkeypatch):
+    import ragbot.data.db_router as dr
+    monkeypatch.setattr(dr, "settings", lambda: {"data.max_databases_per_question": 2,
+                                                 "data.max_databases_per_question_max": 3})
+    four = {**cats, "FM": _cat("FM", ["grn", "stock"], [_t("dbo.Ledger")], [cats["BitopiSplint"].views[0]])}
+    # Inventory 6 + name 2 = 8, FM 6 + 0.5 (curated) = 6.5, BitopiSplint 0.5, HR 0: FM is the second pick, nothing ties it
+    assert list(pick_catalogs("GRN stock", four)) == ["Inventory", "FM"]
+    # keywords tie (6/6) and only the curated half-point separates FM from a third catalog: it joins
+    four["Washing"] = _cat("Washing", ["grn", "stock"], [_t("dbo.Recipe")])
+    assert list(pick_catalogs("GRN stock", four)) == ["Inventory", "FM", "Washing"]
+    # the cap holds
+    monkeypatch.setattr(dr, "settings", lambda: {"data.max_databases_per_question": 2,
+                                                 "data.max_databases_per_question_max": 2})
+    assert list(pick_catalogs("GRN stock", four)) == ["Inventory", "FM"]
+
+
+def test_a_recorded_value_of_a_database_counts_like_one_of_its_keywords(cats, monkeypatch):
+    import ragbot.data.db_router as dr
+    from ragbot.data.values import ValueHit
+    monkeypatch.setattr("ragbot.data.values.lookup", lambda q, scope, entity=None, entries=None: [
+        ValueHit("store", "Maintenance Store (Misami)", "2", "mantainance store", 1.0, "Inventory", "rag.vw_StockBalance.StoreName")])
+    ev = evidence("balance of 1178108 in the mantainance store", cats)
+    assert ev[0].database == "Inventory" and ev[0].keywords == dr.VALUE_POINTS      # no keyword, one recorded value
+    monkeypatch.setattr("ragbot.data.values.lookup", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no copies")))
+    assert evidence("balance of 1178108 in the mantainance store", cats)[0].keywords == 0   # the index is optional
+
+
+def test_factory_catalog_wins_its_factory_and_stays_out_of_others(cats, monkeypatch):
+    import ragbot.data.db_router as dr
+    from ragbot.data.db_router import factory_points
+    codes = ["TAL", "RHL", "BGL"]
+    rhl = Catalog("VistaQ_RHL", "tsql", "X", [], [], keywords=["defects", "dhu"], tables=[_t("dbo.QCSummary")],
+                  factory="RHL")
+    assert factory_points("Top defects at RHL this week", rhl, codes) == 4.0
+    assert factory_points("Top defects at TAL this week", rhl, codes) == -4.0
+    assert factory_points("Top defects this week", rhl, codes) == 0.0
+    assert factory_points("RHL and TAL defects", rhl, codes) == 4.0          # it names RHL too
+    assert factory_points("RHL defects", cats["Inventory"], codes) == 0.0   # a catalog for every factory
+    monkeypatch.setattr(dr, "settings", lambda: {"scope.factory_codes": codes})
+    plan = Catalog("Planning", "tsql", "X", [], [], keywords=["defects", "dhu", "line"], tables=[_t("dbo.LineDaily")])
+    both = {"VistaQ_RHL": rhl, "Planning": plan}
+    assert evidence("Top defects at RHL", both)[0].database == "VistaQ_RHL"
+    assert evidence("Top defects at TAL", both)[0].database == "Planning"

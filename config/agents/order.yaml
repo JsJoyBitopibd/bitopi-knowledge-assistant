@@ -7,6 +7,8 @@ catalogs: [BitopiSplint, Production]
 keywords: [order, orders, export order, eo, po, pcd, ppm, ship date, ex-factory, exfactory, shipment, shipments,
            behind schedule, late, overdue, delayed, buyer, buyers, style, styles, merchandiser, cancelled, file reference]
 charter: agents/order
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'Order data I can read is the ERP''s export orders, PCD, ship and ex-factory dates, PPM meetings and export invoices; the buyer''s merchandiser can help with anything else.'
 # Watch rules (scripts/watch.py, Phase L). Thresholds are provisional until the merchandising interviews set them.
 watch:
   - name: behind_schedule
