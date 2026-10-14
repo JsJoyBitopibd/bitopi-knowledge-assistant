@@ -1,0 +1,53 @@
+# Stage-2 risk rules for the Quality domain (Phase M, docs/AGENTS_DESIGN.md §4).
+#
+# A level is computed per VistaQ order file (FR number = the ERP's FileRefID) over a trailing window,
+# and shown on the export orders that file covers. VistaQ records QC per file, not per PO or export
+# order, so the file is the finest grain that exists; `vistaq_inspections_without_a_file` measures how
+# much of production carries one (0 of 86,389 on 2026-10-14, i.e. all of it).
+#
+# AMBER IS NOT OURS. It mirrors VistaQ's own target in dbo.Threshold, so the factories are measured
+# against the number they already set for themselves. It is repeated here because the level has to be
+# computable from config alone, and the runner compares the two on every evaluation and records an
+# error when they differ — a target changed in VistaQ must not silently stop matching this file.
+#
+# RED IS PROVISIONAL. Nobody has validated it: it is a starting point for the QC interviews
+# (AGENTS_DESIGN.md §5), not a judgement by the QC department. `red_caveat` is stored on every row this
+# produces and must be shown wherever a red level is shown, so a later reader cannot lose it.
+#
+# Read live from dbo.Threshold on 2026-10-14: DHUThreshold 3.85, RejectRateThreshold 1.00,
+# EfficiencyThreshold 70.00, FTPRateThreshold NULL, effective 2025-03-01 to 2028-03-01, one active row.
+dimension: quality
+window_days: 7
+
+red_caveat: >-
+  The red level is provisional. It has not been checked against what actually happened and it was not
+  set by the QC department; it is a starting point for the quality interviews, not a judgement. The
+  amber level is VistaQ's own target.
+
+rules:
+  # Higher is worse, which is the default in domain_agents/watch.py level(); `direction: below` is the
+  # only value that function reads, so it is left out here rather than written as a decorative "above".
+  - name: file_dhu
+    title: 'DHU {value} over {window_days} days (target {amber})'
+    measure: dhu
+    amber: 3.85              # mirrors dbo.Threshold.DHUThreshold
+    amber_source: DHUThreshold
+    red: 6                   # provisional - see red_caveat
+    red_provisional: true
+    weight: 2                # defects per hundred pieces is the measure the factories manage against
+    min_checked: 200         # below this a day's DHU swings on a handful of pieces and means little
+
+  - name: file_reject_pct
+    title: 'Reject rate {value}% over {window_days} days (target {amber})'
+    measure: reject_pct
+    amber: 1.0               # mirrors dbo.Threshold.RejectRateThreshold
+    amber_source: RejectRateThreshold
+    red: 2                   # provisional - see red_caveat
+    red_provisional: true
+    weight: 1
+    min_checked: 200
+
+# Deliberately not a rule: first pass (ftp_pct). dbo.Threshold.FTPRateThreshold is NULL, so VistaQ has
+# set no first-pass target, and inventing an amber for it would make up the one number this file is
+# careful not to make up. It is still recorded as a measure on every evaluation and in the outcome, so
+# a target set later can be applied to history without re-running anything.

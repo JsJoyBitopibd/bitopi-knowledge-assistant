@@ -71,5 +71,12 @@ services:
     env_file: .env
     volumes:
       - ./data/index:/app/data/index
+      # The rules the watcher runs live in config/, not in the image: without these mounts it keeps
+      # running the rule set that was baked in at build time and nothing says so. Confirmed on
+      # 2026-10-14 — the running watcher had none of the day's new rules. Only directories that
+      # exist in the repo are mounted here: naming a missing FILE makes Docker create a directory.
+      - ./config/agents:/app/config/agents:ro
+      - ./config/rules:/app/config/rules:ro
+      - ./config/catalog:/app/config/catalog:ro
     mem_limit: 1g
     restart: unless-stopped

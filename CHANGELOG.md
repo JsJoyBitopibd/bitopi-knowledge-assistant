@@ -57,6 +57,10 @@ each phase is in `docs/ROADMAP.md`.
   day-status code has appeared that the assistant does not know.
 
 ### Fixed
+- **The watcher was running yesterday's rules** (Phase M). The background job that collects the morning
+  brief's signals read its rule list from inside the built image rather than from the configuration
+  folder, so a rule added or changed during the day was never picked up and nothing reported it. It now
+  reads the same files everything else does.
 - **A model-written query runs against the database it named** (found by the release eval, 2026-10-13). The
   prompt lists each database with its dialect, so the model replied `DATABASE: Hrms5Misami (tsql)` — the label
   it had been shown. That name was compared exactly, matched nothing, and the query fell through to whichever

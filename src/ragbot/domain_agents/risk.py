@@ -1,0 +1,124 @@
+"""Stage-2 risk levels (Phase M): rules loaded from config/rules/<dimension>.yaml, validated like watch
+rules and scored by the same function.
+
+A level is computed per subject — for Quality, the VistaQ order file (FR number) over a trailing window —
+and is deliberately NOT a second way of expressing a level: `watch.level()` does the comparison, and the
+rules reuse its `amber` / `red` / `direction` keys, so there is one vocabulary and one place where a
+threshold means something.
+
+Two things this module is careful about.
+
+Amber is the factory's own target, read live from the database (`amber_source` names the column it mirrors),
+not a number this project chose. The copy in the YAML exists so a level is computable from config alone;
+`drift()` compares the two so a target changed in VistaQ cannot silently stop matching the file.
+
+Red is provisional. `red_caveat` travels with every rule that declares `red_provisional`, is stored on the
+row the evaluation produces and is shown wherever the level is shown — an unvalidated threshold presented
+as a judgement would be the dishonest part of this feature.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+
+from ..config import ROOT
+
+MEASURES = ("dhu", "reject_pct", "ftp_pct", "defective_pct", "rectified_pct")
+
+
+@dataclass
+class RuleSet:
+    """One dimension's rules: config/rules/<dimension>.yaml."""
+    dimension: str
+    window_days: int
+    red_caveat: str
+    rules: list[dict[str, Any]] = field(default_factory=list)
+
+    def rule(self, name: str) -> Optional[dict[str, Any]]:
+        return next((r for r in self.rules if r.get("name") == name), None)
+
+
+def rules_dir() -> Path:
+    return ROOT / "config" / "rules"
+
+
+def _stamp(folder: Path) -> tuple:
+    return tuple(sorted((f.name, f.stat().st_mtime_ns) for f in folder.glob("*.yaml"))) if folder.exists() else ()
+
+
+def load_rule_sets(folder: Optional[Path] = None) -> dict[str, RuleSet]:
+    """{dimension: RuleSet}. Cached on the folder's file mtimes, like the catalogs and the agents, so an
+    edited threshold is picked up without a restart (the compose mount, not the image, carries it)."""
+    folder = folder or rules_dir()
+    return dict(_load(folder, _stamp(folder)))
+
+
+@lru_cache(maxsize=4)
+def _load(folder: Path, _stamp: tuple) -> tuple[tuple[str, RuleSet], ...]:
+    out: list[tuple[str, RuleSet]] = []
+    if not folder.exists():
+        return ()
+    for f in sorted(folder.glob("*.yaml")):
+        if f.name.endswith(".example.yaml"):
+            continue
+        d = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        name = str(d.get("dimension") or f.stem)
+        out.append((name, RuleSet(dimension=name,
+                                  window_days=int(d.get("window_days") or 7),
+                                  red_caveat=str(d.get("red_caveat") or "").strip(),
+                                  rules=list(d.get("rules") or []))))
+    return tuple(out)
+
+
+def validate(sets: dict[str, RuleSet]) -> list[str]:
+    """Problems in the risk rules, in the shape watch.validate() returns so check_catalog prints them the
+    same way: a unique name, the keys a level needs, a known measure, thresholds that are both present and
+    in the right order, and a caveat whenever a red level is declared provisional."""
+    problems, seen = [], set()
+    for dim, rs in sorted(sets.items()):
+        if not rs.rules:
+            problems.append(f"risk {dim}: no rules")
+        for r in rs.rules:
+            key = f"{dim}.{r.get('name')}"
+            if not r.get("name") or key in seen:
+                problems.append(f"risk {key}: needs a unique name")
+            seen.add(key)
+            for k in ("title", "measure"):
+                if not r.get(k):
+                    problems.append(f"risk {key}: missing {k}")
+            if r.get("measure") and r["measure"] not in MEASURES:
+                problems.append(f"risk {key}: measure {r['measure']!r} is not one of {', '.join(MEASURES)}")
+            a, red = r.get("amber"), r.get("red")
+            if (a is None) != (red is None):
+                problems.append(f"risk {key}: give both amber and red, or neither (information only)")
+            elif a is not None:
+                below = r.get("direction") == "below"
+                if (float(a) > float(red)) if not below else (float(a) < float(red)):
+                    problems.append(f"risk {key}: amber and red are in the wrong order for direction "
+                                    f"{'below' if below else 'above'}")
+            # An unvalidated red shown as a judgement is the one dishonest thing this feature could do.
+            if r.get("red_provisional") and not rs.red_caveat:
+                problems.append(f"risk {key}: red is provisional, so the rule set needs a red_caveat")
+            if r.get("amber") is not None and not r.get("amber_source"):
+                problems.append(f"risk {key}: amber must name the database column it mirrors (amber_source)")
+            if r.get("min_checked") is not None and int(r["min_checked"]) < 0:
+                problems.append(f"risk {key}: min_checked cannot be negative")
+    return problems
+
+
+def drift(rs: RuleSet, targets: dict[str, Any]) -> list[str]:
+    """Where the YAML's amber no longer matches the target the database holds. `targets` is one row of the
+    source table keyed by column name. A changed target must not silently stop matching this file."""
+    out = []
+    for r in rs.rules:
+        col = r.get("amber_source")
+        if not col or r.get("amber") is None or col not in targets or targets[col] is None:
+            continue
+        if abs(float(targets[col]) - float(r["amber"])) > 1e-6:
+            out.append(f"risk {rs.dimension}.{r['name']}: amber {r['amber']} no longer matches "
+                       f"{col} = {targets[col]} in the database")
+    return out
