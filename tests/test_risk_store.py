@@ -158,3 +158,83 @@ def test_another_dimension_does_not_show_up_as_quality(tmp_path):
     signals.write_risk_run("shipping", [a], datetime.now(), [], source=SRC, path=db)
     assert signals.risk_latest(Scope.unrestricted(), "quality", path=db) == (None, [])
     assert len(signals.risk_latest(Scope.unrestricted(), "shipping", path=db)[1]) == 1
+
+
+# ---------------------------------------------------------------- settlement (Phase M5)
+def test_a_subject_still_planned_is_not_settled(tmp_path):
+    """Settling a file that is still running would record a half-finished window as its final quality."""
+    db = tmp_path / "signals.db"
+    a = _assess("FR-A", "TAL")
+    signals.write_risk_run("quality", [a], datetime.now(), [], source=SRC, path=db)
+    done = risk.settle("quality", [a], running={("TAL", "FR-A")}, newest="2026-10-14", path=db)
+    assert done == 0 and len(signals.open_predictions(path=db)) == 1
+
+
+def test_a_subject_no_longer_planned_settles(tmp_path):
+    db = tmp_path / "signals.db"
+    a = _assess("FR-A", "TAL")
+    signals.write_risk_run("quality", [a], datetime.now(), [], source=SRC, path=db)
+    assert risk.settle("quality", [a], running=set(), newest="2026-10-14", path=db) == 1
+    assert signals.settled(path=db)[0]["outcome_level"] == "red"
+
+
+def test_nothing_settles_while_the_feed_holds_no_newest_day(tmp_path):
+    """The guard against an outage: if VistaQ's newest day cannot be read, every open subject would look
+    finished at once and the backtest would be built on outcomes recorded during the outage."""
+    db = tmp_path / "signals.db"
+    a = _assess("FR-A", "TAL")
+    signals.write_risk_run("quality", [a], datetime.now(), [], source=SRC, path=db)
+    assert risk.settle("quality", [a], running=set(), newest=None, path=db) == 0
+    assert risk.settle("quality", [a], running=set(), newest="", path=db) == 0
+    assert len(signals.open_predictions(path=db)) == 1
+
+
+def test_a_subject_with_nothing_left_in_the_window_waits(tmp_path):
+    """Not planned and not in the window either: there is nothing to settle against, so it waits rather
+    than being settled against a figure that is not there."""
+    db = tmp_path / "signals.db"
+    signals.write_risk_run("quality", [_assess("FR-A", "TAL")], datetime.now(), [], source=SRC, path=db)
+    assert risk.settle("quality", [], running=set(), newest="2026-10-14", path=db) == 0
+    assert len(signals.open_predictions(path=db)) == 1
+
+
+def test_a_factory_is_part_of_the_subject_key(tmp_path):
+    """The same file can run in two factories; one finishing must not settle the other."""
+    db = tmp_path / "signals.db"
+    tal, rhl = _assess("FR-A", "TAL"), _assess("FR-A", "RHL")
+    signals.write_risk_run("quality", [tal, rhl], datetime.now(), [], source=SRC, path=db)
+    assert risk.settle("quality", [tal, rhl], running={("RHL", "FR-A")}, newest="2026-10-14", path=db) == 1
+    still = signals.open_predictions(path=db)
+    assert [(p["factory"], p["subject"]) for p in still] == [("RHL", "FR-A")]
+
+
+def test_only_subjects_still_in_production_get_a_prediction():
+    """Found by running the job twice: a finished file was predicted and settled in the same run, every
+    run, which would have filled the backtest with zero-lead-time rows — a record of the present dressed
+    as a forecast. Finished subjects are still scored, because their final window is what settles them."""
+    a, b = _assess("FR-RUNNING", "TAL"), _assess("FR-DONE", "TAL")
+    keep = risk.predictable([a, b], running={("TAL", "FR-RUNNING")})
+    assert [x.subject for x in keep] == ["FR-RUNNING"]
+    assert risk.predictable([a, b], running=set()) == []
+    assert len(risk.predictable([a, b], running={("TAL", "FR-RUNNING"), ("TAL", "FR-DONE")})) == 2
+
+
+def test_a_finished_subject_stays_settled_across_runs(tmp_path):
+    """The end-to-end shape of the fix: once settled, a subject neither reopens nor is re-settled."""
+    db = tmp_path / "signals.db"
+    a, b = _assess("FR-RUNNING", "TAL"), _assess("FR-DONE", "TAL")
+    running = {("TAL", "FR-RUNNING")}
+    # day 1: both running, both predicted
+    signals.write_risk_run("quality", risk.predictable([a, b], {("TAL", "FR-RUNNING"), ("TAL", "FR-DONE")}),
+                           datetime.now(), [], source=SRC, path=db)
+    assert len(signals.open_predictions(path=db)) == 2
+    # day 2: FR-DONE has finished — it settles once and is not predicted again
+    signals.write_risk_run("quality", risk.predictable([a, b], running), datetime.now(), [],
+                           source=SRC, path=db)
+    assert risk.settle("quality", [a, b], running, "2026-10-14", path=db) == 1
+    # day 3: nothing left to settle, and the open set is only the running subject
+    signals.write_risk_run("quality", risk.predictable([a, b], running), datetime.now(), [],
+                           source=SRC, path=db)
+    assert risk.settle("quality", [a, b], running, "2026-10-14", path=db) == 0
+    assert [p["subject"] for p in signals.open_predictions(path=db)] == ["FR-RUNNING"]
+    assert len(signals.settled(path=db)) == 1

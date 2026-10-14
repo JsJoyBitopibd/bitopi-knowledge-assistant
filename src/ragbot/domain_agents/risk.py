@@ -18,7 +18,7 @@ as a judgement would be the dishonest part of this feature.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -238,3 +238,138 @@ def evaluate(rs: RuleSet, subject: str, factory: str, rows: list[dict[str, Any]]
     # must still carry the reason its red is not a judgement.
     a.caveat = rs.red_caveat if a.provisional else ""
     return a
+
+
+# ---------------------------------------------------------------- reading the subjects (Phase M5)
+# One row per subject, aggregated IN SQL. Two reasons, and they point the same way: the Quality charter
+# says to compute a ratio from the sums in the SQL, and grouping by day instead returned exactly 200 rows
+# of a true 755 on 2026-10-14 — data.max_rows had truncated it silently and the levels covered a quarter
+# of production with no error. This read goes through stream_sqlserver, which is not row-capped (the same
+# path scripts/refresh_aggregates.py uses), so the cap cannot bite again; `max_subjects` is a loud stop,
+# not a quiet trim.
+SUBJECT_SQL = """
+SELECT Factory, FileNo, COUNT(DISTINCT InspectionDate) AS Days,
+       SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+       SUM(Rectified) AS Rectified, SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
+FROM rag.vw_PlanQualityDay
+WHERE InspectionDate >= DATEADD(day, -{days}, {as_of}) AND FileNo IS NOT NULL
+GROUP BY Factory, FileNo
+"""
+# A subject still running: VistaQ holds a plan for it dated after its last inspection day. Measured
+# against the newest day VistaQ ITSELF holds, never the wall clock — a feed outage would otherwise look
+# like every file finishing at once.
+RUNNING_SQL = """
+SELECT Factory, FileNo, MAX(PlanDate) AS LastPlan
+FROM rag.vw_PlanDay
+WHERE PlanHours > 0 AND FileNo IS NOT NULL AND PlanDate >= DATEADD(day, -{days}, {as_of})
+GROUP BY Factory, FileNo
+"""
+NEWEST_DAY_SQL = "SELECT MAX(InspectionDate) AS NewestDay FROM rag.vw_LineDayQuality"
+
+
+def _read(sql: str, cat: Any, *, timeout: int, tool: str) -> tuple[list[str], list[list[Any]], list[str]]:
+    """Guard, expand and stream one read. Unrestricted scope: the store keeps every factory and the scope
+    filter is applied when a brief or an answer reads it, exactly as the watcher does."""
+    from ..auth.models import Scope
+    from ..data.connectors import stream_sqlserver
+    from ..data.guard import assert_read_only
+    from ..data.virtual import rewrite_virtual
+
+    assert_read_only(sql)
+    sql_exec, views = rewrite_virtual(sql, cat, scope=Scope.unrestricted())
+    cols: list[str] = []
+    rows: list[list[Any]] = []
+    for batch_cols, batch in stream_sqlserver(sql_exec, conn_env=cat.connection_env, timeout=timeout,
+                                              tool=tool, database=getattr(cat, "connection_database", None)):
+        cols = cols or list(batch_cols)
+        rows.extend(list(r) for r in batch)
+    return cols, rows, views
+
+
+def collect(rs: RuleSet, cat: Any, *, as_of: str = "CAST(GETDATE() AS date)", timeout: int = 180,
+            max_subjects: int = 5000) -> tuple[list[Assessment], list[str], dict[str, Any]]:
+    """Score every subject in the window. Returns (assessments, errors, source).
+
+    `errors` is stored with the run and shown to admins: a run that could not see all of production says
+    so rather than publishing levels for part of it.
+    """
+    errors: list[str] = []
+    sql = SUBJECT_SQL.format(days=rs.window_days, as_of=as_of)
+    cols, rows, views = _read(sql, cat, timeout=timeout, tool=f"risk:{rs.dimension}")
+    if len(rows) > max_subjects:
+        errors.append(f"{len(rows)} subjects is more than max_subjects {max_subjects}: refusing to score a "
+                      f"subset — raise the limit or narrow the window")
+        return [], errors, {"database": cat.database, "views": views, "sql": sql}
+
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        factory, subject = str(d.get("Factory") or "").strip(), str(d.get("FileNo") or "").strip()
+        if not factory or not subject:
+            continue        # without a factory the row could not be scoped on read; without a subject it is nothing
+        a = evaluate(rs, subject, factory, [d], days=rs.window_days)
+        a.days = int(d.get("Days") or 0)
+        out.append(a)
+    return out, errors, {"database": cat.database, "views": views, "sql": sql}
+
+
+def still_running(cat: Any, *, days: int = 30, as_of: str = "CAST(GETDATE() AS date)",
+                  timeout: int = 180) -> set[tuple[str, str]]:
+    """(factory, subject) pairs VistaQ still plans to run. A subject not in this set has finished."""
+    cols, rows, _ = _read(RUNNING_SQL.format(days=days, as_of=as_of), cat, timeout=timeout,
+                          tool="risk:running")
+    out = set()
+    for r in rows:
+        d = dict(zip(cols, r))
+        out.add((str(d.get("Factory") or "").strip(), str(d.get("FileNo") or "").strip()))
+    return out
+
+
+def newest_day(cat: Any, *, timeout: int = 60) -> Optional[str]:
+    """The newest inspection day VistaQ itself holds. Settlement is measured against this, not the clock:
+    if the feed stops, every open subject would otherwise look finished on the same day."""
+    cols, rows, _ = _read(NEWEST_DAY_SQL, cat, timeout=timeout, tool="risk:newest_day")
+    if not rows or rows[0][0] is None:
+        return None
+    return str(rows[0][0])[:10]
+
+
+def settle(dimension: str, assessments: list[Assessment], running: set[tuple[str, str]],
+           newest: Optional[str], path: Optional[Any] = None) -> int:
+    """Record what actually happened for every subject that has finished running. Returns how many settled.
+
+    Takes the assessments the run has already read: a subject's final window is the window that was just
+    scored, so re-reading it per subject would be the same query a hundred times over.
+
+    A subject settles only when the plans no longer carry it AND the feed itself has moved on. `newest` is
+    the newest inspection day VistaQ holds, never the wall clock — a stopped feed would otherwise make
+    every open subject look as though it finished on the same day, and the whole backtest would be built
+    on outcomes recorded during an outage.
+    """
+    from .signals import open_predictions, write_outcome
+
+    if not newest:
+        return 0
+    final = {(a.factory, a.subject): a for a in assessments}
+    done = 0
+    for p in open_predictions(dimension, path=path):
+        key = (p["factory"], p["subject"])
+        if key in running:
+            continue                      # still planned: not finished
+        a = final.get(key)
+        if a is None:
+            continue                      # nothing left in the window to settle against; try again tomorrow
+        if write_outcome(p["id"], a.level, a.totals, [asdict(m) for m in a.measures], path=path):
+            done += 1
+    return done
+
+
+def predictable(assessments: list[Assessment], running: set[tuple[str, str]]) -> list[Assessment]:
+    """The subjects worth storing a prediction for: the ones still in production.
+
+    A subject that has already finished would otherwise be predicted and settled in the same run, and a
+    prediction with no lead time over its outcome tells a backtest nothing — it is a record of the present
+    dressed as a forecast. The finished ones are still scored, because their final window is what the
+    outcome is settled against.
+    """
+    return [a for a in assessments if (a.factory, a.subject) in running]
