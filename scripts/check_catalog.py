@@ -79,10 +79,35 @@ def offline(cats) -> int:
     for p in validate_agents(agents, cats, tools) + validate_watch(agents, cats) + validate_risk(rule_sets):
         print(f"[offline] {p}")
         problems += 1
+    # Phase N1a: the playbook format and the cost sources. A draft or a cost without a value is not a problem
+    # (playbook.ready() reports those); a file that does not load is one, and is counted instead of crashing.
+    playbooks, costs, pb_problems = load_stage3(rule_sets)
+    for p in pb_problems:
+        print(f"[offline] {p}")
+        problems += 1
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "
           f"{len(tools)} fixed tools, {len(agents)} agents, "
-          f"{sum(len(r.rules) for r in rule_sets.values())} risk rules — {problems} problem(s)")
+          f"{sum(len(r.rules) for r in rule_sets.values())} risk rules, "
+          f"{len(playbooks)} playbooks, {sum(1 for pb in playbooks if pb.status == 'approved')} approved; "
+          f"cost sources {sum(1 for s in costs.values() if isinstance(s, dict) and s.get('value') is not None)} "
+          f"of {len(costs)} with values — {problems} problem(s)")
     return problems
+
+
+def load_stage3(rule_sets) -> tuple[list, dict, list[str]]:
+    """(playbooks, cost sources, problems). A file that does not load — an unknown key under `when:`, a YAML
+    syntax error — is reported as a problem line, so one bad file does not hide every other check."""
+    from ragbot.domain_agents.playbook import load_costs, load_playbooks, validate as validate_playbooks
+    problems: list[str] = []
+    try:
+        playbooks = load_playbooks()
+    except Exception as e:
+        playbooks, problems = [], [f"playbooks: {e.__class__.__name__}: {e}"]
+    try:
+        costs = load_costs()
+    except Exception as e:
+        costs, problems = {}, problems + [f"costs: {e.__class__.__name__}: {e}"]
+    return playbooks, costs, problems + validate_playbooks(playbooks, rule_sets, costs)
 
 
 def live(cats) -> int:

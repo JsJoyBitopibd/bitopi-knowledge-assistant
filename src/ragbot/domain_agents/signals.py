@@ -8,6 +8,12 @@ not as another kind of watch run: `latest()` takes the newest row of `watch_run`
 there would silently become "the morning brief" and replace it. A prediction also carries its outcome,
 filled in later when the subject settles — the Stage-2 gate is "several weeks of stored levels compared
 with what actually happened", and the counts behind a level cannot be recovered once the window moves on.
+
+Phase N (N3a) adds `recommendation` and `decision` in this same file. Their DDL lives in
+domain_agents/decisions.py and is executed after `_SCHEMA` (which it does not change) on that module's own
+write connections, so nothing here creates, reads or writes them. Nothing writes them yet either: the
+Stage-3 gate is closed until the Stage-2 backtest passes and real cost data exists, and no code in the app,
+the UI, the agents or the model calls imports decisions.py (tests/test_decisions.py).
 """
 from __future__ import annotations
 
