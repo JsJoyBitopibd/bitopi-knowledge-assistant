@@ -75,6 +75,9 @@ services:
     env_file: .env
     volumes:
       - ./data/index:/app/data/index
+      # The watcher's SQL and risk reads are logged to logs/sql.csv like the app's; without this mount
+      # they stayed inside the container and were lost with it.
+      - ./logs:/app/logs
       # The rules the watcher runs live in config/, not in the image: without these mounts it keeps
       # running the rule set that was baked in at build time and nothing says so. Confirmed on
       # 2026-10-14 — the running watcher had none of the day's new rules. Only directories that
