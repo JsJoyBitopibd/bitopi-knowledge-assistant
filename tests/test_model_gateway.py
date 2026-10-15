@@ -41,7 +41,7 @@ def _wrapped(primary: Fake, fallback: Fake | None):
 
 
 # ---------------------------------------------------------------- when a second provider is used
-@pytest.mark.parametrize("kind", ["quota", "timeout"])
+@pytest.mark.parametrize("kind", ["quota", "rate", "timeout"])
 def test_a_quota_or_timeout_failure_is_retried_on_the_second_provider(kind):
     first, second = Fake("first", fail=kind), Fake("second")
     reply = _wrapped(first, second).chat([{"role": "user", "content": "hi"}])
@@ -99,6 +99,16 @@ def test_a_stream_that_fails_before_its_first_token_falls_back():
     first, second = Fake("first", fail="quota"), Fake("second", deltas=["he", "llo"])
     out = list(_wrapped(first, second).stream([{"role": "user", "content": "hi"}]))
     assert [d for d in out if isinstance(d, str)] == ["he", "llo"]
+
+
+def test_a_per_minute_rate_limit_falls_back_like_the_daily_quota():
+    """A per-minute 429 is its own kind ("rate") since it stopped reading as the quota; the second provider
+    must still take it, on a stream as on a plain call."""
+    first, second = Fake("first", fail="rate"), Fake("second", deltas=["he", "llo"])
+    out = list(_wrapped(first, second).stream([{"role": "user", "content": "hi"}]))
+    assert [d for d in out if isinstance(d, str)] == ["he", "llo"]
+    assert (first.calls, second.calls) == (1, 1)
+    assert "rate" in llm.FALLBACK_KINDS
 
 
 def test_a_stream_that_fails_after_tokens_reached_the_screen_does_not_fall_back():

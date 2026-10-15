@@ -17,8 +17,8 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-INFRA_KINDS = {"quota", "timeout"}          # the provider was out; `db`, `auth`, `other` stay scored
-_INFRA_WARNING = re.compile(r"^llm (quota|timeout)\b")
+INFRA_KINDS = {"quota", "rate", "timeout"}  # the provider was out; `db`, `auth`, `other` stay scored
+_INFRA_WARNING = re.compile(r"^llm (quota|rate|timeout)\b")
 RUN_NAME = re.compile(r"\d{8}T\d{4}")       # eval/results/<date>T<time>.json; other reports are skipped
 SCORES = ("hit_rate", "faithfulness", "correctness", "citation_validity", "not_found_ok", "refuse_ok")
 BLOCK_DROP = 0.05
@@ -31,7 +31,7 @@ def infra_failure(answer: Any) -> bool:
 
 def outage_row(row: dict[str, Any]) -> bool:
     """A stored row that was lost to an outage — marked unscored, or (runs written before this rule)
-    carrying the orchestrator's `llm quota:` / `llm timeout:` warning."""
+    carrying the orchestrator's `llm quota:` / `llm rate:` / `llm timeout:` warning."""
     return bool(row.get("unscored")) or any(_INFRA_WARNING.match(w or "") for w in row.get("warnings", []))
 
 

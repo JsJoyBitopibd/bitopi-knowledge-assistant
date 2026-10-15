@@ -12,7 +12,23 @@ from typing import Any, Optional
 from openai import OpenAI
 
 from ..config import env
-from .base import ChatModel, ChatReply
+from .base import ChatModel, ChatReply, error_text, rate_or_quota
+
+
+def _spent_today() -> tuple[int, int]:
+    """(calls made since the provider's day began, the day's budget), from ragbot/quota.py.
+
+    Imported lazily: only a 429 needs it. A count that cannot be made reads as no calls, so a 429 whose
+    text names no limit is then taken for a per-minute one."""
+    try:
+        from .. import quota
+        budget = int(quota.daily_budget())
+    except Exception:
+        return 0, 1
+    try:
+        return int(quota.calls_today()), budget
+    except Exception:
+        return 0, budget
 
 
 class OpenAICompatChat(ChatModel):
@@ -77,7 +93,8 @@ class OpenAICompatChat(ChatModel):
     def _classify(self, exc: Exception) -> str:
         import openai
         if isinstance(exc, openai.RateLimitError):
-            return "quota"
+            # A 429 is either the day's quota or a per-minute limit: the error's quota ids say which.
+            return rate_or_quota(error_text(exc), *_spent_today())
         if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
             return "timeout"
         if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
