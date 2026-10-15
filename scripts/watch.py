@@ -5,6 +5,7 @@ Usage: python scripts/watch.py              # once
        python scripts/watch.py --risk       # Phase M: score and store the risk levels, then settle finished subjects
        python scripts/watch.py --risk-only  # the risk pass without the watch rules
        python scripts/watch.py --every 60 --risk-daily   # the service: watch rules hourly, risk once a day
+                                                         # per dimension (a failed one is retried next tick)
 Exit code 1 when a rule failed (the others are still stored).
 """
 import argparse, time, _path  # noqa: F401
@@ -12,7 +13,8 @@ from datetime import datetime
 from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.domain_agents import load_agents
-from ragbot.domain_agents.signals import db_path, open_predictions, risk_due, write_risk_run, write_run
+from ragbot.domain_agents.risk import load_rule_sets
+from ragbot.domain_agents.signals import db_path, dimensions_due, open_predictions, write_risk_run, write_run
 from ragbot.domain_agents.watch import run_all
 
 
@@ -34,13 +36,18 @@ def once(timeout: int) -> int:
 RISK_CATALOGS = {"quality": "VistaQ_Default_RHL"}
 
 
-def risk_once(timeout: int, dry_run: bool = False) -> int:
-    """Phase M: score every subject in the window, store the run, then settle the subjects that finished."""
+def risk_once(timeout: int, dry_run: bool = False, only: set[str] | None = None) -> int:
+    """Phase M: score every subject in the window, store the run, then settle the subjects that finished.
+
+    `only` limits the pass to those dimensions (--risk-daily: the ones still due today); None = all of them.
+    """
     from ragbot.domain_agents import risk
 
     failed = 0
     cats = load_catalogs()
     for dimension, rs in sorted(risk.load_rule_sets().items()):
+        if only is not None and dimension not in only:
+            continue                                # already has today's row (--risk-daily)
         cat = cats.get(RISK_CATALOGS.get(dimension, ""))
         if cat is None:
             print(f"  SKIPPED {dimension}: no catalog mapped (RISK_CATALOGS)")
@@ -96,10 +103,16 @@ def main() -> None:
     a = ap.parse_args()
     while True:
         failed = 0 if a.risk_only else once(a.timeout)
-        # --risk-daily: the levels are a daily series, so an hourly watcher stores them once a day. Asking the
-        # store rather than remembering it here means a restart does not add a second run that day.
-        if a.risk or a.risk_only or (a.risk_daily and risk_due()):
+        # --risk-daily: the levels are a daily series, so an hourly watcher stores them once a day per
+        # dimension. Asking the store rather than remembering it here means a restart does not add a second
+        # run that day, and a dimension whose pass raised (no row) is retried on the next tick without
+        # rerunning the dimensions that already wrote theirs. --risk / --risk-only run every dimension.
+        if a.risk or a.risk_only:
             failed += risk_once(max(a.timeout, 180), dry_run=a.dry_run)
+        elif a.risk_daily:
+            due = dimensions_due(load_rule_sets())
+            if due:
+                failed += risk_once(max(a.timeout, 180), dry_run=a.dry_run, only=due)
         if not a.every:
             raise SystemExit(1 if failed else 0)
         time.sleep(a.every * 60)

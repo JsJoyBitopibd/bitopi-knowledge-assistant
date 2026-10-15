@@ -16,7 +16,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from ..auth.models import Scope
 from ..config import settings
@@ -190,29 +190,44 @@ def _assessment(row: tuple) -> Any:
     return a
 
 
-def risk_due(today: Optional[date] = None, path: Optional[Path] = None) -> bool:
-    """Whether today's risk run is still to do: no `risk_run` row started on `today` (the factory's date).
+def risk_due(today: Optional[date] = None, path: Optional[Path] = None,
+             dimension: Optional[str] = None) -> bool:
+    """Whether a risk run is still to do today: no `risk_run` row started on `today` (the factory's date)
+    for `dimension` — or, with `dimension=None`, for any dimension at all (store-wide).
 
     The levels are a daily series — one prediction per running file per day is what the backtest reads — so
     the hourly watcher scores risk on its first tick of the day and not again (`watch.py --risk-daily`).
     A pass that raised writes no row, so a failed night is simply due again on the next tick.
 
-    Store-wide, not per dimension: right for today's single dimension (quality). With a second one, a night
-    on which one dimension wrote its row and the other raised would count as done and the failed one would
-    wait a day — give this a `dimension` argument and run only the dimensions still due before adding one.
+    Ask per dimension: on a night when one dimension wrote its row and another raised, the store-wide
+    answer is "done" and the failed one would wait a day. `watch.py --risk-daily` therefore runs only
+    dimensions_due(), i.e. the dimensions this returns True for.
     """
     path = path or db_path()
     if not path.exists():
         return True
+    sql, args = "SELECT 1 FROM risk_run WHERE started LIKE ?", [f"{(today or date.today()).isoformat()}%"]
+    if dimension is not None:
+        sql, args = sql + " AND dimension = ?", args + [dimension]
     con = _connect(path, readonly=True)
     try:
-        row = con.execute("SELECT 1 FROM risk_run WHERE started LIKE ? LIMIT 1",
-                          (f"{(today or date.today()).isoformat()}%",)).fetchone()
+        row = con.execute(sql + " LIMIT 1", args).fetchone()
     except sqlite3.Error:          # a store from before Phase M has no risk_run table yet
         return True
     finally:
         con.close()
     return row is None
+
+
+def dimensions_due(dimensions: Iterable[str], today: Optional[date] = None,
+                   path: Optional[Path] = None) -> set[str]:
+    """The dimensions among `dimensions` with no risk run started on `today` — what `--risk-daily` runs.
+
+    Any iterable of names, so risk.load_rule_sets() (a dict keyed by dimension) can be passed as it is.
+    An empty set means every dimension has its row for today and the risk pass is skipped.
+    """
+    today = today or date.today()          # one date for every dimension, even across midnight
+    return {d for d in dimensions if risk_due(today, path, dimension=d)}
 
 
 def risk_latest(scope: Scope, dimension: str = "quality",
