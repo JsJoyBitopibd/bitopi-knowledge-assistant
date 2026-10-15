@@ -39,7 +39,13 @@ SAMPLE_TYPES = {"varchar", "nvarchar", "char", "nchar"}
 # missing sample is a weaker hint, the cost of a sampled name is a person's name sent to the provider.
 SAMPLE_SKIP_WORDS: tuple[str, ...] = ("user", "login", "by", "emp", "name",
                                        # review of 2026-10-15: people named in non-people databases
-                                       "person", "merchandiser", "inspector", "owner")
+                                       "person", "merchandiser", "inspector", "owner",
+                                       # the first live run, 2026-10-15: people named by their role, not "name"
+                                       # (ExDirectorCode, StoreManagerCode, ResponsibleDMM, LineIncharge, UnitHead,
+                                       # ApproveAuth, OperatorCode, DriverLecence), and free text and account numbers
+                                       "officer", "manager", "director", "incharge", "dmm", "merchant", "operator",
+                                       "driver", "auth", "authority", "remark", "remarks", "unithead",
+                                       "marketinghead", "accno", "accountno", "receiveto")
 # Matched inside a word too, for names glued without a boundary or with a digit after them (InspectorName1,
 # NTDUpdatedby, EntryUserid, ApprovedBy1): words that START a person/login column, and words that END one.
 _SKIP_PREFIX: tuple[str, ...] = ("user", "login", "emp")
@@ -118,7 +124,7 @@ def carried_samples(previous: Optional[dict[str, Any]]) -> dict[tuple[str, str, 
             continue
         for c in t.get("columns", []):
             if c.get("samples") and not c.get("sensitive") and not is_sensitive(c["name"]) \
-                    and not sample_skipped(c["name"]):
+                    and not sample_skipped(c["name"]) and not samples_look_personal(c["samples"]):
                 out[(s, name, c["name"])] = list(c["samples"])
     return out
 
@@ -132,7 +138,25 @@ def sample_skipped(column: str, skip: tuple[str, ...] = SAMPLE_SKIP_WORDS) -> bo
         return True
     if skip != SAMPLE_SKIP_WORDS:
         return len(ws) == 1 and any(ws[0].startswith(s) or ws[0].endswith(s) for s in skip)
+    if any(a + b in skip for a, b in zip(ws, ws[1:])):              # LineInChargeID, UnitHead, AccNo, ReceiveTo
+        return True
     return any(w.startswith(_SKIP_PREFIX) or w.endswith(_SKIP_SUFFIX) for w in ws if w)
+
+
+# Values that say a column holds people whatever its name (the first live run, 2026-10-15: a free-text APORef
+# holding "Mr. ..., Cell: 01...", a Currency column with a name typed into it). One such value and the column
+# keeps none: its other values are as likely to be people. Applied when sampling, when carrying samples into a
+# new file and when a catalog loads.
+_PERSONAL_VALUE = re.compile(
+    r"[^@ ]+@[^@ ]+[.][a-z]{2,}"                                       # an email address
+    r"|(?<![0-9])(?:[+]?88)?01[3-9][0-9]{8}(?![0-9])"                  # a Bangladeshi mobile number
+    r"|^(?:mr|mrs|ms|md|mst|mohammad|mohammed|muhammad|engr|dr)(?:[.]|[ ])[ ]*[a-z]",   # a titled name
+    re.I)
+
+
+def samples_look_personal(values: Iterable[Any]) -> bool:
+    """True when any sampled value is an email address, a mobile number or a titled name (Mr. ..., Md. ...)."""
+    return any(_PERSONAL_VALUE.search(str(v).strip()) for v in values)
 
 
 def sample_candidates(tables: Iterable[tuple], columns: Iterable[tuple], max_rows: int,

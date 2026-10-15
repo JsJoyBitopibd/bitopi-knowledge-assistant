@@ -78,13 +78,21 @@ def test_sample_candidates_are_small_short_text_and_not_sensitive():
                                   "USERNAME", "empname", "loginid", "Name",
                                   # review of 2026-10-15: a digit after the word, or words glued in a longer name
                                   "InspectorName1", "InspectorName2", "NTDUpdatedby", "LastUpdatedby", "EntryUserid",
-                                  "ApprovedBy1", "ContactPerson", "AdminReportingPerson", "Merchandiser", "Owner"])
+                                  "ApprovedBy1", "ContactPerson", "AdminReportingPerson", "Merchandiser", "Owner",
+                                  # the first live run, 2026-10-15: people named by their role
+                                  "DMM", "ResponsibleDMM", "ExDirectorCode", "StoreManagerCode", "AccountsOfficerCode",
+                                  "CommercialOfficerCode", "ResponsibleIncharge", "LineIncharge", "LineInChargeID",
+                                  "ResponsibleUnitHead", "UnitHead", "MarketingHead", "Merchant", "ApproveAuth",
+                                  "CommercialApproveAuth", "ApproveAuthority", "OperatorCode", "DriverLecence",
+                                  "ReceiveTo", "AccNo", "ApprovedRemarks"])
 def test_columns_named_for_a_person_or_a_login_are_never_sampled(name):
     assert sample_skipped(name), name
 
 
 @pytest.mark.parametrize("name", ["ShipmentStatus", "Status", "Grade", "Buyer", "BuyerStyleNo", "UnitCode",
-                                  "Kind", "Flag", "OrderType", "Season"])
+                                  "Kind", "Flag", "OrderType", "Season", "ApprovalStatus", "Designation",
+                                  "StaffCategory", "ContactStatus", "TINNo", "Currency", "EntryType", "AccountSet",
+                                  "DocStatus", "VisitorType"])
 def test_code_and_status_columns_are_still_sampled(name):
     assert not sample_skipped(name), name
 
@@ -151,3 +159,25 @@ def test_a_people_table_in_any_database_is_never_sampled():
               ("dbo", "Status", "U", 40)]
     cols = [("dbo", t, "Code", "varchar", 20, True, 1) for _, t, _, _ in tables]
     assert sample_candidates(tables, cols, 200_000) == [("dbo", "Status", "Code")]
+
+
+@pytest.mark.parametrize("values", [["Open", "Mr. Karim, Cell: 01711000000"], ["USD", "Mr. Rahim"], ["a@b.com"],
+                                    ["8801911000000"], ["Md. Abdul", "BDT"], ["Mst Rina"], ["Engr. Kabir"]])
+def test_a_column_whose_values_hold_a_person_keeps_none(values):
+    from ragbot.data.discovery import samples_look_personal
+    assert samples_look_personal(values), values
+
+
+@pytest.mark.parametrize("values", [["USD", "BDT", "EUR"], ["Dr", "Cr"], ["MD"], ["Approved", "Pending"],
+                                    ["123456789012"], ["Majumder Textile Ltd"], ["PO-01711"]])
+def test_ordinary_values_are_kept(values):
+    from ragbot.data.discovery import samples_look_personal
+    assert not samples_look_personal(values), values
+
+
+def test_personal_values_are_not_carried_and_are_dropped_at_load():
+    from ragbot.data.discovery import carried_samples
+    previous = {"tables": [{"name": "dbo.APOMaster", "columns": [
+        {"name": "APORef", "samples": ["Mr. Karim, Cell: 01711000000", "PO 12"]},
+        {"name": "Kind", "samples": ["A", "B"]}]}]}
+    assert carried_samples(previous) == {("dbo", "APOMaster", "Kind"): ["A", "B"]}

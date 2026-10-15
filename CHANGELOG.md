@@ -41,9 +41,11 @@ each phase is in `docs/ROADMAP.md`.
   reads a few sample values per column, to help the SQL model match names, now never reads the three people
   databases, any table of people data in any other database (employee lists, attendance, payroll), or any column
   named for a person or a login (created by, user name, inspector name). It counts its queries offline first and
-  stops above 150 unless a larger count has been approved. Its first run was due today, but the questions asked
-  since September now point at 1,576 queries rather than the 122 approved then, so it waits for the owner to
-  choose which databases to sample.
+  stops above 150 unless a larger count has been approved. It also reads the values before keeping them: a
+  column holding an email address, a mobile number or a titled name ("Mr. …", "Md. …") keeps none, and columns
+  that name people by their role (store manager, line in-charge, approval authority, operator) are skipped too.
+  The first run, on 15 October, sampled the tables the SQL model has used in 14 databases; a check of what it
+  read found 38 columns that the new rules now exclude, and they were removed before any prompt used them.
 - **The index now records which build of the embedding model made it** (Phase I5, code only). Every new search
   index, schema vector file and cache entry notes the backend next to the model, and the app refuses to open an
   index made by a different one, so a faster model can never be mixed silently into an existing index. Today's

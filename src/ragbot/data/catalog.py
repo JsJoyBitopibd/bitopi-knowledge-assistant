@@ -374,10 +374,11 @@ def _load_discovered(folder: Path, database: str, pats: tuple[str, ...] | None =
             # every catalog: a person or login column's values, and any value of a people table (an employee
             # master in the ERP), never reach a prompt, even from a file sampled before these rules
             # (discovery.sample_skipped, sensitive.PEOPLE_TABLE)
-            from .discovery import sample_skipped
+            from .discovery import sample_skipped, samples_look_personal
             people = bool(PEOPLE_TABLE.search(t["name"].split(".")[-1]))
             cols = [{k: v for k, v in c.items() if k != "samples"}
-                    if c.get("samples") and (people or sample_skipped(c.get("name", ""))) else c for c in cols]
+                    if c.get("samples") and (people or sample_skipped(c.get("name", ""))
+                                             or samples_look_personal(c["samples"])) else c for c in cols]
         out.append(Table(t["name"], t.get("kind", "table"), t.get("rows"), t.get("description", ""),
                          t.get("primary_key", []), cols, t.get("foreign_keys", []), sensitive))
     return out

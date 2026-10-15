@@ -306,8 +306,10 @@ A full pass is thousands of small queries on production, so it is off by default
 - `--max-queries N` (default 150) stops a larger run before its first sampling query;
 - it never samples the people catalogs (`sensitive_patterns:` or `restricted_to:`; `--allow-people-samples`
   overrides, and their values are dropped at load anyway), a table whose name holds people data in any
-  database (employee, attendance, payroll …), or a column named for a person or a login (`CreatedBy`,
-  `UserName`, `InspectorName1` …);
+  database (employee, attendance, payroll …), or a column named for a person, a role or a login (`CreatedBy`,
+  `UserName`, `InspectorName1`, `StoreManagerCode`, `LineIncharge`, `ApproveAuth` …);
+- a column whose values include an email address, a mobile number or a titled name (`Mr. …`, `Md. …`) keeps no
+  value — checked when sampling, when earlier samples are carried into a new file and when a catalog loads;
 - a run whose connection or `--database` differs from the catalog's is refused, with no override.
 
 ```powershell

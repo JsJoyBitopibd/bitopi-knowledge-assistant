@@ -114,7 +114,7 @@ def write_json(cn, cur, a: argparse.Namespace, schemas: Optional[list[str]], cat
     """The discovery file. `cat` is the database's catalog (main() loads it for --samples): the logs are read
     through it for --tables-from-logs. Raises SystemExit(2), before any sampling query and without writing,
     when the candidates exceed --max-queries."""
-    from ragbot.data.discovery import assemble, budget_refused, sample_candidates
+    from ragbot.data.discovery import assemble, budget_refused, sample_candidates, samples_look_personal
     sf = _schema_filter(schemas)
     tables = [tuple(r) for r in cur.execute(f"""
         SELECT s.name, o.name, o.type,
@@ -172,7 +172,7 @@ def write_json(cn, cur, a: argparse.Namespace, schemas: Optional[list[str]], cat
             except Exception as e:
                 print(f"  skip {s}.{t}.{c}: {e.__class__.__name__}", file=sys.stderr)
                 continue
-            if 0 < len(vals) <= 30:
+            if 0 < len(vals) <= 30 and not samples_look_personal(vals):   # an email, a mobile, "Mr. ...": none kept
                 samples[(s, t, c)] = sorted(str(v).strip() for v in vals)
     kept = {k: v for k, v in previous.items() if k not in samples}
     samples = {**kept, **samples}                 # a column sampled now replaces its old values
