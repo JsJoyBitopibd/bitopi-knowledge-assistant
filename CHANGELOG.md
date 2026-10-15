@@ -44,6 +44,12 @@ each phase is in `docs/ROADMAP.md`.
   stops above 150 unless a larger count has been approved. Its first run was due today, but the questions asked
   since September now point at 1,576 queries rather than the 122 approved then, so it waits for the owner to
   choose which databases to sample.
+- **The index now records which build of the embedding model made it** (Phase I5, code only). Every new search
+  index, schema vector file and cache entry notes the backend next to the model, and the app refuses to open an
+  index made by a different one, so a faster model can never be mixed silently into an existing index. Today's
+  index has no such note and opens exactly as before. A compressed, faster build of the same model can now be
+  exported and compared against the current one, text by text and on the retrieval test questions; nothing
+  switches to it without the owner's approval after that comparison.
 
 ### Fixed
 - **A busy AI service no longer tells staff the day's allowance is spent.** A per-minute limit used to show "The

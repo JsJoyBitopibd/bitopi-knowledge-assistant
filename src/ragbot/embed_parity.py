@@ -65,10 +65,13 @@ def even_sample(n: int, k: int) -> list[int]:
     return [i * n // k for i in range(max(0, k))]
 
 
-def plan_selection(n_chunks: int, n_questions: int, n_schema: int, limit: int) -> tuple[int, list[int]]:
+def plan_selection(n_chunks: int, n_questions: int, n_schema: int, limit: int,
+                   reserve: float = 0.25) -> tuple[int, list[int]]:
     """Every chunk is compared (the int8/int8 hit rate needs all of them embedded anyway); then the questions,
-    then table documents spread over all databases, until `limit` texts in all. Returns (how many questions,
-    which table documents)."""
-    room = max(0, limit - n_chunks)
-    q = min(n_questions, room)
+    then table documents spread over all databases, until `limit` texts in all. Questions and table documents
+    are what the app embeds every day, so a large index never crowds them out: they get the room left under
+    `limit` and at least `reserve` of it (the run then compares more than `limit` texts), with half of that
+    room kept for table documents when there are any. Returns (how many questions, which table documents)."""
+    room = max(limit - n_chunks, int(limit * reserve))
+    q = min(n_questions, room - min(n_schema, room // 2))
     return q, even_sample(n_schema, min(n_schema, room - q))

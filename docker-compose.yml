@@ -42,6 +42,7 @@ services:
     volumes:
       - ./data/index:/app/data/index
       - ./data/pdfs:/app/data/pdfs
+      - ./data/models:/app/data/models      # the int8 bge-m3 export, once EMBED_BACKEND=onnx is approved (I5)
       - ${HF_CACHE:-~/.cache/huggingface}:/models
     mem_limit: 8g
     restart: unless-stopped

@@ -29,8 +29,10 @@ ST_FP32 = "st-fp32"     # the backend of every index, schema vector file and cac
 
 def _backend_kind(backend: str | None = None) -> str:
     """Which embedder EMBED_BACKEND (or `backend`) selects: "onnx", "ollama" or "st" (sentence-transformers,
-    also for any other value — the Embedder has always fallen back to it)."""
-    b = (EMBED_BACKEND if backend is None else backend).strip().lower()
+    also for any other value — the Embedder has always fallen back to it). Compared exactly, as the Embedder
+    always has (`== "ollama"`): "Ollama" or "ONNX" stays sentence-transformers, so the label recorded with an
+    index is what really embedded it, and an existing .env cannot change backend by upgrading."""
+    b = EMBED_BACKEND if backend is None else backend
     return b if b in ("onnx", "ollama") else "st"
 
 

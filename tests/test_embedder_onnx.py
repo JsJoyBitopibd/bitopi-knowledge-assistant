@@ -60,9 +60,12 @@ def test_even_sample_and_plan_selection():
     assert par.even_sample(3, 10) == [0, 1, 2] and par.even_sample(5, 0) == []
     # every chunk always; then questions; then table documents spread over all databases, to the limit
     assert par.plan_selection(250, 130, 3700, 1000) == (130, par.even_sample(3700, 620))
-    assert par.plan_selection(990, 130, 3700, 1000) == (10, [])
-    assert par.plan_selection(5000, 130, 3700, 1000) == (0, [])
     assert par.plan_selection(10, 5, 4, 1000) == (5, [0, 1, 2, 3])
+    # a large index never crowds out what the app embeds every day: a quarter of the limit, half of it for tables
+    assert par.plan_selection(990, 130, 3700, 1000) == (125, par.even_sample(3700, 125))
+    assert par.plan_selection(5000, 130, 3700, 1000) == (125, par.even_sample(3700, 125))
+    assert par.plan_selection(5000, 130, 0, 1000) == (130, [])
+    assert par.plan_selection(5000, 40, 3700, 1000) == (40, par.even_sample(3700, 210))
 
 
 # ---- the hit-rate loop (scripts/hit_rate.py and the parity check) ----------------------------------------
@@ -112,3 +115,48 @@ def test_only_embed_backend_onnx_selects_the_onnx_embedder(monkeypatch):
 def test_the_onnx_embedder_refuses_a_missing_export(tmp_path):
     with pytest.raises(RuntimeError, match="export_embedder_onnx"):
         embed.OnnxEmbedder(tmp_path)
+
+
+# ---- --check: the int8 copy and the backend it needs (review of 2026-10-15) ------------------------------
+@pytest.fixture
+def parity_script(monkeypatch):
+    """scripts/export_embedder_onnx.py, loaded fresh (nothing runs at import)."""
+    import importlib.util
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))           # for its `import _path`
+    spec = importlib.util.spec_from_file_location("export_embedder_onnx_under_test",
+                                                  root / "scripts" / "export_embedder_onnx.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_int8_copy_holds_exactly_the_compared_chunks(parity_script, tmp_path):
+    """A chunk the ingest worker adds or removes during --check neither breaks the copy nor joins it."""
+    from ragbot.store import ChromaStore
+    live = ChromaStore(path=tmp_path / "live", embed_backend="st-fp32")
+    x = [1.0] + [0.0] * 1023
+    live.col.upsert(ids=["a#p1#c1", "b#p1#c1", "new#p1#c1"], documents=["A", "B", "N"],
+                    metadatas=[{"source": "a.pdf"}, {"source": "b.pdf"}, {"source": "new.pdf"}], embeddings=[x] * 3)
+    compared = [par.ParityText("chunk", "a#p1#c1", "A", None), par.ParityText("chunk", "b#p1#c1", "B", None),
+                par.ParityText("chunk", "gone#p1#c1", "G", None)]
+    y = np.asarray([0.0, 1.0] + [0.0] * 1022, dtype=np.float32)
+    copy, gone = parity_script._int8_copy(live, compared, {t.key: y for t in compared}, tmp_path / "copy")
+    assert gone == 1                                                # removed from the live index meanwhile
+    got = copy.col.get(include=["documents", "metadatas", "embeddings"])
+    assert sorted(got["ids"]) == ["a#p1#c1", "b#p1#c1"]             # not the chunk added meanwhile
+    by_id = dict(zip(got["ids"], zip(got["documents"], got["metadatas"], got["embeddings"])))
+    assert by_id["a#p1#c1"][0] == "A" and by_id["a#p1#c1"][1] == {"source": "a.pdf"}
+    assert by_id["a#p1#c1"][2][1] == pytest.approx(1.0)              # the int8 vector, not the live one
+    assert copy.col.metadata["embed_backend"] == "onnx-int8"
+    assert live.count() == 3 and live.col.metadata["embed_backend"] == "st-fp32"   # the live index is untouched
+
+
+def test_check_refuses_another_backend_before_opening_anything(parity_script, monkeypatch):
+    """The keyword index opens the live store through store.get_store(), which refuses an st-fp32 index under
+    EMBED_BACKEND=onnx: --check stops at once instead of half-way through a 30-minute run."""
+    monkeypatch.setattr(embed, "EMBED_BACKEND", "onnx")
+    monkeypatch.setattr("ragbot.store.ChromaStore", lambda *a, **k: pytest.fail("the index was opened"))
+    with pytest.raises(SystemExit, match="EMBED_BACKEND unset"):
+        parity_script.check(1000, 100, None, True)

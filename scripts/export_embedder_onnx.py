@@ -10,12 +10,18 @@ L2-normalises it, as sentence-transformers does for bge-m3. The maximum length i
 model's max_seq_length, recorded in embedder.json (not hard-coded).
 
 An index is switched to onnx-int8 only with the user's approval, after --check shows cosine >= 0.99 against
-the stored fp32 vectors and a hit-rate drop <= 1, and then by scripts/reindex.py: store.py refuses an st-fp32
-index under EMBED_BACKEND=onnx. Record the result in docs/tuning_log.md.
+the stored fp32 vectors and a hit-rate drop <= 1 point (with 30 retrieval cases: no case lost), and then by
+scripts/reindex.py and scripts/index_schema.py: store.py refuses an st-fp32 index under EMBED_BACKEND=onnx.
+The app and the ingest-worker both embed, so both mount ./data/models (docker-compose.yml). Record the result
+in docs/tuning_log.md.
+
+--check runs with EMBED_BACKEND unset (sentence_transformers) and refuses otherwise: it reads the live st-fp32
+index, and retrieval opens the keyword index through the app's own store.get_store(), which would refuse it.
 
 Usage: python scripts/export_embedder_onnx.py           export (minutes; ~5 GB of memory)
        python scripts/export_embedder_onnx.py --check   parity; reads the live index, never writes it
            [--limit 1000]      texts compared: every chunk, then golden/retrieval questions, then table documents
+                               (those two always get at least a quarter of the limit, however many chunks)
            [--sanity 100]      texts for the fp32 sanity comparisons
            [--k N]             top-k of the hit-rate runs (default retrieval.final_top_k)
            [--no-hit-rate]     cosines only
@@ -127,7 +133,9 @@ def _embed_each(emb, texts: list[str], label: str):
 
 @contextmanager
 def _retrieval_using(store, embedder):
-    """retrieve() with this vector store and query embedder; the app's are restored afterwards."""
+    """retrieve() with this vector store and query embedder; the app's are restored afterwards. Only the
+    retriever's own lookups are swapped: the keyword index still opens the live store (store.get_store), which
+    holds the same chunk ids and texts as the int8 copy, and which check() makes sure opens (st-fp32)."""
     import ragbot.retrieve.retriever as rt
     saved = rt.get_store, rt.get_embedder
     rt.get_store, rt.get_embedder = (lambda: store), (lambda: embedder)
@@ -139,25 +147,35 @@ def _retrieval_using(store, embedder):
         rt._embed_query.cache_clear()
 
 
-def _int8_copy(live, vectors: dict, path: Path):
-    """A throwaway copy of the live collection (same ids, texts, metadata) holding int8 vectors."""
+def _int8_copy(live, chunks: list, vectors: dict, path: Path):
+    """(a throwaway collection holding int8 vectors, chunks gone from the live index meanwhile): exactly the
+    chunks read when --check started — their ids and texts, their metadata read now — so a chunk the
+    ingest worker adds or removes during the run can neither break the copy nor change what is compared."""
     from ragbot.store import ChromaStore
-    copy = ChromaStore(path=path, embed_backend="onnx-int8")
-    for off in range(0, live.count(), 1000):
-        res = live.col.get(limit=1000, offset=off, include=["documents", "metadatas"])
-        copy.col.upsert(ids=res["ids"], documents=res["documents"], metadatas=res["metadatas"],
-                        embeddings=[vectors[i].tolist() for i in res["ids"]])
-    return copy
+    copy, gone = ChromaStore(path=path, embed_backend="onnx-int8"), 0
+    for off in range(0, len(chunks), 1000):
+        part = chunks[off:off + 1000]
+        res = live.col.get(ids=[t.key for t in part], include=["metadatas"])
+        meta = dict(zip(res["ids"], res["metadatas"]))
+        keep = [t for t in part if t.key in meta]
+        gone += len(part) - len(keep)
+        if keep:
+            copy.col.upsert(ids=[t.key for t in keep], documents=[t.text for t in keep],
+                            metadatas=[meta[t.key] for t in keep], embeddings=[vectors[t.key].tolist() for t in keep])
+    return copy, gone
 
 
 def check(limit: int, sanity: int, k: int | None, with_hit_rate: bool) -> None:
     import numpy as np
     from ragbot import embed_parity as par
-    from ragbot.embed import Embedder, OnnxEmbedder, onnx_embedder_dir
+    from ragbot.embed import ST_FP32, Embedder, OnnxEmbedder, backend_label, onnx_embedder_dir
     from ragbot.ingest.priority import lower_priority
     from ragbot.retrieve.hit_rate import hit_rate, load_cases, retriever_search
     from ragbot.store import ChromaStore
 
+    if backend_label() != ST_FP32:
+        raise SystemExit(f"--check needs EMBED_BACKEND unset (sentence_transformers), not {backend_label()}: it reads "
+                         "the live st-fp32 index, which the keyword index opens through store.get_store()")
     print(f"priority {lower_priority()}")
     live = ChromaStore(embed_backend="st-fp32")          # the reference: read here, never written
     chunks = [par.ParityText("chunk", cid, text, np.asarray(vec, dtype=np.float32))
@@ -225,14 +243,19 @@ def check(limit: int, sanity: int, k: int | None, with_hit_rate: bool) -> None:
     keep = [i for i in range(len(items)) if i not in stale]
     min_kept = float(cos[keep].min()) if keep else float("nan")
 
-    rates = {}
+    rates, n_cases = {}, 0
     if with_hit_rate:
         cases = load_cases(ROOT / "tests" / "retrieval_cases.jsonl")
+        n_cases = len(cases)
         vec_of = {t.key: v8[i] for i, t in enumerate(items) if t.kind == "chunk"}
         print(f"\nhit rate, {len(cases)} retrieval cases")
         with tempfile.TemporaryDirectory(prefix="parity-int8-", ignore_cleanup_errors=True) as tmp:
+            copy, gone = _int8_copy(live, chunks, vec_of, Path(tmp) / "chroma")
+            if gone or live.count() != len(chunks):
+                print(f"note: the live index changed during --check ({len(chunks)} chunks compared, {live.count()} "
+                      f"now, {gone} of the compared gone): the fp32 runs read it as it is now")
             runs = [("fp32 docs, fp32 queries", live, st), ("fp32 docs, int8 queries", live, int8),
-                    ("int8 docs, int8 queries", _int8_copy(live, vec_of, Path(tmp) / "chroma"), int8)]
+                    ("int8 docs, int8 queries", copy, int8)]
             for label, store, emb in runs:
                 with _retrieval_using(store, emb):
                     r = hit_rate(cases, retriever_search(k))
@@ -247,8 +270,9 @@ def check(limit: int, sanity: int, k: int | None, with_hit_rate: bool) -> None:
     if rates:
         base = rates["fp32 docs, fp32 queries"]
         drop = base - min(rates.values())
-        print(f"gate: hit-rate drop <= 1: {'PASS' if drop <= 1 else 'FAIL'} "
-              f"({', '.join(f'{label} {n}' for label, n in rates.items())})")
+        points = 100 * drop / max(n_cases, 1)            # PLAN M7: "drops <= 1 point"; one of 30 cases is 3.3
+        print(f"gate: hit-rate drop <= 1 point: {'PASS' if points <= 1 else 'FAIL'} (drop {drop} of {n_cases} "
+              f"cases = {points:.1f} points; {', '.join(f'{label} {n}' for label, n in rates.items())})")
     print("record the result in docs/tuning_log.md; switching needs the user's approval and scripts/reindex.py")
 
 

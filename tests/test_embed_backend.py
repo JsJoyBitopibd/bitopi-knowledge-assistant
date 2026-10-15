@@ -24,8 +24,9 @@ def backend(monkeypatch):
 
 # ---- labels and cache keys ------------------------------------------------------------------------------
 @pytest.mark.parametrize("value, label", [("sentence_transformers", "st-fp32"), ("onnx", "onnx-int8"),
-                                          ("ONNX ", "onnx-int8"), ("ollama", "ollama"), ("", "st-fp32"),
-                                          ("anything-else", "st-fp32")])
+                                          ("ollama", "ollama"), ("", "st-fp32"), ("anything-else", "st-fp32"),
+                                          # exact, as the Embedder always compared: these ran sentence-transformers
+                                          ("ONNX", "st-fp32"), ("Ollama", "st-fp32"), ("onnx ", "st-fp32")])
 def test_backend_label_follows_what_the_embedder_runs(value, label):
     assert embed.backend_label(value) == label
 
