@@ -91,10 +91,25 @@ def offline(cats) -> int:
         problems += 1
     for w in notes:
         print(f"[offline] note: {w}")
+    # Phase N1a: the playbook format and the cost sources. A draft or a cost without a value is not a problem
+    # (playbook.ready() reports those); a file that does not load is one, and is counted instead of crashing.
+    playbooks, costs, pb_problems = load_stage3(rule_sets)
+    for p in pb_problems:
+        print(f"[offline] {p}")
+        problems += 1
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "
           f"{len(tools)} fixed tools, {len(agents)} agents, "
-          f"{sum(len(r.rules) for r in rule_sets.values())} risk rules — {problems} problem(s)")
+          f"{sum(len(r.rules) for r in rule_sets.values())} risk rules, "
+          f"{len(playbooks)} playbooks, {sum(1 for pb in playbooks if pb.status == 'approved')} approved; "
+          f"cost sources {sum(1 for s in costs.values() if isinstance(s, dict) and s.get('value') is not None)} "
+          f"of {len(costs)} with values — {problems} problem(s)")
     return problems
+
+
+def load_stage3(rule_sets) -> tuple[list, dict, list[str]]:
+    """(playbooks, cost sources, problems) for the offline check: see playbook.load_and_validate."""
+    from ragbot.domain_agents.playbook import load_and_validate
+    return load_and_validate(rule_sets)
 
 
 def live(cats) -> int:

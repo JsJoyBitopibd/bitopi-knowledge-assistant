@@ -1,0 +1,44 @@
+# TEMPLATE - the cost data Stage-3 playbooks compute with (Phase N1a, docs/AGENTS_DESIGN.md §3 and §8).
+# Copy to config/costs.yaml, which is git-ignored: rates are commercial data and the repository is public.
+#
+# One named source per rate. A playbook refers to it as cost.<name>; it never writes the number itself.
+# Every value is null here and stays null until its owner supplies it. A null value is not a problem for
+# scripts/check_catalog.py - it makes every playbook that uses the source "not ready", so no
+# recommendation can be written with it. A value needs:
+#   owner   the person or department who stands behind the number
+#   source  where it comes from (a contract, a rate card, the payroll report)
+#   as_of   the date it was true
+qc_inspector_day_rate:
+  unit: <currency> per inspector per day
+  value: null
+  owner: null
+  source: null
+  as_of: null
+
+rework_cost_per_piece:
+  unit: <currency> per piece
+  value: null
+  owner: null
+  source: null
+  as_of: null
+
+overtime_cost_per_hour:
+  unit: <currency> per operator hour
+  value: null
+  owner: null
+  source: null
+  as_of: null
+
+air_freight_rate:
+  unit: <currency> per kg
+  value: null
+  owner: null
+  source: null
+  as_of: null
+
+late_delivery_penalty:
+  unit: <share of order value> per day late, as the buyer's penalty terms state
+  value: null
+  owner: null
+  source: null
+  as_of: null

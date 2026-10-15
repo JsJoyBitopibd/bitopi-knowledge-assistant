@@ -61,7 +61,7 @@ not a separate chatbot or an autonomous program. It has five parts:
 | Databases | The subset of the 17 catalogued databases the agent reads | `config/agents/<agent>.yaml` (new), pointing at `config/catalog/` |
 | Tools | Parameterised SQL (fixed tools) and Python calculators: date windows, shortfall, completion forecast | `config/fixed_tools.yaml`, `src/ragbot/domain_agents/` (new) |
 | Watch rules | Queries a scheduled job runs without being asked, producing signals | `config/agents/<agent>.yaml` (new) |
-| Rules and playbooks | Staff knowledge written down: lead times, risk thresholds, standard responses | `config/rules/`, `config/playbooks/` (new), playbook PDFs in `data/pdfs/Playbook/` |
+| Rules and playbooks | Staff knowledge written down: lead times, risk thresholds, standard responses | `config/rules/`, `config/playbooks/` (format and validator built 2026-10-15, N1a; no real playbook yet), playbook PDFs in `data/pdfs/Playbook/` |
 
 A question about LCs reaches the Finance/LC agent through the router the assistant already uses
 (`db_router.pick_catalogs`), which picks the agent's databases and adds its charter. The Executive
@@ -135,7 +135,7 @@ Some answers cannot come from any database. Each of these is a small, owned piec
    ex-factory date has passed and the order has not shipped; or it is within 14 days and fabric is not
    in-house; or sewing output is under the share of the order the plan expects by today.
 3. **Risk thresholds** for Stage 2, from the Level-3 interviews (section 5).
-4. **Cost data** for "which option costs least": air-freight rates, overtime cost per hour, penalty terms.
+4. **Cost data** for "which option costs least": air-freight rates, overtime cost per hour, penalty terms. The format is ready (`config/costs.example.yaml`: each rate with its unit, owner, source and date; the real `config/costs.yaml` stays off git and out of the image).
 5. **A logistics feed** (forwarder system or a sheet) and **meter data** for Energy.
 
 The concept expects Stage 1 to "reveal enormous data-quality problems", and Phase J already found

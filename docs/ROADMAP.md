@@ -642,11 +642,17 @@ ahead, by factory and by lead time. Its minimum evidence (28 dates, 60 settled f
 
 - **N1 playbooks.** `config/playbooks/*.yaml`: a risk pattern → candidate actions with parameters.
   Cost and date effects computed in Python (needs the cost data in `AGENTS_DESIGN.md` §3).
+  *Built ahead of the gate, data-free only (N1a, 2026-10-15):* the format, its validator in
+  `check_catalog.py`, a template with no numbers, and `config/costs.example.yaml` — every cost a named
+  calculator over a chosen parameter, a dated and owned rate, or a count of the subject; never a literal.
+  The real playbooks and rates (N1b) are the departments' and the cost owners' to write.
 - **N2 recommendation answers.** "What can we do?" / "Which option costs least?": the tools produce
   the candidates with computed cost and effect; the executive-tier model ranks and explains, citing
   `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged.
 - **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
-  recommendation); the outcome is recorded as in M3.
+  recommendation); the outcome is recorded as in M3. *Built ahead of the gate, data-free only (N3a,
+  2026-10-15):* `recommendation` and `decision` tables, append-only, with every refusal in code and no
+  caller anywhere in the app; the buttons (N3b) wait for N2 and for sign-in (Phase S3).
 - **N4 model gateway — built 2026-10-14, ahead of N1–N3; released in v1.13.0.** `get_model(task)` in
   `src/ragbot/llm/__init__.py` with tiers in `settings.yaml` (`llm.tiers`; small: rewrite, route;
   main: answers, SQL, judge; executive: recommendations, cross-domain ranking). On an `LLMError`

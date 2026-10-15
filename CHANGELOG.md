@@ -17,6 +17,14 @@ each phase is in `docs/ROADMAP.md`.
   finished files, and 15 at each level a week ahead. Below that the report says "insufficient evidence" and
   lists what is missing; above it, it states three measurements and leaves the judgement to people. The first
   run today is, as expected, insufficient: two days of levels and no finished file yet.
+- **The groundwork for recommendations, built but deliberately not connected** (Phase N1a, N3a). Departments can
+  now write their response to a quality risk as a playbook file — which risk it answers, the actions, and how each
+  action's cost is worked out from named rates — and the configuration check tells them exactly what is missing.
+  No number can be typed into a playbook: every cost comes from a named rate with an owner, a source and a date,
+  kept in a file that never leaves this server. Recommendations and the approve/reject decisions on them have
+  their own records, which can be added to but never changed. **Nothing in the app uses any of this yet**: the
+  owner kept the rule that no recommendation reaches staff until the risk levels have proved themselves (late
+  November at the earliest) and the real cost figures exist.
 - **The people-data rule is complete and ready to switch on** (Phase S4). Everything that could still show a
   restricted database to someone outside its group is now covered: the recorded names the assistant matches
   questions against, a built-in query's values and its own database, the suggested follow-up questions after a

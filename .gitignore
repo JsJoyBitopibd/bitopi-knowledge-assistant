@@ -25,6 +25,8 @@ private/
 # real AD group -> scope mapping and local users (password hashes): copies of the *.example.yaml files
 config/scopes.yaml
 config/users.yaml
+# real cost data for Stage-3 playbooks (rates are commercial data): a copy of config/costs.example.yaml
+config/costs.yaml
 
 # Word lock files (left behind by an open .docx)
 ~$*

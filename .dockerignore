@@ -9,10 +9,14 @@ eval/
 _to_delete/
 .pytest_cache/
 .git/
-docs/schema/# not part of the image (mounted or local only); without these lines every build sent ~4 GB of context
+docs/schema/
+# not part of the image (mounted or local only); without these lines every build sent ~4 GB of context
 .claude/
 data/models/
 data/pdfs/
 private/
 eval/
 docker-compose.override.yml
+# never baked into an image that may be pushed publicly: commercial rates (Phase N1a) and sign-in hashes (Phase S)
+config/costs.yaml
+config/users.yaml
