@@ -2,7 +2,8 @@
 #   app           - the Streamlit UI
 #   ingest-worker - rescans data/pdfs and re-ingests on a schedule, so new PDFs reach the app
 #                   without a restart (the app hot-reloads its caches when the index changes)
-#   aggregates    - refreshes the pre-computed heavy results (config/aggregates.yaml) daily;
+#   aggregates    - refreshes the pre-computed heavy results (config/aggregates.yaml) daily at 02:00 Dhaka time
+#                   (--at 02:00; at start it builds only missing copies, so a recreate does not move the read);
 #                   one read-only scan each, swapped into data/index/aggregates.db atomically
 #   watch         - the domain agents' watch rules hourly (morning brief) and, once a day, the Stage-2
 #                   quality risk levels (--risk-daily), into data/index/signals.db
@@ -53,7 +54,7 @@ services:
       - app
     healthcheck:
       disable: true
-    command: ["python", "scripts/refresh_aggregates.py", "--every", "24"]
+    command: ["python", "scripts/refresh_aggregates.py", "--at", "02:00"]
     env_file: .env
     volumes:
       - ./data/index:/app/data/index

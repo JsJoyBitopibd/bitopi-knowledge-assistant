@@ -1,5 +1,5 @@
 """C6: pre-computed aggregates — atomic local copy, read-only lookups, fixed-tool routing and fallback."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace as NS
 
@@ -120,3 +120,107 @@ def test_lookups_are_case_insensitive_like_sql_server(tmp_path):
     assert got == [[1], [2]]
     _, typed = agg.run_local("SELECT typeof(VersionNo) FROM h LIMIT 1", {}, path=db)
     assert typed == [["integer"]]                   # no text affinity: numbers stay numbers
+
+
+# ---------------------------------------------------------------- the refresh schedule (refresh_aggregates.py --at)
+# `--every 24` refreshed on start and then every 24 hours, so a container recreated at 14:58 put the
+# production read at ~15:13 every day. `--at 02:00` pins it to the clock.
+def test_next_run_before_the_hour_is_today():
+    assert agg.next_run("02:00", datetime(2026, 10, 15, 1, 30)) == datetime(2026, 10, 15, 2, 0)
+    assert agg.next_run("02:00", datetime(2026, 10, 15, 1, 59, 59, 999999)) == datetime(2026, 10, 15, 2, 0)
+
+
+def test_next_run_after_the_hour_is_tomorrow():
+    assert agg.next_run("02:00", datetime(2026, 10, 15, 14, 58)) == datetime(2026, 10, 16, 2, 0)
+    assert agg.next_run("02:00", datetime(2026, 10, 15, 2, 0, 0, 1)) == datetime(2026, 10, 16, 2, 0)
+
+
+def test_next_run_at_the_hour_is_strictly_after():
+    """A refresh that starts at 02:00:00 and asks again when it ends must wait a day, not run twice."""
+    assert agg.next_run("02:00", datetime(2026, 10, 15, 2, 0)) == datetime(2026, 10, 16, 2, 0)
+
+
+def test_next_run_across_midnight_and_month_and_year_ends():
+    assert agg.next_run("00:15", datetime(2026, 10, 15, 23, 50)) == datetime(2026, 10, 16, 0, 15)
+    assert agg.next_run("23:59", datetime(2026, 10, 15, 0, 0)) == datetime(2026, 10, 15, 23, 59)
+    assert agg.next_run("02:00", datetime(2026, 10, 31, 23, 0)) == datetime(2026, 11, 1, 2, 0)
+    assert agg.next_run("02:00", datetime(2026, 12, 31, 3, 0)) == datetime(2027, 1, 1, 2, 0)
+    assert agg.next_run("2:00", datetime(2026, 10, 15, 1, 0)) == agg.next_run(" 02:00 ", datetime(2026, 10, 15, 1, 0))
+
+
+@pytest.mark.parametrize("bad", ["24:00", "02:60", "2am", "0200", "", "02:00:00", "-1:00", "ab:cd", "02:5",
+                                 "002:00", None])
+def test_next_run_rejects_what_is_not_hh_mm(bad):
+    with pytest.raises(ValueError):
+        agg.next_run(bad, datetime(2026, 10, 15, 12, 0))
+
+
+def test_seconds_until_the_next_run():
+    assert agg.seconds_until("02:00", datetime(2026, 10, 15, 1, 30)) == 1800.0
+    assert agg.seconds_until("02:00", datetime(2026, 10, 15, 2, 0)) == 86400.0
+    assert agg.seconds_until("02:00", datetime(2026, 10, 15, 14, 58)) == 11 * 3600 + 2 * 60
+    with pytest.raises(ValueError):
+        agg.seconds_until("25:00", datetime(2026, 10, 15, 12, 0))
+
+
+def test_sleep_until_reads_the_wall_clock_in_chunks_of_at_most_300_s():
+    clock, slept = [datetime(2026, 10, 15, 14, 58)], []
+
+    def sleep(s):
+        slept.append(s)
+        clock[0] += timedelta(seconds=s)
+
+    agg.sleep_until(datetime(2026, 10, 16, 2, 0), clock=lambda: clock[0], sleep=sleep)
+    assert max(slept) <= 300 and sum(slept) == 11 * 3600 + 2 * 60
+    assert clock[0] == datetime(2026, 10, 16, 2, 0)
+
+
+def test_sleep_until_ends_on_time_when_the_clock_jumps():
+    """The host suspended for 3 h during one chunk: the wait still ends at 02:00 by the wall clock."""
+    clock, slept = [datetime(2026, 10, 15, 22, 0)], []
+
+    def sleep(s):
+        slept.append(s)
+        clock[0] += timedelta(seconds=s) + (timedelta(hours=3) if len(slept) == 1 else timedelta())
+
+    agg.sleep_until(datetime(2026, 10, 16, 2, 0), clock=lambda: clock[0], sleep=sleep)
+    assert clock[0] == datetime(2026, 10, 16, 2, 0) and sum(slept) == 3600
+
+
+def test_sleep_until_a_time_already_passed_does_not_sleep():
+    agg.sleep_until(datetime(2026, 10, 15, 2, 0), clock=lambda: datetime(2026, 10, 15, 2, 0),
+                    sleep=lambda s: pytest.fail("slept"))
+
+
+def test_missing_lists_the_copies_never_built(tmp_path):
+    """At start `--at` builds only these, so a recreate does not re-read every copy from production."""
+    db = tmp_path / "agg.db"
+    specs = [{"name": "pcd_history"}, {"name": "company_master"}, {"name": "values_stores"}]
+    assert agg.missing(specs, db) == ["pcd_history", "company_master", "values_stores"]   # no file yet
+    agg.write("company_master", _batches(), [], [], db)
+    assert agg.missing(specs, db) == ["pcd_history", "values_stores"]                     # spec order kept
+    agg.write("pcd_history", _batches(), [], [], db)
+    agg.write("values_stores", _batches(), [], [], db)
+    assert agg.missing(specs, db) == [] and agg.missing([], db) == []
+
+
+def test_a_failed_first_build_is_still_missing(tmp_path):
+    db = tmp_path / "agg.db"
+
+    def broken():
+        yield COLS, [["TAL-1", 1, date(2026, 1, 1), None, "x", None]]
+        raise ConnectionError("link dropped mid-scan")
+
+    with pytest.raises(ConnectionError):
+        agg.write("pcd_history", broken(), [], [], db)
+    assert agg.missing([{"name": "pcd_history"}], db) == ["pcd_history"]
+
+
+def test_missing_on_a_file_without_the_meta_table(tmp_path):
+    import sqlite3
+    db = tmp_path / "agg.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE other (a)")
+    con.commit()
+    con.close()
+    assert agg.missing([{"name": "pcd_history"}], db) == ["pcd_history"]

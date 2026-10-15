@@ -2,7 +2,7 @@
 
 Some curated queries cannot run fast on the server without DDL we may not do — e.g. PCD history reads
 dbo.ExportOrderBack (4.2M rows, no index on ExportOrderID; ~10 s and timeouts per question, measured
-2026-09-27). scripts/refresh_aggregates.py copies such a result once (nightly) into
+2026-09-27). scripts/refresh_aggregates.py copies such a result once (nightly, `--at 02:00`) into
 data/index/aggregates.db, indexed for the lookups the fixed tools make; a fixed tool that names an
 `aggregate:` then answers from the copy in milliseconds, and its [D#] reference shows the copy's
 as-of time. "Refresh data" (refresh=True) or a missing copy falls back to the live query.
@@ -16,10 +16,10 @@ import re
 import sqlite3
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import yaml
 
@@ -120,6 +120,43 @@ def available(name: str, path: Optional[Path] = None) -> Optional[datetime]:
     finally:
         con.close()
     return datetime.fromisoformat(row[0]) if row else None
+
+
+def missing(specs: Iterable[dict[str, Any]], path: Optional[Path] = None) -> list[str]:
+    """Names of the specs whose local copy has never been built (available() is None), in spec order —
+    what `refresh_aggregates.py --at` builds at start-up instead of re-reading every copy."""
+    return [s["name"] for s in specs if available(s["name"], path) is None]
+
+
+# ---------------------------------------------------------------- the refresh schedule (--at HH:MM)
+_HHMM = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
+
+
+def next_run(hhmm: str, now: datetime) -> datetime:
+    """The next `hhmm` ("02:00", local time) strictly after `now`: today's if still ahead, else tomorrow's.
+
+    Strictly after, so a refresh that starts at 02:00:00 and asks again when it ends is scheduled for the
+    next day rather than run twice. ValueError unless `hhmm` is HH:MM on a 24-hour clock.
+    """
+    m = _HHMM.fullmatch(hhmm.strip()) if isinstance(hhmm, str) else None
+    if m is None:
+        raise ValueError(f"not a time of day HH:MM (00:00-23:59): {hhmm!r}")
+    at = now.replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
+    return at if at > now else at + timedelta(days=1)
+
+
+def seconds_until(hhmm: str, now: datetime) -> float:
+    """Seconds from `now` to next_run(hhmm, now); always > 0."""
+    return (next_run(hhmm, now) - now).total_seconds()
+
+
+def sleep_until(when: datetime, chunk: float = 300.0, clock: Callable[[], datetime] = datetime.now,
+                sleep: Callable[[float], None] = time.sleep) -> None:
+    """Block until the wall clock reaches `when`, sleeping at most `chunk` seconds at a time and reading
+    the clock again after each. One sleep of many hours drifts from the wall clock when the host suspends
+    or its clock is stepped, and the refresh would start late by however far it drifted."""
+    while (left := (when - clock()).total_seconds()) > 0:
+        sleep(min(left, chunk))
 
 
 def has_column(name: str, column: str, path: Optional[Path] = None) -> bool:
