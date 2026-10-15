@@ -50,9 +50,13 @@ def refresh(names: list[str], timeout: int) -> int:
 
 
 def daily(names: list[str], at: str, timeout: int) -> None:
-    """--at: build the missing copies now, then refresh every selected copy at `at` (local time) each day."""
+    """--at: build the missing copies now, then refresh every selected copy at `at` (local time) each day.
+
+    The first refresh time is fixed BEFORE the start-up build (aggregates.daily_plan): a container started at
+    01:50 whose build ran past 02:00 would otherwise wait for tomorrow's 02:00, leaving every copy that was
+    already there two days old. sleep_until returns at once for a time already passed."""
     specs = [s for s in aggregates.load_specs() if not names or s["name"] in names]
-    absent = aggregates.missing(specs)
+    absent, when = aggregates.daily_plan(at, specs, datetime.now())
     if absent:      # never refresh([]) here: an empty list means every aggregate
         print(f"{datetime.now():%Y-%m-%d %H:%M} missing: {', '.join(absent)}; building them now")
         refresh(absent, timeout)
@@ -60,11 +64,10 @@ def daily(names: list[str], at: str, timeout: int) -> None:
         print(f"{datetime.now():%Y-%m-%d %H:%M} all {len(specs)} copies present; nothing to build now")
     while True:
         now = datetime.now()
-        when = aggregates.next_run(at, now)
-        print(f"{now:%Y-%m-%d %H:%M} next refresh at {when:%Y-%m-%d %H:%M} "
-              f"(in {aggregates.seconds_until(at, now) / 3600:.1f} h)")
+        print(f"{now:%Y-%m-%d %H:%M} next refresh at {when:%Y-%m-%d %H:%M}")
         aggregates.sleep_until(when)            # chunks of at most 300 s against the wall clock
         refresh(names, timeout)
+        when = aggregates.next_run(at, datetime.now())
 
 
 def _hhmm(value: str) -> str:

@@ -225,6 +225,16 @@ def risk_due(today: Optional[date] = None, path: Optional[Path] = None,
     return row is None
 
 
+def due_and_unmapped(dimensions: Iterable[str], mapped: Iterable[str], today: Optional[date] = None,
+                     path: Optional[Path] = None) -> tuple[set[str], list[str]]:
+    """What `watch.py --risk-daily` runs on a tick: (the mapped dimensions still due today, the dimensions that
+    have rules but no catalog to read). An unmapped one is never due — it could never write its row, so it
+    would be "due" and print SKIPPED on every hourly tick; the watcher reports it once at start instead."""
+    dims = list(dimensions)
+    have = set(mapped)
+    return dimensions_due([d for d in dims if d in have], today, path), sorted(d for d in dims if d not in have)
+
+
 def dimensions_due(dimensions: Iterable[str], today: Optional[date] = None,
                    path: Optional[Path] = None) -> set[str]:
     """The dimensions among `dimensions` with no risk run started on `today` — what `--risk-daily` runs.

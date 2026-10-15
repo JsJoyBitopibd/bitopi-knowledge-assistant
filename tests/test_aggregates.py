@@ -224,3 +224,14 @@ def test_missing_on_a_file_without_the_meta_table(tmp_path):
     con.commit()
     con.close()
     assert agg.missing([{"name": "pcd_history"}], db) == ["pcd_history"]
+
+
+def test_the_first_daily_refresh_is_fixed_before_the_start_up_build(tmp_path):
+    """Review of 2026-10-15: started at 01:50 with a copy missing, the build can run past 02:00. The first refresh
+    must still be today's 02:00 (sleep_until then returns at once), not tomorrow's."""
+    db = tmp_path / "aggregates.db"
+    absent, first = agg.daily_plan("02:00", [{"name": "pcd_history"}], datetime(2026, 10, 15, 1, 50), db)
+    assert absent == ["pcd_history"] and first == datetime(2026, 10, 15, 2, 0)
+    _, first = agg.daily_plan("02:00", [], datetime(2026, 10, 15, 2, 0), db)
+    assert first == datetime(2026, 10, 16, 2, 0)                    # strictly after now
+    assert agg.daily_plan("02:00", [], datetime(2026, 10, 15, 1, 50), db)[0] == []   # never [] meaning "all"

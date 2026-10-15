@@ -37,6 +37,15 @@ each phase is in `docs/ROADMAP.md`.
   attendance), and each has to be closed before the rule means anything. The configuration check lists them.
 
 ### Fixed
+- **The nightly copy of the heavy figures is made at 02:00 again, not in the middle of the working day.** It
+  used to start whenever its container had last been restarted (15:13 since a restart on 14 October), putting a
+  14-minute read of the production database into office hours. It now runs at 02:00 Dhaka time whatever the
+  restart time, and a restart only builds a copy that is missing.
+- **The background watcher's database reads are now in the shared audit log**, like everything else's. They were
+  logged inside its container and lost whenever it was recreated, so tonight's risk run would have been visible
+  only in the risk store.
+- **A failed risk-level run is retried an hour later without redoing the ones that worked**, now per kind of risk,
+  ready for a second one after quality. A broken rules file is reported instead of stopping the watcher.
 - **Signing in did not carry a person's groups into what they may see** (Phase S4). The groups decided which
   factories they saw, but were then dropped, so the database rule built on 13 October would have denied the HR
   members themselves the moment it was switched on. Found before anyone switched it on. A `KA-HR` group is now

@@ -14,7 +14,7 @@ from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.domain_agents import load_agents
 from ragbot.domain_agents.risk import load_rule_sets
-from ragbot.domain_agents.signals import db_path, dimensions_due, open_predictions, write_risk_run, write_run
+from ragbot.domain_agents.signals import db_path, due_and_unmapped, open_predictions, write_risk_run, write_run
 from ragbot.domain_agents.watch import run_all
 
 
@@ -101,6 +101,7 @@ def main() -> None:
     ap.add_argument("--risk-daily", action="store_true",
                     help="score the risk levels on the first tick of each day only (the compose service)")
     a = ap.parse_args()
+    reported_unmapped = False
     while True:
         failed = 0 if a.risk_only else once(a.timeout)
         # --risk-daily: the levels are a daily series, so an hourly watcher stores them once a day per
@@ -110,7 +111,16 @@ def main() -> None:
         if a.risk or a.risk_only:
             failed += risk_once(max(a.timeout, 180), dry_run=a.dry_run)
         elif a.risk_daily:
-            due = dimensions_due(load_rule_sets())
+            # A broken config/rules/*.yaml (edited live; it is mounted from the host) must not crash the watcher
+            # into a restart loop that reruns the watch rules on every restart: report it and keep watching.
+            try:
+                due, unmapped = due_and_unmapped(load_rule_sets(), RISK_CATALOGS)
+            except Exception as e:
+                print(f"  FAILED risk rules: {e.__class__.__name__}: {e}")
+                failed, due, unmapped = failed + 1, set(), []
+            if unmapped and not reported_unmapped:
+                print(f"  SKIPPED {', '.join(unmapped)}: rules but no catalog mapped (RISK_CATALOGS) — never due")
+                reported_unmapped = True
             if due:
                 failed += risk_once(max(a.timeout, 180), dry_run=a.dry_run, only=due)
         if not a.every:

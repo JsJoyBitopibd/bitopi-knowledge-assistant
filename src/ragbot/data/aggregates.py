@@ -195,3 +195,10 @@ def run_local(sql: str, params: dict[str, Any], max_rows: int = 200,
         return cols, [list(r) for r in cur.fetchmany(max_rows)]
     finally:
         con.close()
+
+
+def daily_plan(at: str, specs: list[dict[str, Any]], now: datetime,
+               path: Optional[Path] = None) -> tuple[list[str], datetime]:
+    """What `refresh_aggregates.py --at` does on start: (the copies to build now — only the missing ones, never
+    the empty list that means "all" — and the first scheduled refresh, fixed before that build runs)."""
+    return missing(specs, path), next_run(at, now)

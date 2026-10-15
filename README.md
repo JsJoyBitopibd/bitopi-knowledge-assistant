@@ -203,8 +203,9 @@ schtasks /create /tn "Bitopi KA watch" /sc hourly /ru "DOMAIN\svc-account" /rp ^
   /tr "\"C:\ka\.venv\Scripts\python.exe\" \"C:\ka\scripts\watch.py\" --risk-daily"
 ```
 
-`watch.py --risk-daily` without `--every` runs the watch rules once and scores the risk levels only if none
-were stored yet that day, so an hourly task stores them once a day.
+`watch.py --risk-daily` without `--every` runs the watch rules once and scores each risk dimension only if it has
+no stored run yet that day, so an hourly task stores them once a day and retries, on the next run, a dimension
+whose pass failed.
 
 The ingest scripts give way to the app (Phase I4): they run at below-normal priority with 4 embedding
 threads and pause while the app is searching, so a bulk load slows answers by about 12% instead of

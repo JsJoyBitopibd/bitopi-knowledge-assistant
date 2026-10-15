@@ -384,3 +384,15 @@ def test_the_risk_line_shows_no_caveat_when_nothing_red_is_provisional():
 
     html = view.risk_html(brief.risk_summary("quality", [_assess(defects=40)]))   # green
     assert "provisional" not in html.lower()
+
+
+def test_an_unmapped_dimension_is_never_due_and_named_once(tmp_path):
+    """A dimension with rules but no catalog could never write its row; it would be due, and SKIPPED, every hour."""
+    from datetime import date
+    db = tmp_path / "signals.db"
+    due, unmapped = signals.due_and_unmapped(["quality", "delivery"], {"quality": "VistaQ_Default_RHL"},
+                                             date(2026, 10, 15), db)
+    assert due == {"quality"} and unmapped == ["delivery"]
+    signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 15, 0, 6), [], source=SRC, path=db)
+    due, unmapped = signals.due_and_unmapped(["quality", "delivery"], {"quality": "x"}, date(2026, 10, 15), db)
+    assert due == set() and unmapped == ["delivery"]
