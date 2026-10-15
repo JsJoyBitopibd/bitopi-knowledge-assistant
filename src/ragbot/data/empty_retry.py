@@ -91,14 +91,20 @@ class Shape:
         return [f for f in self.filters if f.is_identifier]
 
 
+def _parse(sql: str, dialect: str) -> Optional[exp.Expression]:
+    """The statement's sqlglot tree, or None when it does not parse. shape_of and where_filters read the same tree."""
+    try:
+        return sqlglot.parse_one(sql, read="tsql" if dialect == "tsql" else "mysql")
+    except Exception:
+        return None
+
+
 def shape_of(sql: str, dialect: str) -> Shape:
     """The equality filters of a statement and the one table it reads (sqlglot locates; nothing is rewritten)."""
-    read = "tsql" if dialect == "tsql" else "mysql"
-    try:
-        tree = sqlglot.parse_one(sql, read=read)
-    except Exception:
+    tree = _parse(sql, dialect)
+    if tree is None:
         return Shape()
-    ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    ctes ={c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
     tables = [t for t in tree.find_all(exp.Table) if t.name.lower() not in ctes]
     single = ""
     if len(tables) == 1 and tree.find(exp.Join) is None:
@@ -116,6 +122,64 @@ def shape_of(sql: str, dialect: str) -> Shape:
                 and c.right.is_string:
             out.filters.append(Filter(c.left.name, c.right.this, c))
     return out
+
+
+MAX_IN_VALUES = 6        # a longer IN list is not written out in an answer, and never cut to "and N more"
+
+
+def _literal(node: exp.Expression) -> Optional[str]:
+    """The text of a plain literal — 'x', N'x', 5 — or None for anything else (NULL, -1, a column, a function)."""
+    if isinstance(node, (exp.Literal, exp.National)):
+        text = str(node.this)
+        return text if text.strip() else None
+    return None
+
+
+def _and_terms(cond: exp.Expression) -> list[exp.Expression]:
+    """`a AND (b AND c)` -> [a, b, c]; brackets around a term are dropped. Anything that is not AND is one term."""
+    while isinstance(cond, exp.Paren):
+        cond = cond.this
+    if isinstance(cond, exp.And):
+        return _and_terms(cond.left) + _and_terms(cond.right)
+    return [cond]
+
+
+def where_filters(sql: str, dialect: str) -> Optional[list[tuple[str, list[str]]]]:
+    """The outer SELECT's WHERE as [(column, [values])] when it is nothing but ANDed `col = literal` and
+    `col IN (literals)` conditions, so that an answer can say exactly what was counted (Golden case 99:
+    "29 — EmployeeCount where BloodGroup is O-, O-ve or O Negative"). Values keep the statement's order, each
+    once (case apart). None when there is no WHERE, or when stating it would mean paraphrasing a statement:
+    OR, NOT, <>, LIKE, ranges, IS NULL, a subquery, a CTE, a UNION, HAVING, an expression on either side, a
+    column named twice, or an IN list of more than MAX_IN_VALUES values."""
+    tree = _parse(sql, dialect)
+    if not isinstance(tree, exp.Select) or tree.args.get("having") is not None:
+        return None
+    if tree.find(exp.CTE) is not None or tree.find(exp.Subquery) is not None \
+            or sum(1 for _ in tree.find_all(exp.Select)) > 1:
+        return None
+    where = tree.args.get("where")
+    if where is None:
+        return None
+    out: list[tuple[str, list[str]]] = []
+    for term in _and_terms(where.this):
+        if isinstance(term, exp.EQ) and isinstance(term.left, exp.Column):
+            found = [_literal(term.right)]
+        elif isinstance(term, exp.In) and isinstance(term.this, exp.Column) and term.expressions \
+                and not any(term.args.get(k) for k in ("query", "unnest", "field")):
+            found = [_literal(v) for v in term.expressions]
+        else:
+            return None
+        column = term.left.name if isinstance(term, exp.EQ) else term.this.name
+        if not column or any(v is None for v in found) or any(c.lower() == column.lower() for c, _ in out):
+            return None
+        values: list[str] = []
+        for v in found:
+            if v is not None and v.strip().casefold() not in {x.strip().casefold() for x in values}:
+                values.append(v)
+        if len(values) > MAX_IN_VALUES:
+            return None
+        out.append((column, values))
+    return out or None
 
 
 def lookup_sql(shape: Shape, f: Filter, dialect: str, top: int) -> str:

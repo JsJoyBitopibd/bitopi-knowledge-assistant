@@ -77,6 +77,36 @@ def is_blank_result(columns: list[str], rows: list[list[Any]]) -> bool:
     return False
 
 
+Filters = list[tuple[str, list[str]]]
+
+
+def scalar_filters(r: QueryResult) -> Optional[Filters]:
+    """What a model-written one-value answer was filtered on, when its WHERE can be stated exactly
+    (data/empty_retry.where_filters); None for a fixed tool, any other shape, a blank value or a WHERE that
+    is not plain `col = literal` / `col IN (…)` conditions."""
+    if r.tool != "generated" or r.error or len(r.rows) != 1 or len(r.columns) != 1 \
+            or is_blank_result(r.columns, r.rows):
+        return None
+    from ..data.empty_retry import where_filters   # lazy: data/tools.py imports this module
+    return where_filters(r.sql or "", "mysql" if r.engine == "mysql" else "tsql")
+
+
+def filter_params(filters: Filters) -> dict[str, str]:
+    """The filters as query parameters, {column: "v1, v2"}: what the [D#] card's Filter line shows and what
+    citations.verify() licenses, so a value with digits in it ("CompanyID is 02") may be written."""
+    return {col: ", ".join(vals) for col, vals in filters}
+
+
+def _either(values: list[str]) -> str:
+    vals = [fmt(v) for v in values]
+    return vals[0] if len(vals) == 1 else ", ".join(vals[:-1]) + " or " + vals[-1]
+
+
+def describe_filters(filters: Filters) -> str:
+    """'BloodGroup is O-, O-ve or O Negative and CompanyID is 02': every value, never "and N more"."""
+    return " and ".join(f"{col} is {_either(vals)}" for col, vals in filters)
+
+
 def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False,
                  marker: str = "D1") -> Optional[str]:
     """The answer text for one data result, or None when it should be left to the model.
@@ -84,7 +114,10 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
     Fixed tools always qualify (their shape is known). With `allow_generated` (setting
     answer.templated_generated, Phase J3) a model-written query's rows are written the same way — the
     rows ARE the answer, and the 3-6 s answer-model call that used to restate them is skipped: a
-    scalar as "<Column>: <value>", one row as "Col: v · Col: v", more rows as a table."""
+    scalar as "<Column>: <value>", or "<value> — <Column> where <filters>" when its WHERE can be stated
+    exactly (Golden case 99 read "EmployeeCount: 29", which did not say what was counted); one row as
+    "Col: v · Col: v", more rows as a table. The caller adds the filter values to the result's params
+    (filter_params), or a value with digits in it would not verify."""
     if r.error or not r.rows or not r.columns:
         return None
     if r.tool == "generated" and not allow_generated:
@@ -101,6 +134,9 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
         lead = _fill(tool["answer"], r, value=value) if tool.get("answer") else None
         # a model-written `SELECT COUNT(*) FROM …` without an alias comes back with an empty column name
         label = r.columns[0].strip() or ("Count" if re.search(r"\bcount\s*\(", r.sql or "", re.I) else "Value")
+        filters = scalar_filters(r) if lead is None else None
+        if filters:
+            return f"{fmt(value)} — {label} where {describe_filters(filters)} [{marker}]."
         return f"{lead or f'{label}: {fmt(value)}'} [{marker}]."
     if r.tool == "generated" and len(r.rows) == 1 and len(r.columns) <= 8:
         return " · ".join(f"{c}: {fmt(v)}" for c, v in zip(r.columns, r.rows[0])) + f" [{marker}]."

@@ -153,6 +153,97 @@ def test_missing_order_id_asks_instead_of_querying(wired, monkeypatch):
     assert a.route == "clarify" and a.text.startswith("Which export order") and a.usage.calls == 0
 
 
+# ---------------------------------------------------------------- a one-value answer names what was counted
+CASE_99 = ("SELECT COUNT(*) AS EmployeeCount FROM dbo.tblEmployeeDetails "
+           "WHERE BloodGroup IN ('O-','O-ve','O Negative')")
+CASE_99_TEXT = "29 — EmployeeCount where BloodGroup is O-, O-ve or O Negative [D1]."
+
+
+def _generated(sql, value=29, column="EmployeeCount", engine="sqlserver"):
+    return QueryResult(database="Hrms5Misami", engine=engine, views=["dbo.tblEmployeeDetails"], sql=sql,
+                       tool="generated", columns=[column], rows=[[value]])
+
+
+def test_case_99_says_what_was_counted():
+    """Golden case 99 answered "EmployeeCount: 29 [D1].", which does not say which blood group was counted."""
+    r = _generated(CASE_99)
+    text = try_template(r, None, allow_generated=True)
+    assert text == CASE_99_TEXT
+    assert verify(text, [], [r], NF) == (True, [])
+    assert try_template(_generated(CASE_99.replace("SELECT ", "SELECT TOP (200) ", 1)), None,
+                        allow_generated=True) == CASE_99_TEXT                 # as the guard writes it
+    assert try_template(r, None) is None                                      # fixed-tool-only without the flag
+
+
+def test_case_99_through_the_orchestrator_shows_the_filter_on_the_card(wired):
+    r = _generated(CASE_99)
+    wired(r, [])                                       # no scripted replies: a model call would fail
+    a = orch.answer("find the number of employees who has O negative blood", scope=Scope.unrestricted())
+    assert a.text == CASE_99_TEXT and a.usage.calls == 0 and not a.not_found
+    assert a.references[0].params == {"BloodGroup": "O-, O-ve, O Negative"}
+    assert r.params == {}                              # the caller's result is not changed; the answer holds a copy
+
+
+def test_a_filter_value_with_digits_verifies_only_through_the_params_copy(wired):
+    """02 is in no row: like a P2 correction, the filter values are licensed as the query's parameters."""
+    from ragbot.agent.templated import filter_params, scalar_filters
+    r = _generated("SELECT TOP (200) COUNT(*) AS EmployeeCount FROM dbo.tblEmployeeDetails "
+                   "WHERE CompanyID = '02' AND BloodGroup = N'O-'")
+    text = try_template(r, None, allow_generated=True)
+    assert text == "29 — EmployeeCount where CompanyID is 02 and BloodGroup is O- [D1]."
+    ok, problems = verify(text, [], [r], NF)
+    assert not ok and problems == ["number not in sources: 02"]
+    copy = r.model_copy(update={"params": filter_params(scalar_filters(r))})
+    assert copy.params == {"CompanyID": "02", "BloodGroup": "O-"}
+    assert verify(text, [], [copy], NF) == (True, [])
+    wired(r, [])
+    a = orch.answer("how many employees at company 02 have O negative blood", scope=Scope.unrestricted())
+    assert a.text == text and a.usage.calls == 0
+    assert a.references[0].params == {"CompanyID": "02", "BloodGroup": "O-"}
+
+
+@pytest.mark.parametrize("where", [
+    "BloodGroup = 'O-' OR BloodGroup = 'O-ve'",
+    "BloodGroup LIKE 'O%'",
+    "JoinDate >= '2026-01-01'",
+    "Age BETWEEN 20 AND 30",
+    "BloodGroup IN (SELECT BloodGroup FROM dbo.tblBloodGroups)",
+    "NOT BloodGroup = 'O-'",
+    "BloodGroup <> 'O-'",
+    "BloodGroup IS NULL",
+    "UPPER(BloodGroup) = 'O-'",
+])
+def test_a_where_that_cannot_be_stated_exactly_keeps_todays_text(where):
+    r = _generated(f"SELECT COUNT(*) AS EmployeeCount FROM dbo.tblEmployeeDetails WHERE {where}")
+    assert try_template(r, None, allow_generated=True) == "EmployeeCount: 29 [D1]."
+
+
+def test_where_filters_reads_only_plain_anded_equalities():
+    from ragbot.data.empty_retry import where_filters
+    assert where_filters(CASE_99, "tsql") == [("BloodGroup", ["O-", "O-ve", "O Negative"])]
+    assert where_filters("SELECT COUNT(*) FROM dbo.T WHERE (A = N'x' AND (B IN (N'p', N'P', 'q'))) AND C = 5",
+                         "tsql") == [("A", ["x"]), ("B", ["p", "q"]), ("C", ["5"])]    # N'…', case-insensitive dedupe
+    assert where_filters("SELECT COUNT(*) FROM `t` WHERE a = 'x' AND b IN (1, 2)", "mysql") == [("a", ["x"]),
+                                                                                               ("b", ["1", "2"])]
+    six = ", ".join(f"'{c}'" for c in "abcdef")
+    assert where_filters(f"SELECT COUNT(*) FROM dbo.T WHERE A IN ({six})", "tsql") == [("A", list("abcdef"))]
+    for sql in [
+        f"SELECT COUNT(*) FROM dbo.T WHERE A IN ({six}, 'g')",                         # more than 6: never "and N more"
+        "SELECT COUNT(*) FROM dbo.T",                                                   # no WHERE
+        "WITH c AS (SELECT * FROM dbo.T WHERE A = 'x') SELECT COUNT(*) FROM c WHERE B = 'y'",
+        "SELECT COUNT(*) FROM (SELECT * FROM dbo.T WHERE A = 'x') s WHERE B = 'y'",
+        "SELECT COUNT(*) FROM dbo.T WHERE A = 'x' UNION SELECT COUNT(*) FROM dbo.U WHERE A = 'x'",
+        "SELECT A, COUNT(*) FROM dbo.T WHERE B = 'x' GROUP BY A HAVING COUNT(*) > 1",
+        "SELECT COUNT(*) FROM dbo.T WHERE A = 'x' AND A = 'y'",                        # a column named twice
+        "SELECT COUNT(*) FROM dbo.T WHERE A = -1",
+        "SELECT COUNT(*) FROM dbo.T WHERE A = ''",
+        "SELECT COUNT(*) FROM dbo.T WHERE A = B",
+        "SELECT COUNT(*) FROM dbo.T WHERE 'x' = A",
+        "not sql at all",
+    ]:
+        assert where_filters(sql, "tsql") is None, sql
+
+
 def test_is_blank_result():
     from ragbot.agent.templated import is_blank_result
     assert is_blank_result([], [])
