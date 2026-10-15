@@ -18,7 +18,7 @@ from typing import Iterator
 import pymupdf
 
 from ..config import log_dir, settings
-from ..embed import EMBED_MODEL, get_embedder
+from ..embed import EMBED_MODEL, backend_label, cache_model, get_embedder
 from ..models import Chunk
 from ..store import TAG_FIELDS, Registry, get_store, text_hash
 from .chunker import chunk_page
@@ -126,12 +126,18 @@ def _chunks_of(doc: pymupdf.Document, path: Path, root: Path, doc_hash: str, att
             yield Chunk(id=f"{title}#p{pno}#c{cn}", text=stored, page=pno, section=section, kind="text", **base), stats
 
 
+def cache_key() -> str:
+    """The embedding cache's model key: the configured model and backend (docs/PLAN.md M7)."""
+    return cache_model(EMBED_MODEL, backend_label())
+
+
 def embed_with_cache(texts: list[str], reg: Registry, emb, counts: dict) -> list[list[float]]:
     """Vectors for `texts`, embedding only the ones the registry's embedding cache does not hold
     (Phase E3). A revised 400-page manual whose text changed on 3 pages re-embeds only those chunks;
     everything else is a cache hit. Updates counts["embedded"] / counts["cached"]."""
     hashes = [text_hash(t) for t in texts]
-    have = reg.cached_vectors(list(dict.fromkeys(hashes)), EMBED_MODEL)
+    key = cache_key()
+    have = reg.cached_vectors(list(dict.fromkeys(hashes)), key)
     todo = list(dict.fromkeys(h for h in hashes if h not in have))
     if todo:
         text_of = dict(zip(hashes, texts))                 # one text per distinct hash
@@ -143,7 +149,7 @@ def embed_with_cache(texts: list[str], reg: Registry, emb, counts: dict) -> list
                 counts["yielded"] = counts.get("yielded", 0.0) + waited
             part = todo[i:i + step]
             new.update(zip(part, emb.embed([text_of[h] for h in part])))
-        reg.store_vectors(list(new.items()), EMBED_MODEL)
+        reg.store_vectors(list(new.items()), key)
         have.update(new)
     counts["embedded"] += len(todo)
     counts["cached"] += len(texts) - len(todo)
@@ -194,7 +200,8 @@ def _finish(summary: dict, reg: Registry, index_dir: Path, root: Path, started: 
     if changed or prev is None or prev.get("alert", "") != summary.get("alert", ""):
         updated_at = now if changed or prev is None else prev.get("index_updated_at", prev.get("finished_at", now))
         _write_json(state_file, {"started_at": started.isoformat(timespec="seconds"), "finished_at": now,
-                                 "index_updated_at": updated_at, "embed_model": EMBED_MODEL, "pdf_root": str(root),
+                                 "index_updated_at": updated_at, "embed_model": EMBED_MODEL,
+                                 "embed_backend": backend_label(), "pdf_root": str(root),
                                  **summary})
     _write_json(index_dir / "last_scan.json", {
         "scanned_at": now, "changed": changed, "alert": summary.get("alert", ""),
@@ -244,7 +251,7 @@ def ingest_folder(root: Path | None = None, store=None, reg: Registry | None = N
     for source in sorted(dirty):
         log.warning("%s: its last write to the index did not finish; writing it again", source)
     redo = set(redo) | dirty
-    seeded = reg.seed_embedding_cache(store, EMBED_MODEL)   # index built before E3: reuse its vectors
+    seeded = reg.seed_embedding_cache(store, cache_key())   # index built before E3: reuse its vectors
     if seeded:
         log.info("embedding cache seeded from %d existing vectors (no re-embedding)", seeded)
     fts_seeded = reg.seed_fts(store)                           # index built before D1: fill chunk_fts once

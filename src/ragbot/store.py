@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .config import settings
-from .embed import EMBED_MODEL
+from .embed import EMBED_MODEL, ST_FP32
 from .models import Chunk
 
 
@@ -54,20 +54,36 @@ def _chunk_from_record(cid: str, doc: str, meta: dict[str, Any], score: float = 
     return Chunk(id=cid, text=doc, score=score, **fields)
 
 
+def check_index_metadata(meta: dict[str, Any], model: str, backend: str) -> None:
+    """Refuse an index built with another embedding model or backend (non-negotiable #6, docs/PLAN.md M7).
+    An index from before embed_backend was recorded has none: it was built with sentence-transformers fp32."""
+    stored = meta.get("embed_model")
+    if stored and stored != model:
+        raise RuntimeError(f"Index was built with embed_model={stored!r} but config says {model!r}. "
+                           "Run scripts/reindex.py instead of changing the model.")
+    stored_backend = meta.get("embed_backend") or ST_FP32
+    if stored_backend != backend:
+        raise RuntimeError(f"Index was built with embed_backend={stored_backend!r} but EMBED_BACKEND gives "
+                           f"{backend!r}. Set EMBED_BACKEND back, or rebuild with scripts/reindex.py "
+                           "(docs/PLAN.md M7: one backend per index).")
+
+
 class ChromaStore(VectorStore):
-    def __init__(self, path: Path | None = None, collection: str = "chunks"):
+    def __init__(self, path: Path | None = None, collection: str = "chunks", embed_backend: str | None = None):
+        """embed_backend: the backend this store's vectors come from; default backend_label() (EMBED_BACKEND)."""
         import chromadb
+        from . import embed
         path = path or settings().path("index_dir") / "chroma"
+        self.embed_backend = embed_backend or embed.backend_label()
         self.client = chromadb.PersistentClient(path=str(path))
         # embedding_function=None: vectors always come from embed.py (bge-m3); without it chroma 1.x binds
         # its default ONNX MiniLM function to the collection and tries to download it.
+        # `metadata` is recorded only when the collection is created: Chroma ignores it for an existing one
+        # (pinned by tests/test_embed_backend.py), so opening never changes a live index's metadata.
         self.col = self.client.get_or_create_collection(
-            name=collection, configuration={"hnsw": {"space": "cosine"}}, metadata={"embed_model": EMBED_MODEL},
-            embedding_function=None)
-        stored = (self.col.metadata or {}).get("embed_model")
-        if stored and stored != EMBED_MODEL:
-            raise RuntimeError(f"Index was built with embed_model={stored!r} but config says {EMBED_MODEL!r}. "
-                               "Run scripts/reindex.py instead of changing the model.")
+            name=collection, configuration={"hnsw": {"space": "cosine"}},
+            metadata={"embed_model": EMBED_MODEL, "embed_backend": self.embed_backend}, embedding_function=None)
+        check_index_metadata(self.col.metadata or {}, EMBED_MODEL, self.embed_backend)
 
     def upsert(self, chunks, vectors):
         if not chunks:
@@ -364,7 +380,8 @@ class Registry:
         self.db.execute(f"UPDATE chunk_fts SET {sets} WHERE source=?", (*vals, source))
         self.db.commit()
 
-    # ---- embedding cache (Phase E3): a revised PDF re-embeds only the chunks whose text changed
+    # ---- embedding cache (Phase E3): a revised PDF re-embeds only the chunks whose text changed. `model` is
+    # embed.cache_model(embed_model, embed_backend), so the cache is keyed by (hash, model, backend) (PLAN M7).
     def cached_vectors(self, hashes: list[str], model: str) -> dict[str, list[float]]:
         import numpy as np
         out: dict[str, list[float]] = {}
