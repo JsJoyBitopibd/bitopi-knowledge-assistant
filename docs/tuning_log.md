@@ -245,3 +245,31 @@ checked. 2,058,760 pieces checked in the window, 24% of them in files at the cri
 **The thresholds this baseline tests.** Amber is VistaQ's own (`dbo.Threshold`: DHU 3.85, reject 1%).
 Red (DHU 6, reject 2%) is provisional and unvalidated — the backtest is the first evidence about
 whether it means anything, and the QC interviews are the second.
+
+## I5 — int8 ONNX bge-m3 against fp32: parity measured, not switched (2026-10-15)
+
+`scripts/export_embedder_onnx.py` (opset 17, `quantize_dynamic` QInt8, 418 s, 569 MB) then `--check`
+(`EMBED_THREADS=3`, below-normal priority, while the app served). 1,000 texts: all 250 chunks the index holds,
+124 golden and retrieval questions, 626 of 3,837 table documents spread over the databases.
+
+| int8 vs stored fp32 | n | min | p1 | mean |
+|---|---:|---:|---:|---:|
+| all texts | 1000 | 0.96648 | 0.97282 | 0.98150 |
+| ≤ 512 tokens | 978 | 0.96896 | 0.97364 | 0.98163 |
+| > 512 tokens | 22 | 0.96648 | 0.96707 | 0.97554 |
+| chunks | 250 | 0.96648 | 0.96944 | 0.97872 |
+| questions | 124 | 0.97501 | 0.97715 | 0.98455 |
+| table documents | 626 | 0.96930 | 0.97542 | 0.98200 |
+
+- **Sanity:** fresh sentence-transformers fp32 vs stored, and the fp32 ONNX export vs sentence-transformers,
+  1.00000 on 100 texts: the stored vectors are current and the export is exact, so the whole loss is the
+  int8 quantization. No text is stale; all 1,000 are below 0.99.
+- **Hit rate**, 30 retrieval cases: 29/30 three ways (fp32/fp32, int8 queries on fp32 documents, int8/int8),
+  the same miss each time (the endpoint-fleet question wants page 39 and gets 40).
+- **Speed** on the same 100 texts: 180 → 225 tokens/s, **1.3×** (the int8 reranker gained 2.7×).
+
+**Verdict: the PLAN M7 gate fails on cosine** (min 0.966 against ≥ 0.99), though not on hit rate (0 points
+dropped). With 1.3× the gain does not pay for a second backend either. The live index stays `st-fp32`;
+EMBED_BACKEND is unchanged. Bulk loads that need speed should use a GPU (`embed_backend` will record it).
+Per-channel or MatMul-only quantization might lift the cosine; it is not worth trying for 1.3×. The fp32
+export (2.3 GB) was deleted after the check, as the script says; the int8 export stays in `data/models/`.
