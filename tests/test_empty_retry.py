@@ -10,6 +10,7 @@ import ragbot.data.schema_index as si
 import ragbot.data.tools as tools
 import ragbot.llm.base as base
 from ragbot.auth.models import Scope
+from ragbot.llm.base import LLMError
 from ragbot.data.catalog import Catalog, Table, View
 from ragbot.models import QueryResult
 
@@ -183,3 +184,72 @@ def test_a_lookup_the_guard_refuses_is_skipped(wired):
     r = tools.generate_and_run("stock in the mantainance store", cats, scope=Scope.unrestricted())
     assert [t for t, _ in ran] == ["generated"]            # the DISTINCT over 5M rows with no WHERE never ran
     assert r.candidates == [] and r.lookups == []
+
+
+# ---------------------------------------------------------------- a provider failure inside the repair
+class ScriptedOrFail(ScriptedSQL):
+    """ScriptedSQL whose script may hold an LLMError: the provider failing on that call. Counts the calls."""
+
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.calls = 0
+
+    def _chat(self, messages, system, max_tokens, temperature):
+        self.calls += 1
+        if isinstance(self.replies[0], LLMError):
+            raise self.replies.pop(0)
+        return super()._chat(messages, system, max_tokens, temperature)
+
+
+def _failing(wired, monkeypatch, replies, runner):
+    _, ran = wired([], runner)
+    chat = ScriptedOrFail(replies)
+    monkeypatch.setattr(tools, "get_chat", lambda: chat)
+    return chat, ran
+
+
+def _rate():
+    return LLMError("rate", "Error code: 429 [quota: GenerateRequestsPerMinutePerProjectPerModel-FreeTier]")
+
+
+def test_a_rate_limit_during_the_informed_retry_is_raised_not_noted(wired, monkeypatch):
+    """The repair's `except Exception` kept a 429 as a note, and generate_and_run's own handler turned anything
+    else into a SQL error and asked the model again: an outage became a not-found, scored as the assistant's."""
+    far = FIRST.replace("mantainance store", "xyz store")
+    chat, ran = _failing(wired, monkeypatch, [far, _rate()], _runner(balance_for=()))
+    with pytest.raises(LLMError) as e:
+        tools.generate_and_run(Q, _cat(), scope=Scope.unrestricted())
+    assert e.value.kind == "rate"
+    assert chat.calls == 2 and not chat.replies                 # no sql_retry_error call after the 429
+    assert [t for t, _ in ran] == ["generated", "lookup"]
+
+
+def test_a_quota_failure_during_the_table_retry_is_raised_not_noted(wired, monkeypatch):
+    ids = "DATABASE: Demo\nSELECT TOP (200) Qty FROM dbo.Other WHERE ItemCode = '1178108'"
+    chat, ran = _failing(wired, monkeypatch, [ids, LLMError("quota", "Error code: 429")],
+                         lambda sql, tool: (["Qty"], [], datetime.now()))
+    monkeypatch.setattr(tools, "_schema_selection", lambda q, cats, qvec=None: {"Demo": ["dbo.Other", "dbo.Balance"]})
+    with pytest.raises(LLMError) as e:
+        tools.generate_and_run("qty of item 1178108", _cat(), scope=Scope.unrestricted())
+    assert e.value.kind == "quota" and chat.calls == 2 and [t for t, _ in ran] == ["generated"]
+
+
+def test_the_answer_reports_a_rate_limit_hit_inside_the_repair(wired, monkeypatch):
+    """Through the orchestrator: the answer carries error_kind "rate" and the `llm rate:` warning the eval
+    reads as an outage (ragbot/evaluation.py)."""
+    import ragbot.agent.orchestrator as orch
+    import ragbot.index_version as iv
+    far = FIRST.replace("mantainance store", "xyz store")
+    chat, _ = _failing(wired, monkeypatch, [far, _rate()], _runner(balance_for=()))
+    orch._ANSWERS.clear()
+    monkeypatch.setattr(orch, "_log", lambda a, user, scope=None: a)
+    monkeypatch.setattr(iv, "refresh_if_changed", lambda: False)
+    monkeypatch.setattr(orch, "_route", lambda q, user: "data")
+    monkeypatch.setattr(tools, "needs_clarification", lambda q: None)
+    monkeypatch.setattr(tools, "load_fixed_tools", lambda path=None: [])
+    monkeypatch.setattr(tools, "answer_from_data",
+                        lambda q, user="", refresh=False, scope=None: [tools.generate_and_run(q, _cat(), scope=scope)])
+    a = orch.answer(Q, scope=Scope.unrestricted())
+    assert a.error_kind == "rate" and a.not_found and "minute" in a.text
+    assert any(w.startswith("llm rate:") for w in a.warnings)
+    assert chat.calls == 2

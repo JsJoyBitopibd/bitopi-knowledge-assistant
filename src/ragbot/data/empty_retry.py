@@ -21,6 +21,9 @@ only after an empty first try, `max_seconds` from the first statement):
 Every statement here passes the same guard, scope and row cap as the model's (tools._run_guarded); nothing is
 regenerated from a parse tree — the lookup is built from the names sqlglot located, the correction is a textual
 replacement of one quoted literal.
+
+A provider failure during a re-ask (LLMError: quota, rate limit, timeout) is raised, never kept as a note: the
+orchestrator turns it into the answer's error_kind and its `llm <kind>:` warning, which the eval leaves unscored.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ import sqlglot
 from sqlglot import exp
 
 from ..config import prompt, settings
+from ..llm.base import LLMError
 from ..models import QueryResult
 from .catalog import Catalog
 from .sensitive import is_sensitive
@@ -254,6 +258,8 @@ def repair(*, question: str, cat: Catalog, scope_all: bool, sql: str, result: Qu
                 out.result = again
                 out.note = "answered on the second try with the recorded values shown"
                 return out
+        except LLMError:
+            raise                         # a provider failure (quota, rate, timeout) is the answer's, not a note
         except Exception as e:
             out.note = f"informed retry failed: {e.__class__.__name__}"
     # (b) identifiers only, and other tables were listed: ask once for the right table
@@ -270,6 +276,8 @@ def repair(*, question: str, cat: Catalog, scope_all: bool, sql: str, result: Qu
                     out.result = again
                     out.note = "answered on the second try against another listed table"
                     return out
+            except LLMError:
+                raise
             except Exception as e:
                 out.note = f"table retry failed: {e.__class__.__name__}"
     # (d) nothing: hand the user's filters and the recorded values to the not-found reply
