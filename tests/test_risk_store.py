@@ -74,12 +74,13 @@ def test_the_daily_risk_run_is_due_until_one_has_started_that_day(tmp_path):
 
 def test_a_night_whose_risk_pass_failed_is_due_again(tmp_path):
     """watch.py's risk_once() writes no risk_run row for a dimension that raised, so the next hourly tick
-    retries it. (Store-wide: correct for the one dimension there is — see risk_due's docstring.)"""
+    retries it. (With more than one dimension this is asked per dimension — see the tests below.)"""
     from datetime import date
     db = tmp_path / "signals.db"
     signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 14, 0, 6), [], source=SRC, path=db)
     signals.write_run([_sig()], datetime(2026, 10, 15, 0, 5), [], path=db)      # 00:05 tick: rules stored, risk raised
     assert signals.risk_due(date(2026, 10, 15), path=db)                         # 01:05 tick tries again
+    assert signals.risk_due(date(2026, 10, 15), path=db, dimension="quality")
 
 
 def test_a_store_from_before_phase_m_is_due_not_an_error(tmp_path):
@@ -91,6 +92,60 @@ def test_a_store_from_before_phase_m_is_due_not_an_error(tmp_path):
     con.commit()
     con.close()
     assert signals.risk_due(date(2026, 10, 15), path=db)
+    assert signals.risk_due(date(2026, 10, 15), path=db, dimension="quality")
+    assert signals.dimensions_due(["quality"], date(2026, 10, 15), path=db) == {"quality"}
+
+
+def _assess_as(dimension: str, subject: str = "FR-26-1985"):
+    a = _assess(subject)
+    a.dimension = dimension
+    return a
+
+
+def test_quality_done_leaves_a_second_dimension_due(tmp_path):
+    """Per dimension: quality's row for today does not mark another dimension done."""
+    from datetime import date
+    db = tmp_path / "signals.db"
+    day = date(2026, 10, 15)
+    assert signals.dimensions_due(["quality", "shipping"], day, path=db) == {"quality", "shipping"}  # no store
+    signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 15, 0, 10), [], source=SRC, path=db)
+    assert not signals.risk_due(day, path=db, dimension="quality")
+    assert signals.risk_due(day, path=db, dimension="shipping")
+    assert signals.dimensions_due(["quality", "shipping"], day, path=db) == {"shipping"}
+
+
+def test_a_dimension_whose_pass_raised_stays_due_after_the_other_wrote_its_row(tmp_path):
+    """The night the store-wide check got wrong: at 00:10 quality wrote its row and shipping raised (a pass
+    that raises writes no row). Store-wide the day looks done and shipping would wait until tomorrow; per
+    dimension the 01:10 tick reruns shipping alone, and once shipping has its row nothing is due."""
+    from datetime import date
+    db = tmp_path / "signals.db"
+    day = date(2026, 10, 15)
+    rule_sets = {"quality": _rs(), "shipping": _rs()}            # the shape risk.load_rule_sets() returns
+    for d in rule_sets:                                           # yesterday both dimensions ran
+        signals.write_risk_run(d, [_assess_as(d)], datetime(2026, 10, 14, 0, 10), [], source=SRC, path=db)
+    signals.write_risk_run("quality", [_assess()], datetime(2026, 10, 15, 0, 10), [], source=SRC, path=db)
+
+    assert not signals.risk_due(day, path=db)                                   # store-wide: looks done
+    assert signals.dimensions_due(rule_sets, day, path=db) == {"shipping"}      # 01:10 tick: shipping only
+    signals.write_risk_run("shipping", [_assess_as("shipping")], datetime(2026, 10, 15, 1, 10), [],
+                           source=SRC, path=db)
+    assert signals.dimensions_due(rule_sets, day, path=db) == set()             # nothing left today
+    assert signals.dimensions_due(rule_sets, date(2026, 10, 16), path=db) == {"quality", "shipping"}
+
+
+def test_risk_due_without_a_dimension_is_still_store_wide(tmp_path):
+    """dimension=None answers what risk_due answered before the argument existed: any dimension's run today."""
+    from datetime import date
+    db = tmp_path / "signals.db"
+    day = date(2026, 10, 15)
+    assert signals.risk_due(day, path=db) and signals.risk_due(day, path=db, dimension=None)
+    signals.write_risk_run("shipping", [_assess_as("shipping")], datetime(2026, 10, 15, 0, 10), [],
+                           source=SRC, path=db)
+    assert not signals.risk_due(day, path=db)                       # shipping's row counts store-wide
+    assert not signals.risk_due(day, path=db, dimension=None)
+    assert signals.risk_due(day, path=db, dimension="quality")      # but not for quality
+    assert signals.risk_due(date(2026, 10, 16), path=db)            # and the store is due again tomorrow
 
 
 # ---------------------------------------------------------------- round trip
