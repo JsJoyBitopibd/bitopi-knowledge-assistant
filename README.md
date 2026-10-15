@@ -299,7 +299,22 @@ python scripts\index_schema.py --try "how many suppliers do we have?"
 ```
 
 `--samples` on discovery also reads up to 30 distinct values of short text columns in small tables.
-A full pass is ~6,700 small queries on production, so it is off by default.
+A full pass is thousands of small queries on production, so it is off by default and fenced:
+
+- `--count-only` prints the queries a run would make, per table, from the JSON on disk — no connection;
+- `--tables schema.name,…` or `--tables-from-logs` (the tables the SQL model has needed) narrow a run;
+- `--max-queries N` (default 150) stops a larger run before its first sampling query;
+- it never samples the people catalogs (`sensitive_patterns:` or `restricted_to:`; `--allow-people-samples`
+  overrides, and their values are dropped at load anyway), a table whose name holds people data in any
+  database (employee, attendance, payroll …), or a column named for a person or a login (`CreatedBy`,
+  `UserName`, `InspectorName1` …);
+- a run whose connection or `--database` differs from the catalog's is refused, with no override.
+
+```powershell
+python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --count-only --tables-from-logs
+python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --json --samples --tables-from-logs
+python scripts\index_schema.py Production
+```
 
 ### Adding a database (Phase J)
 

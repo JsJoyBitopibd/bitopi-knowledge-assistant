@@ -36,6 +36,15 @@ each phase is in `docs/ROADMAP.md`.
   is not only in the three people databases — eleven other databases offer 95 tables of it (employee lists,
   attendance), and each has to be closed before the rule means anything. The configuration check lists them.
 
+### Changed
+- **Reading example values from the databases is fenced before it ever runs** (Phase G2). The optional step that
+  reads a few sample values per column, to help the SQL model match names, now never reads the three people
+  databases, any table of people data in any other database (employee lists, attendance, payroll), or any column
+  named for a person or a login (created by, user name, inspector name). It counts its queries offline first and
+  stops above 150 unless a larger count has been approved. Its first run was due today, but the questions asked
+  since September now point at 1,576 queries rather than the 122 approved then, so it waits for the owner to
+  choose which databases to sample.
+
 ### Fixed
 - **A busy AI service no longer tells staff the day's allowance is spent.** A per-minute limit used to show "The
   daily AI quota has been reached. Please try again after midnight Pacific time"; it now says the service is busy

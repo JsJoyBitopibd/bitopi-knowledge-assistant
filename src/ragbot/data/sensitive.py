@@ -47,3 +47,11 @@ def is_sensitive(name: str, pats: tuple[str, ...] | None = None) -> bool:
         if any(w.startswith(p) if len(p) >= 5 else w in (p, p + "s") for w in ws):
             return True
     return False
+
+
+# Table names that hold people data (Phase S4, G2): employee masters, attendance and punches, payroll, PIMS and
+# leave records — found in the ERP, dashboard and production databases as well as in the three people databases.
+# auth.scopes lists such tables an open catalog still offers once the people databases are restricted; schema
+# sampling (discovery.sample_candidates) never reads their values. Broad on purpose: a false hit costs a table's
+# samples, a miss would put names in a prompt.
+PEOPLE_TABLE = re.compile(r"employee|attendance|attendence|punch|payroll|salar|pims|leave(?!r)|staff", re.I)

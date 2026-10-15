@@ -63,7 +63,7 @@ def test_sample_candidates_are_small_short_text_and_not_sensitive():
     got = set(sample_candidates(TABLES, COLUMNS, max_rows=200_000))
     assert ("dbo", "ExportOrder", "ShipmentStatus") in got
     assert ("dbo", "Buyer", "BuyerName") not in got               # a *Name column: the sampling skip list (G2)
-    assert ("dbo", "Employee", "Grade") in got
+    assert ("dbo", "Employee", "Grade") not in got                 # a people table: never sampled (S4 review)
     assert ("dbo", "Employee", "EmpMobileNo") not in got          # sensitive column
     assert ("dbo", "ExportOrder", "Remarks") not in got           # nvarchar(max)
     assert ("dbo", "ExportOrder", "BuyerID") not in got           # not text
@@ -75,7 +75,10 @@ def test_sample_candidates_are_small_short_text_and_not_sensitive():
 
 @pytest.mark.parametrize("name", ["CreatedBy", "UpdatedBy", "ApprovedBy", "UserName", "UserID", "Users", "EmpName",
                                   "EmpCode", "LoginID", "LoginName", "BuyerName", "Created_By", "createdby",
-                                  "USERNAME", "empname", "loginid", "Name"])
+                                  "USERNAME", "empname", "loginid", "Name",
+                                  # review of 2026-10-15: a digit after the word, or words glued in a longer name
+                                  "InspectorName1", "InspectorName2", "NTDUpdatedby", "LastUpdatedby", "EntryUserid",
+                                  "ApprovedBy1", "ContactPerson", "AdminReportingPerson", "Merchandiser", "Owner"])
 def test_columns_named_for_a_person_or_a_login_are_never_sampled(name):
     assert sample_skipped(name), name
 
@@ -121,7 +124,7 @@ def test_candidates_from_doc_mirror_the_live_rule():
     assert candidates_from_doc(doc, set()) == []
     assert candidates_from_doc(doc, max_rows=100) == sample_candidates(tables, columns, 100)
     # ExportOrderID and ShipmentStatus; Grade (EmpMobileNo is sensitive); BuyerName is skipped
-    assert queries_by_table(live) == [("dbo.Codes", 3), ("dbo.ExportOrder", 2), ("dbo.Employee", 1)]
+    assert queries_by_table(live) == [("dbo.Codes", 3), ("dbo.ExportOrder", 2)]      # dbo.Employee: a people table
 
 
 def _people(**kw):
@@ -139,3 +142,12 @@ def test_a_people_database_is_refused_and_an_ordinary_one_is_not():
 def test_the_query_budget():
     assert budget_refused(150, 150) is None and budget_refused(0, 150) is None
     assert "151" in budget_refused(151, 150) and "--max-queries 150" in budget_refused(151, 150)
+
+
+def test_a_people_table_in_any_database_is_never_sampled():
+    """The ERP, dashboard and production databases hold employee masters and attendance too (the S4 review): their
+    values never reach the SQL prompt or the schema index, whichever catalog they sit in."""
+    tables = [("dbo", "DailyAttendance_All_Company", "U", 50), ("dbo", "vwEmployee", "U", 40),
+              ("dbo", "Status", "U", 40)]
+    cols = [("dbo", t, "Code", "varchar", 20, True, 1) for _, t, _, _ in tables]
+    assert sample_candidates(tables, cols, 200_000) == [("dbo", "Status", "Code")]

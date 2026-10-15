@@ -24,7 +24,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
-from .sensitive import is_sensitive, words
+from .sensitive import PEOPLE_TABLE, is_sensitive, words
 
 if TYPE_CHECKING:                       # catalog.py does not import this module; the hint only avoids a load
     from .catalog import Catalog
@@ -37,7 +37,13 @@ SAMPLE_TYPES = {"varchar", "nvarchar", "char", "nchar"}
 # being pasted into every prompt that shows the table (and embedded), so they reach the provider with questions
 # that never asked about a person. Also hides *Name columns of things (BuyerName, UnitName): the cost of a
 # missing sample is a weaker hint, the cost of a sampled name is a person's name sent to the provider.
-SAMPLE_SKIP_WORDS: tuple[str, ...] = ("user", "login", "by", "emp", "name")
+SAMPLE_SKIP_WORDS: tuple[str, ...] = ("user", "login", "by", "emp", "name",
+                                       # review of 2026-10-15: people named in non-people databases
+                                       "person", "merchandiser", "inspector", "owner")
+# Matched inside a word too, for names glued without a boundary or with a digit after them (InspectorName1,
+# NTDUpdatedby, EntryUserid, ApprovedBy1): words that START a person/login column, and words that END one.
+_SKIP_PREFIX: tuple[str, ...] = ("user", "login", "emp")
+_SKIP_SUFFIX: tuple[str, ...] = ("by", "name", "names", "user", "userid", "person", "inspector", "merchandiser")
 
 
 def assemble(database: str, conn_env: str,
@@ -102,12 +108,17 @@ def _type(typ: str, max_len: Optional[int]) -> str:
 
 def carried_samples(previous: Optional[dict[str, Any]]) -> dict[tuple[str, str, str], list[str]]:
     """The samples of an earlier discovery document, keyed like assemble()'s `samples`, so a new run keeps
-    them (a run without --samples, or with --tables, used to write every other column without its values)."""
+    them (a run without --samples, or with --tables, used to write every other column without its values).
+    A column the skip list or the sensitive rules now exclude is NOT carried, nor any column of a people table:
+    neither is sampled again, so its old values would otherwise stay in the file, and in the prompts, for good."""
     out: dict[tuple[str, str, str], list[str]] = {}
     for t in (previous or {}).get("tables", []):
         s, _, name = t["name"].partition(".")
+        if PEOPLE_TABLE.search(name):
+            continue
         for c in t.get("columns", []):
-            if c.get("samples"):
+            if c.get("samples") and not c.get("sensitive") and not is_sensitive(c["name"]) \
+                    and not sample_skipped(c["name"]):
                 out[(s, name, c["name"])] = list(c["samples"])
     return out
 
@@ -116,10 +127,12 @@ def sample_skipped(column: str, skip: tuple[str, ...] = SAMPLE_SKIP_WORDS) -> bo
     """True when a column's name says it holds a person or a login (SAMPLE_SKIP_WORDS): one of its words is a
     skip word or its plural (CreatedBy, UserName, EmpName, Users), or — for a name written as one run with no
     word boundary to split on ('createdby', 'USERNAME', 'empname') — the name starts or ends with one."""
-    ws = words(column)
-    if any(w in skip or (w.endswith("s") and w[:-1] in skip) for w in ws):
+    ws = [re.sub(r"\d+$", "", w) for w in words(column)]          # InspectorName1 -> inspector, name
+    if any(w in skip or (w.endswith("s") and w[:-1] in skip) for w in ws if w):
         return True
-    return len(ws) == 1 and any(ws[0].startswith(s) or ws[0].endswith(s) for s in skip)
+    if skip != SAMPLE_SKIP_WORDS:
+        return len(ws) == 1 and any(ws[0].startswith(s) or ws[0].endswith(s) for s in skip)
+    return any(w.startswith(_SKIP_PREFIX) or w.endswith(_SKIP_SUFFIX) for w in ws if w)
 
 
 def sample_candidates(tables: Iterable[tuple], columns: Iterable[tuple], max_rows: int,
@@ -131,6 +144,7 @@ def sample_candidates(tables: Iterable[tuple], columns: Iterable[tuple], max_row
     production server's cost bounded: each sample is one DISTINCT TOP 31 scan of a small table."""
     small = {(s, t) for s, t, kind, rows in tables
              if str(kind).strip() == "U" and rows is not None and int(rows) <= max_rows and not is_sensitive(t)
+             and not PEOPLE_TABLE.search(t)          # a people table in any database: no values sampled
              and (only is None or f"{s}.{t}".lower() in only)}
     out = []
     for s, t, c, typ, mlen, _nullable, _cid in columns:

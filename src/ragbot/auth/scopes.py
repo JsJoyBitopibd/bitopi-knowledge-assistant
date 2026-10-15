@@ -7,7 +7,6 @@ Changing who sees what is a config change only (FR-6.4).
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -18,7 +17,7 @@ from .models import ALL, LEVELS, Scope
 
 # Table names that hold people data (Phase S4): what an open catalog must not keep offering once the people
 # databases are restricted. Broad on purpose — a false hit is a table the owner looks at once and excludes or not.
-_PEOPLE_TABLE = re.compile(r"employee|attendance|attendence|punch|payroll|salar|pims|leave(?!r)|staff", re.I)
+from ..data.sensitive import PEOPLE_TABLE as _PEOPLE_TABLE   # one pattern for the S3 check and for sampling
 
 
 def load_scopes(path: Optional[Path] = None) -> dict[str, Any]:

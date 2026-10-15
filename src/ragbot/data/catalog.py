@@ -27,7 +27,7 @@ from typing import Any, Iterable, Optional
 import yaml
 
 from ..config import settings
-from .sensitive import is_sensitive
+from .sensitive import PEOPLE_TABLE, is_sensitive
 
 MAX_RENDERED_COLUMNS = 40
 
@@ -370,6 +370,14 @@ def _load_discovered(folder: Path, database: str, pats: tuple[str, ...] | None =
             sensitive = is_sensitive(name, pats)
             cols = [{**{k: v for k, v in c.items() if k != "samples"},
                      "sensitive": is_sensitive(c.get("name", ""), pats)} for c in cols]
+        else:
+            # every catalog: a person or login column's values, and any value of a people table (an employee
+            # master in the ERP), never reach a prompt, even from a file sampled before these rules
+            # (discovery.sample_skipped, sensitive.PEOPLE_TABLE)
+            from .discovery import sample_skipped
+            people = bool(PEOPLE_TABLE.search(t["name"].split(".")[-1]))
+            cols = [{k: v for k, v in c.items() if k != "samples"}
+                    if c.get("samples") and (people or sample_skipped(c.get("name", ""))) else c for c in cols]
         out.append(Table(t["name"], t.get("kind", "table"), t.get("rows"), t.get("description", ""),
                          t.get("primary_key", []), cols, t.get("foreign_keys", []), sensitive))
     return out

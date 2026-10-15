@@ -204,6 +204,9 @@ def count_only(a: argparse.Namespace) -> int:
     cat = _catalog(a.friendly)
     only = _only_tables(a, cat)
     cands = candidates_from_doc(doc, only, a.sample_max_rows)
+    if a.schemas:                       # a live run filters schemas before choosing candidates; so does the count
+        keep = {s.strip().lower() for s in a.schemas.split(",") if s.strip()}
+        cands = [c for c in cands if str(c[0]).lower() in keep]
     per = queries_by_table(cands)
     for name, n in per:
         print(f"  {name}: {n}")
@@ -261,6 +264,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         from ragbot.data.discovery import samples_refused
         cat = _catalog(a.friendly)
         why = samples_refused(cat)
+        if cat is not None and (a.conn_env != cat.connection_env
+                                or (a.database or None) != (cat.connection_database or None)):
+            # The fence is the catalog's; a run that opens another database under this name (a copy-paste
+            # slip: "... Production --database HR") would sample HR and write it into Production.json. A slip,
+            # not a choice: no flag overrides it.
+            print(f"refused: this run opens {a.conn_env}{'/' + a.database if a.database else ''}, but the "
+                  f"{cat.database} catalog reads {cat.connection_env}"
+                  f"{'/' + cat.connection_database if cat.connection_database else ''}. Nothing was read.",
+                  file=sys.stderr)
+            return 2
         if why and not a.allow_people_samples:
             print(f"refused: {why}. Nothing was read; --allow-people-samples overrides.", file=sys.stderr)
             return 2
