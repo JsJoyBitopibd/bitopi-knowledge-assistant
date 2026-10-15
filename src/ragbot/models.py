@@ -126,7 +126,7 @@ class Answer(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     warnings: list[str] = Field(default_factory=list)
     sources_text: str = ""       # the <sources> block sent to the model (for eval judging; never logged)
-    error_kind: str = ""         # "" on success; else quota|timeout|auth|db|other — UI shows a soft message
+    error_kind: str = ""         # "" on success; else quota|rate|timeout|auth|db|other — UI shows a soft message
     results: list[QueryResult] = Field(default_factory=list)   # database results in [D1], [D2] … order (UI table/CSV)
     follow_ups: list[str] = Field(default_factory=list)        # suggested next questions (fixed-tool answers only)
     request_id: str = ""         # joins this answer's rows in chat.csv, calls.csv and sql.csv (ragbot/trace.py)

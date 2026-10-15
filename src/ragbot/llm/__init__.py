@@ -4,7 +4,7 @@ Three tiers (Phase N4): small (rewrite, routing), main (answers, SQL) and execut
 ranking, recommendations). `get_model(task)` returns the model for a task; `get_chat()` and
 `get_small_chat()` are thin wrappers over it, so every existing caller keeps working.
 
-Each model is wrapped in a fallback: when a call fails with a quota or timeout error and a fallback
+Each model is wrapped in a fallback: when a call fails with a quota, rate-limit or timeout error and a fallback
 provider is configured in .env, it is retried once on that provider. A free-tier key spent for the
 day, or a provider outage, stopped this project for hours more than once. There is no fallback on an
 auth error — a wrong key fails the same way on the second provider, and retrying would only hide it.
@@ -32,7 +32,7 @@ DEFAULT_TIERS: dict[str, tuple[str, ...]] = {
 }
 # The errors worth a second provider. `auth` is deliberately absent (a bad key fails identically on the
 # fallback) and so is `other` (an unknown failure is more likely a bug in the request than the provider).
-FALLBACK_KINDS = frozenset({"quota", "timeout"})
+FALLBACK_KINDS = frozenset({"quota", "rate", "timeout"})
 
 
 def _json_env(name: str, fallback: str | None = None) -> Optional[dict[str, Any]]:
@@ -91,7 +91,7 @@ def _build_fallback(model: str) -> Optional[ChatModel]:
 
 
 class FallbackChat(ChatModel):
-    """A model plus one retry on a second provider for quota and timeout errors.
+    """A model plus one retry on a second provider for quota, rate-limit and timeout errors.
 
     Both attempts go through the wrapped models' own `chat()`/`stream()`, so each writes its own row to
     logs/calls.csv: a fallback is visible in the audit as two calls, not one (non-negotiable #4)."""

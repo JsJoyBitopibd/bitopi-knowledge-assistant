@@ -9,6 +9,7 @@ from __future__ import annotations
 _LLM = {
     "quota": "The daily AI quota has been reached. Please try again after midnight Pacific time, "
              "or ask IT to enable billing on the AI service.",
+    "rate": "The AI service is busy right now. Please try again in a minute.",
     "timeout": "The AI service did not respond in time. Please try again in a moment.",
     "auth": "The AI service rejected our credentials. Please ask IT to check the API key.",
 }

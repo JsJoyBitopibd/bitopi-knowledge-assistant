@@ -40,6 +40,15 @@ def test_a_stored_outage_row_is_recognised_old_style_and_new():
     assert not complete([_row(1), old_style]) and complete([_row(1), _row(2)])
 
 
+def test_a_per_minute_rate_limit_is_an_outage_too():
+    """A per-minute 429 became its own kind ("rate"); it is the provider's failure exactly as the quota is."""
+    assert infra_failure(SimpleNamespace(error_kind="rate"))
+    row = _row(12, correct=0.0, hit=0.0, route="", warnings=[
+        "llm rate: Error code: 429 [quota: GenerateRequestsPerMinutePerProjectPerModel-FreeTier]"])
+    assert outage_row(row) and not complete([_row(1), row])
+    assert not outage_row(_row(13, warnings=["sql rate column renamed"]))
+
+
 def test_a_damaged_run_is_never_the_baseline(tmp_path):
     """14 Oct: compare() took 20261014T0938 — the newest run covering every case — though four of its
     answers were the quota message and four more were unscored."""
