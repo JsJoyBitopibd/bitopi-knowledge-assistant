@@ -850,6 +850,22 @@ provider (`local` with `config/users.yaml`, or `ldap` once BITOPI-PDC serves LDA
 **anyone who can reach the app can ask for any employee's salary** — the direct consequence of the owner's
 decision of 2026-10-13, recorded rather than worked around.
 
+**S4, built 2026-10-15 — and what it found first.** Exploring the remaining roads showed the mechanism would
+**not have worked if armed**: `scope_for_groups` built the `Scope` without its groups, so every signed-in user had
+none and `restricted_to: [KA-HR]` would have denied the HR members themselves; and `config/scopes.yaml` had no
+`KA-HR` group to hold. S2's "armed in memory" proof had used hand-built scopes, which is why it did not show.
+Both are fixed (the scope carries the *configured* groups only, so AD noise never splits the cache key; `KA-HR`
+is configured with every factory, the owner's call before arming). Then the five roads the router filter does
+not cover, closed through one helper, `catalog.denied_databases(scope)`: the value index (`values.lookup`,
+`resolve`, the SQL prompt's known-values lines), a fixed tool's value parameter (resolved with the user's
+denials) and a denied fixed tool (skipped, so the next tool can match), `run_fixed_tool` itself (refuses before its
+local copy or SQL — fixed tools never pass through `_run_guarded`), the not-found chips (`suggestions(scope=)` is
+required; fails closed), and the picked agent (dropped when every database it speaks for is denied, so the HR
+charter never reaches the SQL prompt). The sidebar counts only readable databases, and the admin audit withholds
+the question and sources of a row that names a database the viewing admin may not read. `check_catalog.py`
+refuses a half-armed configuration. The leak suite arms the rule in memory (`--arm`, per-case `"arm": true`)
+for cases s48–s57; the switch-on steps are the README's "Arming the people-data rule (Phase S3)".
+
 Also deferred: re-running discovery for the other sixteen databases. The JSONs were written at 10:03 on
 2026-10-04 and the patterns gained `medical, tax, bonus, increment, pay` at 17:17 the same day, so those
 databases offer the model tables the guard then refuses. Read-only, about a minute, and it changes what they

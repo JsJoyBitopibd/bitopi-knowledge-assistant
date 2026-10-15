@@ -292,10 +292,16 @@ def _date_window(text: str) -> tuple[date, date]:
     return today, today + timedelta(days=7)
 
 
-def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
+def match_fixed_tool(question: str, tools: list[dict[str, Any]],
+                     *, denied: frozenset[str] = frozenset()) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
+    """The first fixed tool whose pattern the question matches, with its parameters. `denied` (Phase S4): the
+    databases the asking user may not read — their tools are skipped before any parameter is worked out, so
+    the next tool can match and a restricted database's recorded values are never resolved or shown."""
     # a pasted card list or table header arrives on many lines; `.` in the patterns does not cross a newline
     question = re.sub(r"\s+", " ", question).strip()
     for tool in tools:
+        if tool.get("database") in denied:
+            continue
         m = re.search(tool["match"], question)
         if not m:
             continue
@@ -321,10 +327,12 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]]) -> Optional[tup
             if spec.get("type") == "value":
                 # P2.1: a recorded name the question uses — however spelled — from the value index; the bound
                 # parameter is the value as recorded, never the question's text. '' when none or several match
-                # (the tool then runs for all of them). Visibility is not decided here: the view's scope filter is.
+                # (the tool then runs for all of them). Factory visibility is not decided here: the view's scope
+                # filter is. Database visibility is (Phase S4): a value recorded in a database the user may not
+                # read is never resolved, because its label would be shown to them.
                 from .values import resolve
                 try:
-                    hit, cands = resolve(question, Scope.unrestricted(), spec.get("entity", "store"))
+                    hit, cands = resolve(question, Scope.unrestricted(), spec.get("entity", "store"), deny=denied)
                 except Exception:
                     hit, cands = None, []
                 params[name] = hit.value if hit else spec.get("default", "")
@@ -469,6 +477,12 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
                    refresh: bool = False, *, scope: Scope) -> QueryResult:
     cat = cats[tool["database"]]
     sql = tool_sql(tool, params).strip()
+    if not scope.allows_database(getattr(cat, "restricted_to", ())):
+        # Phase S4: fixed tools, their companions and their local copies never pass through _run_guarded, so
+        # the database rule is checked here too — whatever the caller filtered. Nothing is run or read.
+        return QueryResult(database=cat.database, engine=cat.engine, views=[], sql="", params={},
+                           tool=tool["name"], columns=[], rows=[], denied=True,
+                           error=f"outside the user's scope: database {cat.database}")
     factory = params.get("factory")
     if factory and not scope.allows_factory(str(factory)):
         # Say so instead of running it: the view filter would return nothing, and the templated answer
@@ -757,8 +771,9 @@ def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bo
     Raises GuardError / the database's error; a statement that reads no table is refused."""
     s = settings()
     # Phase S, second check: answer_from_data drops the databases a user may not read, but a statement can
-    # arrive here by other roads — the day's question->SQL cache, a fixed tool, a companion, a repair. Refuse
-    # before the guard rather than trusting the caller to have filtered.
+    # arrive here by other roads — the day's question->SQL cache, a repair or its lookups. Refuse before the
+    # guard rather than trusting the caller to have filtered. (Fixed tools and their companions do not come
+    # through here; run_fixed_tool makes the same check.)
     if not scope.allows_database(cat.restricted_to):
         raise GuardError(f"outside the user's scope: database {cat.database}")
     siblings = siblings_of(cat, {c.database: c for c in (cats or {}).values()}) if cats else {}
@@ -1066,15 +1081,16 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
     and generate SQL, letting the model name the database among them. refresh=True skips the SQL
     result and question->SQL caches and reads live. Every statement is limited to the user's scope
     (data/virtual.py). Each result names the domain agent that answered (Phase K, domain_agents)."""
-    from ..domain_agents import pick_agent
+    from ..domain_agents import agent_readable, pick_agent
     with trace.span("data"):
-        cats = load_catalogs()
+        known = load_catalogs()
         # Phase S: drop the databases this user may not read before anything looks at them. Doing it here and
         # not at the guard means a denied database is never ranked, never has its tables rendered into a
         # prompt, never matches one of its fixed tools and is not a candidate for a pasted statement — the
         # model is not told it exists. The guard checks again (_run_guarded) for whatever arrives by another
         # road, such as a statement replayed from the day's cache.
-        cats = {n: c for n, c in cats.items() if scope.allows_database(c.restricted_to)}
+        cats = {n: c for n, c in known.items() if scope.allows_database(c.restricted_to)}
+        denied = frozenset(known) - frozenset(cats)
         if not cats:
             return []
         if _STATEMENT.search(question):
@@ -1088,13 +1104,13 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
         if named and not scope.all_factories and not any(scope.allows_factory(f) for f in named):
             return [QueryResult(database="", engine="sqlserver", views=[], sql="", columns=[], rows=[],
                                 denied=True, error=f"outside the user's scope: factory {', '.join(named)}")]
-        hit = match_fixed_tool(question, load_fixed_tools())
+        hit = match_fixed_tool(question, load_fixed_tools(), denied=denied)
         if hit:
             tool, params = hit
             if tool["database"] in cats:
                 result = run_fixed_tool(tool, params, cats, user, refresh, scope=scope)
                 a = pick_agent(question, tool)
-                result.agent = a.name if a else ""
+                result.agent = a.name if a is not None and agent_readable(a, cats, known) else ""
                 extra = run_companion(tool, result, cats, user, refresh, scope=scope)
                 return [result] + ([extra] if extra is not None else [])
         with trace.span("data.embed"):
@@ -1103,6 +1119,12 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
             picked = pick_catalogs(question, cats, qvec)
             # the catalogs are picked first so a keyword tie between two agents can be broken by them (Phase Q)
             agent = pick_agent(question, prefer_catalogs=list(picked))
+            # Phase S4: an agent whose every database the user may not read is not theirs. Its charter names
+            # those tables and what they hold, so it would reach the SQL prompt (and the answer's agent label)
+            # for a user denied all of it. Dropped rather than re-picked among the readable agents: re-picking
+            # would hand "manpower present" to the production agent, the planned-manpower mix-up R7 fixed.
+            if agent is not None and not agent_readable(agent, cats, known):
+                agent = None
             if agent is not None:
                 picked = _with_agent_catalog(question, picked, cats, agent, qvec)
         r = generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec, agent=agent.name if agent else "")

@@ -22,6 +22,11 @@ groups:
     factories: [BGL]
   KA-Managers:
     factories: ["*"]
+  KA-HR:            # Phase S: the only group that opens a catalog with `restricted_to: [KA-HR]` (the people
+                    # databases). Every factory, because those databases have only raw tables and raw tables are
+                    # offered to all-factory users only. The owner decides before arming (S3) whether HR
+                    # officers should get every factory; until a catalog names the group, nobody's access changes.
+    factories: ["*"]
   KA-HR-Restricted:
     departments: [HR]
     confidentiality: restricted

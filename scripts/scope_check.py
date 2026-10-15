@@ -3,33 +3,91 @@
     python scripts/scope_check.py              # all cases (the "answer"/"cache" cases call the LLM)
     python scripts/scope_check.py --no-llm     # retrieval and data cases only
     python scripts/scope_check.py --only s01,s23
+    python scripts/scope_check.py --arm        # every case with the people databases restricted (Phase S)
 
 Builds a throwaway document index from generated PDFs — a TAL SOP, an RHL SOP, a restricted HR policy, a
 group-wide IT policy and a TAL note carrying a prompt-injection line — and runs tests/scope_cases.jsonl
-as four users: TAL staff, RHL staff, an HR user with no factory, and an unrestricted user. Data cases
-read the live databases (read-only). A leak is an out-of-scope source, factory or text in the search
-results, the rows, the references, the answer, or the text sent to the model. Cases marked "control"
-must find in-scope material; if one fails, the run is invalid (no leaks would then prove nothing).
+as these users: TAL staff, RHL staff, an HR user with no factory, an unrestricted user, and (Phase S4) a
+KA-Managers user, a KA-HR member and a KA-Managers administrator, the last three built through
+scope_for_groups the way a sign-in builds them. Data cases read the live databases (read-only). A leak is an
+out-of-scope source, factory, database, agent, chip or text in the search results, the rows, the references,
+the answer, or the text sent to the model. Cases marked "control" must find in-scope material; if one fails,
+the run is invalid (no leaks would then prove nothing).
+
+Phase S4: a case with "arm": true (or every case, with --arm) runs with `restricted_to: [KA-HR]` put on the three
+people catalogs in memory only — nothing on disk changes, so the live app stays unarmed — plus one synthetic
+recorded value in a people database, so the value index can be checked too. The run refuses to start an armed
+case unless the arming took (16 of 19 databases for KA-Managers, all 19 for KA-HR).
 Results: eval/scope/scope_<timestamp>.json (not eval/results/, which holds eval.py's runs).
 """
 import argparse, json, sys, tempfile, _path  # noqa: F401
+import dataclasses   # after _path: scripts/inspect.py would shadow the stdlib module dataclasses imports
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 
 import pymupdf
 
+from ragbot.agent import not_found
 from ragbot.agent import orchestrator as orch
 from ragbot.auth.models import Scope
-from ragbot.data import tools
+from ragbot.auth.scopes import scope_for_groups
+from ragbot.data import cache, catalog, tools, values
 from ragbot.ingest import pipeline
 from ragbot.retrieve import retriever as rt
 from ragbot.retrieve.keyword import FtsKeywordIndex
 from ragbot.store import ChromaStore, Registry
 
 ROOT = Path(__file__).resolve().parents[1]
+# The groups as config/scopes.example.yaml configures them for Phase S; inline so the suite does not depend on the
+# server's own scopes.yaml. "Domain Users" is there to show an unconfigured AD group never reaches the scope.
+_GROUPS = {"groups": {"KA-Managers": {"factories": ["*"]}, "KA-HR": {"factories": ["*"]}}, "admins": ["KA-Admins"]}
 SCOPES = {"tal": Scope(factories=["TAL"]), "rhl": Scope(factories=["RHL"]),
           "hr": Scope(factories=[], departments=["HR"], confidentiality_max="restricted"),
-          "all": Scope.unrestricted()}
+          "all": Scope.unrestricted(),
+          "mgr": scope_for_groups(["KA-Managers", "Domain Users"], _GROUPS),
+          "hrm": scope_for_groups(["KA-Managers", "KA-HR"], _GROUPS),
+          "adm": scope_for_groups(["KA-Managers", "KA-Admins"], _GROUPS)}
+PEOPLE = ("Hrms5Misami", "HR", "HWATT")
+SYNTHETIC_VALUE = values.ValueEntry("department", "Compliance Cell", "", values.GROUP, "Hrms5Misami",
+                                    "dbo.vwAllCompanyEmployeeList.Department")
+# A store recorded in a people database: the only value-typed fixed-tool parameters are `store` and `buyer`, so this
+# is what reaches the label channel (stock_balance_by_item's "in {value}"), which a department name never could.
+SYNTHETIC_STORE = values.ValueEntry("store", "Payroll Archive Store", "", values.GROUP, "Hrms5Misami",
+                                    "dbo.vwAllCompanyEmployeeList.Store")
+
+
+def _clear_caches() -> None:
+    orch._ANSWERS.clear()
+    tools._SQL.clear()
+    cache.clear()
+
+
+@contextmanager
+def armed():
+    """`restricted_to: [KA-HR]` on the people catalogs, in memory, for every module that asks catalog.load_catalogs
+    or tools.load_catalogs — plus a synthetic people value in the value index. Caches are cleared on the way in and
+    out, so no answer computed one way is served the other."""
+    base = catalog.load_catalogs()
+    cats = {n: dataclasses.replace(c, restricted_to=("ka-hr",)) if n in PEOPLE else c for n, c in base.items()}
+    real_index = values.load_index
+    saved = [(catalog, "load_catalogs", catalog.load_catalogs), (tools, "load_catalogs", tools.load_catalogs),
+             (values, "load_index", values.load_index)]
+    catalog.load_catalogs = lambda *a, **k: dict(cats)
+    tools.load_catalogs = lambda *a, **k: dict(cats)
+    values.load_index = lambda *a, **k: [*real_index(*a, **k), SYNTHETIC_VALUE, SYNTHETIC_STORE]
+    _clear_caches()
+    try:
+        n_mgr = len(catalog.readable_databases(SCOPES["mgr"]))
+        n_hrm = len(catalog.readable_databases(SCOPES["hrm"]))
+        if (n_mgr, n_hrm) != (len(cats) - len(PEOPLE), len(cats)):
+            sys.exit(f"arming did not take (KA-Managers reads {n_mgr}, KA-HR {n_hrm} of {len(cats)}): "
+                     "the armed cases would prove nothing")
+        yield
+    finally:
+        for mod, name, fn in saved:
+            setattr(mod, name, fn)
+        _clear_caches()
 
 _PARA = {
     "TAL/tal_cutting_sop.pdf": ("TAL cutting room approval, form TAL-CUT-771",
@@ -97,7 +155,34 @@ def check(case: dict, llm: bool) -> dict:
     scope = SCOPES[case["as"]]
     leaks, misses, notes = [], [], []
     forbid_src, forbid_txt = set(case.get("forbid_sources", [])), case.get("forbid_text", [])
+    forbid_db = {d.lower() for d in case.get("forbid_databases", [])}
     allowed = set(scope.db_factories())
+
+    def databases_ok(results, where):
+        for res in results:
+            named = {res.database, *res.databases_considered} - {"", None}
+            bad = {d for d in named if d.lower() in forbid_db}
+            if bad:
+                leaks.append(f"{where}: touched {sorted(bad)}")
+            if case.get("forbid_agent") and res.agent == case["forbid_agent"]:
+                leaks.append(f"{where}: answered by agent {res.agent!r}")
+        got = {res.database for res in results}
+        if set(case.get("expect_databases", [])) - got:
+            misses.append(f"expected databases {case['expect_databases']}, got {sorted(d for d in got if d)}")
+
+    def text_ok(texts, where):
+        for t in forbid_txt:
+            if any(t in x for x in texts):
+                leaks.append(f"{where} contains {t!r}")
+        for t in case.get("forbid_chips", []):
+            if t in texts:
+                leaks.append(f"{where} offers {t!r}")
+        for t in case.get("expect_text", []):
+            if not any(t in x for x in texts):
+                misses.append(f"{where} lacks {t!r}")
+
+    if case.get("llm") and not llm:            # a data case whose only road is model-written SQL
+        return {"id": case["id"], "skipped": "llm"}
 
     def rows_ok(results, where):
         for res in results:
@@ -120,9 +205,30 @@ def check(case: dict, llm: bool) -> dict:
         if set(case.get("expect_sources", [])) - srcs:
             misses.append(f"expected {case['expect_sources']}, got {sorted(srcs)}")
         notes.append(f"sources {sorted(srcs)}")
+    elif kind == "chips":
+        # Phase S4: the not-found reply's chips and its "where to look" sentence, without a model call
+        chips = not_found.suggestions(case["q"], [], scope=scope)
+        text_ok(chips + [not_found.general(case["q"], scope)], "not-found reply")
+        notes.append(f"chips {chips}")
+    elif kind == "values":
+        # Phase S4: the value index three ways — a lookup, the SQL prompt's "Known values" lines over every
+        # catalog, and a fixed tool's value parameter with its label
+        found = [h.value for h in values.lookup(case["q"], scope)]
+        lines = values.known_values_lines(case["q"], scope, sorted(catalog.load_catalogs()), with_company=False)
+        hit = tools.match_fixed_tool(case["q"], tools.load_fixed_tools(), denied=catalog.denied_databases(scope))
+        labels = [str(v) for k, v in (hit[1].items() if hit else []) if isinstance(v, str)]
+        text_ok(found + lines + labels, "value index")
+        # each channel can carry its own control, so a channel that silently stopped working is noticed
+        for key, got, where in (("expect_lookup", found, "lookup"), ("expect_known", lines, "known-values lines"),
+                                ("expect_label", labels, "fixed-tool label")):
+            for t in case.get(key, []):
+                if not any(t in x for x in got):
+                    misses.append(f"{where} lacks {t!r}")
+        notes.append(f"values {found[:5]}, tool {hit[0]['name'] if hit else None}")
     elif kind == "data":
         results = tools.answer_from_data(case["q"], user="scope-check", scope=scope)
         rows_ok(results, "data")
+        databases_ok(results, "data")
         n = sum(len(r.rows) for r in results)
         if case.get("expect_denied") and not any(r.denied for r in results):
             leaks.append(f"not denied: {n} row(s), errors {[r.error for r in results if r.error]}")
@@ -154,9 +260,22 @@ def check(case: dict, llm: bool) -> dict:
                 leaks.append(f"sent to the model: {t!r}")
             if t in a.text:
                 leaks.append(f"answer contains {t!r}")
-        if kind == "cache" and "answer cache hit" in a.warnings:
+        if kind == "cache" and case.get("expect_cache_hit"):
+            # the control: the same scope warmed and asked must hit, or "no hit" above would prove nothing
+            if "answer cache hit" not in a.warnings:
+                misses.append("the same scope's warmed answer was not served from the cache")
+        elif kind == "cache" and "answer cache hit" in a.warnings:
             leaks.append("served another scope's cached answer")
         rows_ok(a.results, "answer rows")
+        databases_ok(a.results, "answer")
+        bad_refs = {r.database for r in a.references if r.kind == "data" and (r.database or "").lower() in forbid_db}
+        if bad_refs:
+            leaks.append(f"references {sorted(bad_refs)}")
+        if case.get("forbid_agent") and a.agent == case["forbid_agent"]:
+            leaks.append(f"answered by agent {a.agent!r}")
+        for t in case.get("forbid_chips", []):
+            if t in a.follow_ups:
+                leaks.append(f"offers {t!r}")
         if case.get("expect_no_rows") and any(r.rows for r in a.results):
             leaks.append("rows returned")
         notes.append(f"route {a.route}, refs {sorted(refs)}, not_found {a.not_found}")
@@ -168,6 +287,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-llm", action="store_true"); ap.add_argument("--only", default="")
     ap.add_argument("--cases", default="tests/scope_cases.jsonl")
+    ap.add_argument("--arm", action="store_true", help="run every case with the people databases restricted")
     a = ap.parse_args()
     cases = [json.loads(l) for l in (ROOT / a.cases).read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.only:
@@ -175,7 +295,12 @@ def main() -> None:
     # ignore_cleanup_errors: on Windows the Chroma client still holds its files open at exit
     with tempfile.TemporaryDirectory(prefix="scope_check_", ignore_cleanup_errors=True) as tmp:
         build_index(Path(tmp))
-        out = [check(c, llm=not a.no_llm) for c in cases]
+        out = []
+        for c in cases:
+            with armed() if (a.arm or c.get("arm")) else nullcontext():
+                r = check(c, llm=not a.no_llm)
+            r["armed"] = bool(a.arm or c.get("arm"))
+            out.append(r)
     ran = [r for r in out if "skipped" not in r]
     leaks = sum(len(r["leaks"]) for r in ran)
     bad_controls = [r["id"] for r in ran if r["misses"]]

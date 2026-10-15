@@ -190,7 +190,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             # away (app.py answer_body).
             out.text = nf + " " + (not_found.failed(failed) or not_found.general(q, scope))
             out.not_found = True
-            out.follow_ups = not_found.suggestions(q, results)
+            out.follow_ups = not_found.suggestions(q, results, scope=scope)
             yield Final(_log(out, user, scope)); return
         if r == "data" and not _has_rows(results) and not chunks and not tool_ran and not checked:
             # data route found nothing usable: fall back to documents once (a PDF may hold it). Not when a fixed
@@ -206,7 +206,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
                                else not_found.empty(results) or not_found.empty_filter(results) or not_found.general(q, scope))
         out.not_found = True
         if not denied:
-            out.follow_ups = not_found.suggestions(q, results)
+            out.follow_ups = not_found.suggestions(q, results, scope=scope)
         yield Final(_log(out, user, scope)); return
 
     # A single data result is written from a template, no model call: fixed tools (C7) and, unless
@@ -247,7 +247,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         out.text = nf + " " + not_found.unverified()
         _log_verify_failure(question, q, out.warnings)
     if out.not_found and not out.follow_ups and not out.error_kind:
-        out.follow_ups = not_found.suggestions(q, results)
+        out.follow_ups = not_found.suggestions(q, results, scope=scope)
     # Cache only verified documents answers: database rows go stale in minutes (they have their own
     # short cache in data/cache.py) and a not-found may become answerable after the next ingest.
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:

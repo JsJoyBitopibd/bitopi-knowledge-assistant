@@ -50,7 +50,7 @@ def test_empty_filter_sentence_uses_the_users_words_and_candidates_become_chips(
     assert "SLolcation" not in s and "dbo." not in s and "Maintenance Store" not in s
     assert not_found.empty_filter([gen.model_copy(update={"checked": False})]) is None     # nothing was looked up
     assert not_found.empty_filter([gen.model_copy(update={"rows": [[5]]})]) is None        # it has an answer
-    chips = not_found.suggestions("balance of 1178108 in the mantainance store of misami", [gen])
+    chips = not_found.suggestions("balance of 1178108 in the mantainance store of misami", [gen], scope=None)
     assert chips[:2] == ["balance of 1178108 in the Central Store (Misami) of misami",
                          "balance of 1178108 in the Maintenance Store (Misami) of misami"]
 
@@ -62,7 +62,7 @@ def test_general_uses_the_agents_where_sentence_else_the_default():
 
 # ---------------------------------------------------------------- suggestions
 def test_empty_today_offers_yesterday_and_this_week_first():
-    out = not_found.suggestions("Show me the defect summary today", [_empty(tool="defect_summary_window")])
+    out = not_found.suggestions("Show me the defect summary today", [_empty(tool="defect_summary_window")], scope=None)
     assert out[:2] == ["Show me the defect summary yesterday", "Show me the defect summary this week"]
     ts = tools.load_fixed_tools()
     for q in out[:2]:                       # each one answers without a model call
@@ -70,24 +70,24 @@ def test_empty_today_offers_yesterday_and_this_week_first():
 
 
 def test_a_question_without_a_period_gets_one_appended():
-    out = not_found.suggestions("What is the DHU?", [_empty()])
+    out = not_found.suggestions("What is the DHU?", [_empty()], scope=None)
     assert out[0] == "What is the DHU yesterday?"
 
 
 def test_related_examples_never_name_another_factory():
     for q in ["Which lines had defects?", "What was the AQL of the RHL audit?"]:
-        out = not_found.suggestions(q)
+        out = not_found.suggestions(q, scope=None)
         assert out, q
         assert not any(c in s for s in out for c in ("TAL", "BGL")), (q, out)
 
 
 def test_examples_about_one_record_are_not_offered():
-    out = not_found.suggestions("Who signed the buyer's final inspection report for the last shipment?")
+    out = not_found.suggestions("Who signed the buyer's final inspection report for the last shipment?", scope=None)
     assert not any(any(ch.isdigit() for ch in s) for s in out), out
 
 
 def test_unrelated_question_gets_no_suggestions():
-    assert not_found.suggestions("What is the colour of the sky?") == []
+    assert not_found.suggestions("What is the colour of the sky?", scope=None) == []
 
 
 # ---------------------------------------------------------------- orchestrator

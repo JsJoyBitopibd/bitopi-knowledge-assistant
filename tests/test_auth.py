@@ -231,3 +231,54 @@ def test_ldap_unreachable_server(fake_ldap):
     fake_ldap.reachable = False
     p = LdapProvider("dc1", "bitopi.local", "DC=bitopi,DC=local", scopes_cfg=CFG)
     assert p.authenticate("jdoe", "right password").reason == "unavailable"
+
+
+# ---------------------------------------------------------------- Phase S4: the groups reach the scope
+HR_CFG = {"groups": {**CFG["groups"], "KA-HR": {"factories": ["*"]}}, "admins": ["KA-Admins"]}
+
+
+def test_the_scope_carries_the_configured_groups_the_user_holds():
+    """Until 2026-10-15 scope_for_groups dropped them, so Scope.groups was empty for every signed-in user and an
+    armed `restricted_to: [KA-HR]` would have denied the HR members themselves."""
+    s = scope_for_groups(["KA-Staff-TAL", "ka-hr"], HR_CFG)
+    assert s.groups == {"ka-staff-tal", "ka-hr"}
+    assert s.allows_database(["KA-HR"]) and not scope_for_groups(["KA-Managers"], HR_CFG).allows_database(["KA-HR"])
+
+
+def test_unconfigured_ad_groups_stay_out_of_the_scope_key():
+    """An AD account carries dozens of groups. Only configured ones decide anything, so only they go in the scope
+    — otherwise every cache key would be one person's."""
+    a = scope_for_groups(["KA-Managers", "Domain Users", "VPN Users"], HR_CFG)
+    b = scope_for_groups(["KA-Managers"], HR_CFG)
+    assert a.groups == {"ka-managers"} and a.key() == b.key()
+    assert "domain users" not in a.key()
+
+
+def test_a_local_sign_in_reaches_a_restricted_database_only_with_its_group(tmp_path):
+    f = tmp_path / "users.yaml"
+    f.write_text(yaml.safe_dump({"users": {
+        "hrofficer": {"password_hash": _hash("long password 1"), "groups": ["KA-HR"]},
+        "manager": {"password_hash": _hash("long password 2"), "groups": ["KA-Managers"]}}}), encoding="utf-8")
+    p = LocalProvider(f, HR_CFG)
+    hr = p.authenticate("hrofficer", "long password 1").user
+    mgr = p.authenticate("manager", "long password 2").user
+    assert hr.scope.allows_database(["KA-HR"])
+    assert not mgr.scope.allows_database(["KA-HR"])
+    assert mgr.scope.allows_database([])                               # an open database stays open
+
+
+def test_ldap_groups_reach_the_scope(fake_ldap):
+    """memberOf DNs become CNs, and the configured ones among them become the scope's groups."""
+    p = LdapProvider("dc1.bitopi.local", "bitopi.local", "DC=bitopi,DC=local", scopes_cfg=CFG)
+    r = p.authenticate("BITOPI\\jdoe", "right password")
+    assert r.user.scope.groups == {"ka-staff-tal"}                     # "Staff, all" is not configured
+
+
+def test_the_open_user_carries_its_open_groups(monkeypatch):
+    """With sign-in off, the one shared user is built from auth.open_groups like any other: KA-Managers, so it can
+    never open a database restricted to KA-HR — which is why arming needs sign-in too (S3)."""
+    monkeypatch.setattr(providers, "settings", lambda: _Settings({"auth.provider": "none",
+                                                                 "auth.open_groups": ["KA-Managers"]}))
+    monkeypatch.setattr(providers, "load_scopes", lambda: HR_CFG)
+    u = providers.open_user()
+    assert u.scope.groups == {"ka-managers"} and not u.scope.allows_database(["KA-HR"])

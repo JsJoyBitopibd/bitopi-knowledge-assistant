@@ -106,13 +106,24 @@ def failed(results: Sequence[QueryResult]) -> Optional[str]:
 
 def _agent_is_readable(agent, scope) -> bool:
     """Whether any database this agent speaks for is one the user may read (Phase S)."""
+    from ..domain_agents import agent_readable
     try:
         from ..data.catalog import load_catalogs
         cats = load_catalogs()
-    except Exception:          # no catalogs loaded (unit tests, a broken folder): say nothing new
-        return True
-    own = [cats[n] for n in getattr(agent, "catalogs", ()) if n in cats]
-    return not own or any(scope.allows_database(c.restricted_to) for c in own)
+    except Exception:          # the rule cannot be applied: fail closed, the general sentence describes nothing
+        return False
+    return agent_readable(agent, {n for n, c in cats.items() if scope.allows_database(c.restricted_to)}, cats)
+
+
+def _denied_for(scope) -> Optional[frozenset[str]]:
+    """The databases `scope` may not read, or None when the catalogs cannot be read (Phase S4). The chips fail
+    closed on None: a chip is a question the assistant offers, and offering one about a database it cannot vouch
+    the user may read is the leak S4 closes."""
+    try:
+        from ..data.catalog import denied_databases
+        return denied_databases(scope)
+    except Exception:
+        return None
 
 
 def general(question: str, scope=None) -> str:
@@ -146,10 +157,14 @@ def _wider(question: str, window: str) -> list[str]:
 
 
 def suggestions(question: str, results: Sequence[QueryResult] = (), limit: int = 3,
-                tools: Optional[list[dict[str, Any]]] = None) -> list[str]:
+                tools: Optional[list[dict[str, Any]]] = None, *, scope) -> list[str]:
+    """`scope` is required (Phase S4) so no caller can forget it: a fixed tool's example over a database the
+    user may not read ("What is the number of manpower present today?") is never offered, nor a recorded value
+    from one, nor the picked agent's bonus when that agent is not theirs. None = scripts: nothing is denied."""
     from ..data.tools import load_fixed_tools
-    from ..domain_agents import pick_agent
+    from ..domain_agents import agent_readable, pick_agent
     from ..ingest.meta import factory_codes
+    denied = _denied_for(scope)
     out: list[str] = []
     for r in results:
         if not r.error and not r.rows and r.tool != "generated" and r.params.get("window"):
@@ -158,6 +173,8 @@ def suggestions(question: str, results: Sequence[QueryResult] = (), limit: int =
     for r in results:
         # P2: the recorded values a lookup found where the question's word matched nothing — the question with
         # that word replaced, as chips (never as a sentence: a value is a fact, and this reply cites nothing)
+        if denied is None or r.database in denied:
+            continue
         if r.tool == "generated" and r.candidates and r.filters:
             lit = next((v for v in r.filters.values() if not v.strip().isdigit() and v.lower() in question.lower()), None)
             if lit:
@@ -165,10 +182,23 @@ def suggestions(question: str, results: Sequence[QueryResult] = (), limit: int =
                 out += [pat.sub(lambda m, c=c: c, question, count=1) for c in r.candidates[:3]]
             break
     tools = load_fixed_tools() if tools is None else tools
+    if denied is None:
+        tools = []                              # fail closed: no example the catalogs cannot vouch for
+    else:
+        tools = [t for t in tools if t.get("database") not in denied
+                 and (t.get("companion") or {}).get("database") not in denied]
     try:
         agent = pick_agent(question)
     except Exception:
         agent = None
+    if agent is not None and denied:
+        try:
+            from ..data.catalog import load_catalogs
+            known = load_catalogs()
+            if not agent_readable(agent, set(known) - denied, known):
+                agent = None                    # its tools are gone already; no bonus for the rest either
+        except Exception:
+            agent = None
     codes = factory_codes()
     asked = {c for c in codes if re.search(rf"\b{re.escape(c)}\b", question, re.I)}
     qw = _words(question)

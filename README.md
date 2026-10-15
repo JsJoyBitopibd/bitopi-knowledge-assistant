@@ -69,6 +69,47 @@ in every SQL statement (never by the prompt). Setup:
 Every question in `logs/chat.csv` and every statement in `logs/sql.csv` records the user and their
 scope; admins can look up a user's scope and download their log in the sidebar ("Access and audit").
 
+### Arming the people-data rule (Phase S3)
+
+Today the three people databases (`Hrms5Misami`, `HR`, `HWATT` — payroll, attendance, personal records) are open
+to everyone who reaches the app; that is the owner's decision of 2026-10-13. Phase S built the rule that closes
+them (S1–S2, S4: a catalog's `restricted_to:` names the groups that may read it) and left it **unarmed**. Arming is
+**two changes made together** — the `restricted_to:` line and a sign-in provider — because with sign-in off every
+visitor is the shared `open` user (`auth.open_groups: [KA-Managers]`), so the line alone would deny HR to everybody.
+
+1. **Pre-flight.** The test suite (the docker command in `docs/PROGRESS.md`, "Tests"), then
+   `docker compose exec app python scripts/scope_check.py --no-llm --arm`: 0 leaks, every control met.
+2. **Decide the KA-HR group** in `config/scopes.yaml`. It is configured with `factories: ["*"]` because the people
+   databases have only raw tables, which are offered to all-factory users only. An HR officer otherwise limited to
+   one factory therefore sees every factory's orders too; if that is wrong, say so before step 5.
+3. **Create the accounts first** — `config/users.yaml` is ignored while the provider is `none`, so this changes
+   nothing yet. Once armed, someone without an account sees only the sign-in form.
+   - every member of staff: `docker compose exec app python scripts/add_local_user.py <account> --groups KA-Managers`
+   - HR members: `--groups KA-Managers,KA-HR`; administrators add `KA-Admins` (an admin is not a master key: an
+     administrator who should read payroll needs `KA-HR` as well)
+   - passwords of at least 10 characters, typed twice; only the bcrypt hash is stored
+4. **Close the people tables in the other databases.** People data is not only in the three people databases:
+   the ERP, the dashboard and the production databases have employee masters and attendance of their own.
+   `scripts/check_catalog.py` lists them in its "if armed" note — on 2026-10-15, 95 tables in 11 catalogs
+   (BitopiSplint 51, BiMob 14, Dashboard 10, FM 8, …). For each, decide: add it to that catalog's
+   `exclude_tables:` (nobody can query it) or put `restricted_to: [KA-HR]` on the whole catalog. Restricting only
+   the three people databases would leave names, designations, joining dates and daily attendance readable.
+5. Add `restricted_to: [KA-HR]` as a top-level key to `config/catalog/Hrms5Misami.yaml`, `config/catalog/HR.yaml`
+   and `config/catalog/HWATT.yaml`.
+6. In `config/settings.yaml` set `auth.provider: local   # S3 armed <date>` (or `ldap` once BITOPI-PDC serves
+   LDAPS — the AD group must then be named `KA-HR`; only direct `memberOf` membership counts).
+7. `docker compose exec app python scripts/check_catalog.py` must report **0 problems**: it refuses a half-armed
+   setup (a `restricted_to:` group `scopes.yaml` does not configure, a restriction with `provider: none`, no
+   account holding the group, or an open catalog still offering people tables — step 4).
+8. `docker compose restart app` — settings are read once at start.
+9. **Check**: an anonymous visitor sees only the sign-in form; a `KA-Managers` user asking "What is the number of
+   manpower present today?" gets a not-found reply with no HRMS sentence and no HR chip, and the sidebar counts 16
+   databases; a `KA-HR` member gets the presence row with its WorkDate; `scope_check.py` (full) reports 0 leaks;
+   the HR golden cases do not drop.
+
+**Rollback**: set `auth.provider` back to `none` **and** remove the three `restricted_to:` lines — always both. Only
+one of them leaves HR denied to everybody, or sign-in on with the payroll still open.
+
 ## Folders
 
 - `data/pdfs/` — drop PDFs here. Subfolder = category tag used for filtering and shown in references.

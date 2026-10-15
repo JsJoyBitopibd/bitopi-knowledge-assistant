@@ -8,7 +8,23 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- **The people-data rule is complete and ready to switch on** (Phase S4). Everything that could still show a
+  restricted database to someone outside its group is now covered: the recorded names the assistant matches
+  questions against, a built-in query's values and its own database, the suggested follow-up questions after a
+  "no data" reply, the background description an assistant agent gives the SQL model, the number of databases in
+  the sidebar, and the administrator's audit download. A configuration check refuses a half-switched-on setup,
+  and the leak test suite can now run with the rule switched on in memory. **It is still switched off**, as the
+  owner decided: the README has the step-by-step for switching it on, and until then anyone who can reach the app
+  can still ask what anyone earns. The review before release found one more thing to decide first: people data
+  is not only in the three people databases — eleven other databases offer 95 tables of it (employee lists,
+  attendance), and each has to be closed before the rule means anything. The configuration check lists them.
+
 ### Fixed
+- **Signing in did not carry a person's groups into what they may see** (Phase S4). The groups decided which
+  factories they saw, but were then dropped, so the database rule built on 13 October would have denied the HR
+  members themselves the moment it was switched on. Found before anyone switched it on. A `KA-HR` group is now
+  configured too.
 - **The before-and-after check sets aside a question whose definition changed.** When a test question is
   redefined between two runs, as the overtime-rate question was in 1.13.0 (from "no data" to the payroll slab),
   comparing its two scores mixed two different questions into one figure; with five not-found questions, one

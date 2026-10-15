@@ -282,7 +282,7 @@ def test_a_question_naming_only_another_factory_is_denied_before_any_query(monke
 
 def _no_generation(monkeypatch, seen):
     """Stop before the SQL model: no embedder (it loads 2 GB), no catalog ranking, no generation."""
-    monkeypatch.setattr(tools, "match_fixed_tool", lambda q, t: None)
+    monkeypatch.setattr(tools, "match_fixed_tool", lambda q, t, **k: None)
     monkeypatch.setattr(tools, "_query_vector", lambda q: None)
     monkeypatch.setattr(tools, "pick_catalogs", lambda q, c, v=None, k=None: {})
     monkeypatch.setattr(tools, "generate_and_run", lambda q, *a, **k: seen.append(q) or _ok())

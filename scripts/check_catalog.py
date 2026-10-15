@@ -5,6 +5,7 @@ Usage: python scripts/check_catalog.py [--live]
 """
 import argparse, re, _path  # noqa: F401
 from ragbot.auth.models import Scope
+from ragbot.config import settings
 from ragbot.data.catalog import load_catalogs
 from ragbot.data.connectors import run
 from ragbot.data.guard import GuardError
@@ -79,6 +80,17 @@ def offline(cats) -> int:
     for p in validate_agents(agents, cats, tools) + validate_watch(agents, cats) + validate_risk(rule_sets):
         print(f"[offline] {p}")
         problems += 1
+    # Phase S4: the per-database rule as configured — a half-armed S3 is a problem, "not armed" is said out loud
+    from ragbot.auth.providers import load_users
+    from ragbot.auth.scopes import load_scopes, restriction_problems
+    s = settings()
+    bad, notes = restriction_problems(cats, load_scopes(), str(s.get("auth.provider") or "local"),
+                                      s.get("auth.open_groups") or [], load_users(), agents)
+    for p in bad:
+        print(f"[offline] {p}")
+        problems += 1
+    for w in notes:
+        print(f"[offline] note: {w}")
     print(f"[offline] {len(cats)} catalogs, {sum(len(c.views) for c in cats.values())} views, "
           f"{len(tools)} fixed tools, {len(agents)} agents, "
           f"{sum(len(r.rules) for r in rule_sets.values())} risk rules — {problems} problem(s)")

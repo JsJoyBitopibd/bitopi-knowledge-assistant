@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Collection, Optional, Sequence
 
 import yaml
 
@@ -84,6 +84,15 @@ def keyword_hits(question: str, agent: Agent) -> int:
     from ..data.db_router import _strip_sql     # a pasted statement's ORDER BY is not the order agent's "order"
     q = _strip_sql(question).lower()
     return sum(1 for w in agent.keywords if _compiled(w).search(q))
+
+
+def agent_readable(agent: Any, readable: Collection[str], known: Optional[Collection[str]] = None) -> bool:
+    """Whether `agent` may speak to a user who may read the databases `readable` (Phase S4). An agent whose
+    every known database is denied to the user is not theirs: its charter names those tables and their
+    contents, so it must not reach that user's SQL prompt, not-found sentence or chips. An agent with no
+    database among the `known` ones (None = trust its list) speaks for nothing restricted and stays."""
+    own = [n for n in getattr(agent, "catalogs", ()) if known is None or n in known]
+    return not own or any(n in readable for n in own)
 
 
 def pick_agent(question: str, tool: Optional[dict[str, Any]] = None,

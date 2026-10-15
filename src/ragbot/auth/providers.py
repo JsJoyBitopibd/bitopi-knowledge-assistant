@@ -53,6 +53,15 @@ def _result(name: str, display: str, groups: list[str], cfg: dict[str, Any]) -> 
     return AuthResult(User(name=name, display=display or name, groups=groups, scope=scope))
 
 
+def load_users(users_file: Optional[Path] = None) -> dict[str, Any]:
+    """The local accounts in config/users.yaml ({account: {name, groups, password_hash}}), {} when there is no
+    file. Also read by scripts/check_catalog.py to check that some account holds each restricted group (S4)."""
+    users_file = users_file or settings().path("users_file", "config/users.yaml")
+    if not users_file.exists():
+        return {}
+    return (yaml.safe_load(users_file.read_text(encoding="utf-8")) or {}).get("users") or {}
+
+
 class LocalProvider:
     def __init__(self, users_file: Optional[Path] = None, scopes_cfg: Optional[dict[str, Any]] = None):
         self.users_file = users_file or settings().path("users_file", "config/users.yaml")
@@ -63,9 +72,7 @@ class LocalProvider:
         name = account_name(username)
         if not name or not password:
             return AuthResult(None, "invalid")
-        users = {}
-        if self.users_file.exists():
-            users = (yaml.safe_load(self.users_file.read_text(encoding="utf-8")) or {}).get("users") or {}
+        users = load_users(self.users_file)
         u = {k.lower(): v for k, v in users.items()}.get(name)
         if not u or not bcrypt.checkpw(password.encode("utf-8"), str(u.get("password_hash", "")).encode("utf-8")):
             return AuthResult(None, "invalid")

@@ -323,6 +323,27 @@ def load_catalogs(folder: Path | None = None) -> dict[str, Catalog]:
     return dict(_load_catalogs(folder, catalog_stamp(folder)))   # copy: callers must not mutate the cached mapping
 
 
+def denied_databases(scope, cats: dict[str, Catalog] | None = None) -> frozenset[str]:
+    """Phase S4: the databases `scope` may not read — every catalog whose `restricted_to:` names no group the
+    scope holds. The one place the value index, the fixed tools, the not-found chips and the UI ask, so a
+    restriction means the same thing everywhere. `None` (scripts, the eval) is denied nothing.
+
+    Catalogs are read through this module's `load_catalogs` at call time, so a test or `scope_check.py`
+    that arms `restricted_to` in memory by patching it reaches every caller at once. A load failure raises:
+    each caller decides whether that fails closed."""
+    if scope is None:
+        return frozenset()
+    cats = load_catalogs() if cats is None else cats
+    return frozenset(name for name, c in cats.items() if not scope.allows_database(c.restricted_to))
+
+
+def readable_databases(scope, cats: dict[str, Catalog] | None = None) -> list[str]:
+    """The databases `scope` may read, by name — what the sidebar counts (Phase S4: a restricted database is not
+    announced to someone it will never answer)."""
+    cats = load_catalogs() if cats is None else cats
+    return sorted(set(cats) - denied_databases(scope, cats))
+
+
 def _load_discovered(folder: Path, database: str, pats: tuple[str, ...] | None = None) -> list[Table]:
     """config/catalog/discovered/<database>.json, or [] when discovery has not been run.
 

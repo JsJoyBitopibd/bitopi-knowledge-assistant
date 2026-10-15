@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from ..auth.models import Scope
 from ..config import settings
@@ -156,10 +156,23 @@ def clear_cache() -> None:
 
 
 # ---------------------------------------------------------------- matching
-def _visible(e: ValueEntry, scope: Scope) -> bool:
+def _visible(e: ValueEntry, scope: Scope, denied: frozenset[str] = frozenset()) -> bool:
+    if e.database and e.database in denied:
+        return False            # Phase S4: a restricted database's recorded names are not the user's to see
     if scope.all_factories or e.factory == GROUP:
         return True
     return bool(e.factory) and e.factory in scope.db_factories()
+
+
+def _denied(scope: Scope, deny: Iterable[str]) -> Optional[frozenset[str]]:
+    """The databases whose values this lookup must not return: the scope's own denials plus `deny` (a caller
+    resolving with Scope.unrestricted() on a user's behalf passes the user's). None when the catalogs cannot
+    be read — the lookup then returns nothing rather than guess (fails closed)."""
+    try:
+        from .catalog import denied_databases
+        return denied_databases(scope) | frozenset(deny)
+    except Exception:
+        return None
 
 
 def _grams(question: str, n: int) -> list[str]:
@@ -168,10 +181,13 @@ def _grams(question: str, n: int) -> list[str]:
 
 
 def lookup(question: str, scope: Scope, entity: Optional[str] = None, entries: Optional[list[ValueEntry]] = None,
-           cutoff: Optional[float] = None) -> list[ValueHit]:
+           cutoff: Optional[float] = None, deny: Iterable[str] = ()) -> list[ValueHit]:
     """The recorded values the question names, best first. A store asked with a company ('maintenance store of
     misami', 'companyid=02') resolves to that company's store; without one, every company's 'Maintenance Store'
     is returned as one hit per value with the others listed as `ambiguous`."""
+    denied = _denied(scope, deny)
+    if denied is None:
+        return []
     entries = load_index() if entries is None else entries
     cutoff = float(settings().get("data.values.fuzzy_cutoff", 0.85)) if cutoff is None else cutoff
     ents = load_entities()
@@ -185,7 +201,7 @@ def lookup(question: str, scope: Scope, entity: Optional[str] = None, entries: O
     hits: list[ValueHit] = []
     by_base: dict[tuple[str, str], list[tuple[ValueEntry, str, float]]] = {}
     for e in entries:
-        if entity and e.entity != entity or not _visible(e, scope):
+        if entity and e.entity != entity or not _visible(e, scope, denied):
             continue
         base = _norm(e.base)
         full = _norm(e.value)
@@ -231,10 +247,12 @@ def lookup(question: str, scope: Scope, entity: Optional[str] = None, entries: O
     return hits
 
 
-def resolve(question: str, scope: Scope, entity: str, entries: Optional[list[ValueEntry]] = None) -> tuple[Optional[ValueHit], list[str]]:
+def resolve(question: str, scope: Scope, entity: str, entries: Optional[list[ValueEntry]] = None,
+            deny: Iterable[str] = ()) -> tuple[Optional[ValueHit], list[str]]:
     """One recorded value of `entity` the question names, or None with the candidates when it names none or
-    several (a fixed tool then runs for all of them and lists them)."""
-    hits = [h for h in lookup(question, scope, entity, entries) if h.entity == entity]
+    several (a fixed tool then runs for all of them and lists them). `deny`: databases whose values must not
+    be returned, for a caller that resolves with an unrestricted scope on a user's behalf."""
+    hits = [h for h in lookup(question, scope, entity, entries, deny=deny) if h.entity == entity]
     if not hits:
         return None, []
     top = [h for h in hits if h.score == hits[0].score and len(h.span.split()) == len(hits[0].span.split())]
@@ -249,7 +267,7 @@ def known_values_lines(question: str, scope: Scope, catalogs: list[str], limit: 
     catalogs shown, with the column to filter on — never more than `limit`, nothing the user may not see."""
     out: list[str] = []
     for h in lookup(question, scope, None, entries):
-        if h.database and h.database not in catalogs:
+        if h.database not in catalogs:      # a value with no database cannot be checked against the shown ones
             continue
         col = h.target.rsplit(".", 1)[-1] if h.target else h.entity
         view = h.target.rsplit(".", 1)[0] if "." in h.target else h.database

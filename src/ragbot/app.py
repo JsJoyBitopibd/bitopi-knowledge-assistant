@@ -187,10 +187,13 @@ def _pdf_bytes(source: str, version: int) -> bytes | None:
 
 
 @st.cache_data(ttl=300)
-def _database_count() -> int:
+def _database_count(groups: tuple[str, ...] = ()) -> int:
+    """The databases this user may read (Phase S4): a restricted one is not counted for someone outside its
+    groups, so the sidebar does not announce a database that will never answer them."""
     try:
-        from ragbot.data.catalog import load_catalogs
-        return len(load_catalogs())
+        from ragbot.auth.models import Scope
+        from ragbot.data.catalog import readable_databases
+        return len(readable_databases(Scope(factories=frozenset({"*"}), groups=frozenset(groups))))
     except Exception:
         return 0
 
@@ -276,7 +279,7 @@ with st.sidebar:
         pick = view.ALL_FACTORIES
     scope = view.narrow_scope(me.scope, pick)       # never wider than the user's own scope
     ui.label("Search in")
-    st.html(view.search_in_html(_database_count(), ingest_state.get("documents")))
+    st.html(view.search_in_html(_database_count(tuple(sorted(scope.groups))), ingest_state.get("documents")))
     allowed = tuple(sorted((k, tuple(v)) for k, v in scope_where(scope).items()))
     cats = st.multiselect("Document categories", _categories(ver, allowed), placeholder="All categories")
     ui.label("Recent")
@@ -306,10 +309,24 @@ with st.sidebar:
             who = st.text_input("Look up a user", placeholder="account name")
             if who:
                 from ragbot.auth.providers import account_name
-                from ragbot.logs import rows_for_user
-                rows = rows_for_user("chat.csv", account_name(who) or who.strip())
-                asked = [r for r in rows if r.get("route") != "feedback"]
-                if not rows:
+                from ragbot.data.catalog import denied_databases, load_catalogs
+                from ragbot.domain_agents import agent_readable, load_agents
+                from ragbot.logs import rows_for_user, withhold_restricted
+                # Phase S4: an admin who may not read a restricted database sees that someone asked, not what.
+                # If the catalogs cannot be read the rule cannot be applied, so the log is not shown at all.
+                try:
+                    known = load_catalogs()
+                    denied = denied_databases(scope, known)
+                    readable = set(known) - denied
+                    gone = [a.name for a in load_agents().values() if not agent_readable(a, readable, known)]
+                    rows = withhold_restricted(rows_for_user("chat.csv", account_name(who) or who.strip()),
+                                               denied, gone)
+                except Exception:
+                    rows = None
+                asked = [r for r in rows or [] if r.get("route") != "feedback"]
+                if rows is None:
+                    st.caption("The audit cannot be shown: the database catalogs could not be read.")
+                elif not rows:
                     st.caption("No questions logged for this account.")
                 else:
                     last = next((r.get("scope") for r in reversed(asked) if r.get("scope")), "")
@@ -339,7 +356,7 @@ def _pdf(source: str) -> bytes | None:
 
 
 def _status_text() -> str:
-    n_db, n_docs = _database_count(), ingest_state.get("documents")
+    n_db, n_docs = _database_count(tuple(sorted(scope.groups))), ingest_state.get("documents")
     parts = ["Ready"]
     if n_db:
         parts.append(f"{n_db} databases")
