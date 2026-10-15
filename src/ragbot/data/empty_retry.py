@@ -104,7 +104,7 @@ def shape_of(sql: str, dialect: str) -> Shape:
     tree = _parse(sql, dialect)
     if tree is None:
         return Shape()
-    ctes ={c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    ctes = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
     tables = [t for t in tree.find_all(exp.Table) if t.name.lower() not in ctes]
     single = ""
     if len(tables) == 1 and tree.find(exp.Join) is None:
@@ -150,9 +150,14 @@ def where_filters(sql: str, dialect: str) -> Optional[list[tuple[str, list[str]]
     "29 — EmployeeCount where BloodGroup is O-, O-ve or O Negative"). Values keep the statement's order, each
     once (case apart). None when there is no WHERE, or when stating it would mean paraphrasing a statement:
     OR, NOT, <>, LIKE, ranges, IS NULL, a subquery, a CTE, a UNION, HAVING, an expression on either side, a
-    column named twice, or an IN list of more than MAX_IN_VALUES values."""
+    column named twice, or an IN list of more than MAX_IN_VALUES values. Also None (review of 2026-10-15) for any
+    JOIN — a condition in its ON clause, or an inner join dropping rows, narrows what was counted without being
+    in the WHERE — for GROUP BY or ORDER BY (TOP 1 … ORDER BY is one group's figure, not the filtered total) and
+    for a value holding a comma, " or " or " and ", which the sentence could only state ambiguously."""
     tree = _parse(sql, dialect)
     if not isinstance(tree, exp.Select) or tree.args.get("having") is not None:
+        return None
+    if tree.args.get("joins") or tree.args.get("group") is not None or tree.args.get("order") is not None:
         return None
     if tree.find(exp.CTE) is not None or tree.find(exp.Subquery) is not None \
             or sum(1 for _ in tree.find_all(exp.Select)) > 1:
@@ -171,6 +176,8 @@ def where_filters(sql: str, dialect: str) -> Optional[list[tuple[str, list[str]]
             return None
         column = term.left.name if isinstance(term, exp.EQ) else term.this.name
         if not column or any(v is None for v in found) or any(c.lower() == column.lower() for c, _ in out):
+            return None
+        if any(v is not None and (", " in v or "," in v or re.search(r"\b(or|and)\b", v, re.I)) for v in found):
             return None
         values: list[str] = []
         for v in found:

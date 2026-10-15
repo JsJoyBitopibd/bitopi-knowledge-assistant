@@ -186,6 +186,8 @@ def test_a_streamed_rate_error_is_logged_as_error_rate(_no_call_log, monkeypatch
     ("Error code: 429", 499, 500, "rate"),
     ("Error code: 429", 500, 500, "quota"),
     ("", 0, 500, "rate"),
+    # OpenAI / Azure: the account's allowance is spent — never "try again in a minute", whatever the count
+    ("Error code: 429 - {'error': {'code': 'insufficient_quota'}}", 0, 500, "quota"),
 ])
 def test_rate_or_quota(text, calls, budget, kind):
     assert base.rate_or_quota(text, calls, budget) == kind

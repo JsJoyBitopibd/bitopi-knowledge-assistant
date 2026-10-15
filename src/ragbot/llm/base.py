@@ -52,9 +52,10 @@ def rate_or_quota(text: str, calls: int, budget: int) -> str:
     Every 429 used to read as "quota", so a per-minute limit told staff to come back after midnight Pacific
     time. The error's own quota ids decide first: any per-day id is the daily quota, even when a per-minute
     id is listed beside it; per-minute ids alone are a rate limit. A 429 that names no id falls back on the
-    count of today's calls (ragbot/quota.py): under the budget it is taken for a rate limit."""
+    count of today's calls (ragbot/quota.py): under the budget it is taken for a rate limit. OpenAI and Azure
+    say `insufficient_quota` when the account's money or allowance is spent: that is never a minute's wait."""
     ids = quota_ids(text)
-    if any("PerDay" in i for i in ids):
+    if any("PerDay" in i for i in ids) or "insufficient_quota" in (text or ""):
         return "quota"
     if ids:
         return "rate"

@@ -297,12 +297,15 @@ def _writing(chunks: list[Chunk], results: list[QueryResult], limit: int = 4) ->
 
 
 def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_generated: bool = False,
-                      scope: Optional[Scope] = None) -> bool:
+                      scope: Optional[Scope] = None, describe: bool = True) -> bool:
     """Fill `out` from agent/templated.py when the results qualify and the text verifies: one result, or a fixed
-    tool's result [D1] followed by its companion [D2] (an empty companion is left out)."""
+    tool's result [D1] followed by its companion [D2] (an empty companion is left out). When a one-value answer
+    that names its filters does not verify (a column name that reads as a code, "SMV10"), the plain
+    "<Column>: <value>" is tried before the answer model is — as it was before filters were named."""
     from ..data.tools import companion_tool, load_fixed_tools, merge_companion
     from .templated import filter_params, scalar_filters, try_template
-    filters = scalar_filters(results[0]) if allow_generated else None
+    original = results
+    filters = scalar_filters(results[0]) if allow_generated and describe else None
     if filters:
         # A one-value answer names what its query filtered on ("29 — EmployeeCount where BloodGroup is O-, …").
         # As with a P2 correction, the values join a copy of the result's params: verify() licenses them and the
@@ -316,7 +319,8 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
         # P3: the companion's columns joined onto the main rows — one table from two databases, cited [D1][D2];
         # both results stay in `used`, so every merged cell is licensed by the row set it came from
         merged = merge_companion(results[0], results[1], comp["merge"])
-    text = try_template(merged or results[0], tool, allow_generated, marker="D1][D2" if merged else "D1")
+    text = try_template(merged or results[0], tool, allow_generated, marker="D1][D2" if merged else "D1",
+                        describe=describe)
     if not text:
         return False
     used = [results[0]] + ([results[1]] if merged else [])
@@ -343,6 +347,8 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
         text += "\n\n" + note_text.replace("[D1]", f"[D{len(used)}]")
     block, refs = sources_block([], used)
     ok, problems = verify(text, [], used, nf)
+    if not ok and filters:
+        return _templated_answer(out, original, nf, allow_generated, scope, describe=False)
     if not ok:
         out.warnings.append(f"template failed verification, using the model: {problems}")
         return False

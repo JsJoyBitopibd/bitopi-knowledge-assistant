@@ -108,7 +108,7 @@ def describe_filters(filters: Filters) -> str:
 
 
 def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False,
-                 marker: str = "D1") -> Optional[str]:
+                 marker: str = "D1", describe: bool = True) -> Optional[str]:
     """The answer text for one data result, or None when it should be left to the model.
 
     Fixed tools always qualify (their shape is known). With `allow_generated` (setting
@@ -134,7 +134,7 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
         lead = _fill(tool["answer"], r, value=value) if tool.get("answer") else None
         # a model-written `SELECT COUNT(*) FROM …` without an alias comes back with an empty column name
         label = r.columns[0].strip() or ("Count" if re.search(r"\bcount\s*\(", r.sql or "", re.I) else "Value")
-        filters = scalar_filters(r) if lead is None else None
+        filters = scalar_filters(r) if lead is None and describe else None
         if filters:
             return f"{fmt(value)} — {label} where {describe_filters(filters)} [{marker}]."
         return f"{lead or f'{label}: {fmt(value)}'} [{marker}]."

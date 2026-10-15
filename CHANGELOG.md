@@ -37,6 +37,14 @@ each phase is in `docs/ROADMAP.md`.
   attendance), and each has to be closed before the rule means anything. The configuration check lists them.
 
 ### Fixed
+- **A busy AI service no longer tells staff the day's allowance is spent.** A per-minute limit used to show "The
+  daily AI quota has been reached. Please try again after midnight Pacific time"; it now says the service is busy
+  and to try again in a minute, and the backup provider takes over as it does for the daily limit.
+- **An AI failure during the "no rows — let me check the recorded values" retry is reported as a failure**, not
+  as "no data", and the quality score leaves such a question unscored instead of counting it.
+- **A one-number answer says what it counted.** "EmployeeCount: 29" now reads "29 — EmployeeCount where
+  BloodGroup is O-, O-ve or O Negative", when the query's filters can be stated exactly; anything more complex
+  keeps the old sentence rather than paraphrase a query.
 - **The nightly copy of the heavy figures is made at 02:00 again, not in the middle of the working day.** It
   used to start whenever its container had last been restarted (15:13 since a restart on 14 October), putting a
   14-minute read of the production database into office hours. It now runs at 02:00 Dhaka time whatever the

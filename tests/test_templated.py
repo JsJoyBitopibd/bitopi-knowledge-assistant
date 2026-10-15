@@ -239,9 +239,31 @@ def test_where_filters_reads_only_plain_anded_equalities():
         "SELECT COUNT(*) FROM dbo.T WHERE A = ''",
         "SELECT COUNT(*) FROM dbo.T WHERE A = B",
         "SELECT COUNT(*) FROM dbo.T WHERE 'x' = A",
+        # review of 2026-10-15: a JOIN's ON clause narrows the count without being in the WHERE
+        "SELECT TOP (200) COUNT(*) AS EmployeeCount FROM dbo.tblEmployeeDetails e JOIN dbo.tblDepartment d "
+        "ON e.DeptID = d.DeptID AND d.DeptName = 'Cutting' WHERE e.BloodGroup = 'O-'",
+        # TOP 1 ... ORDER BY is one group's figure, not the filtered total
+        "SELECT TOP (1) SUM(ProdQty) FROM rag.vwProduction WHERE Factory = 'TAL' AND LineNo = '5' "
+        "GROUP BY ProdDate ORDER BY SUM(ProdQty) DESC",
+        "SELECT TOP (1) ProdQty FROM rag.vwProduction WHERE Factory = 'TAL' ORDER BY ProdDate DESC",
+        # a value the sentence could only state ambiguously
+        "SELECT COUNT(*) FROM dbo.T WHERE Buyer IN ('Marks, Spencer', 'Next')",
+        "SELECT COUNT(*) FROM dbo.T WHERE Buyer = 'Marks and Spencer'",
         "not sql at all",
     ]:
         assert where_filters(sql, "tsql") is None, sql
+
+
+def test_a_named_filter_that_does_not_verify_falls_back_to_the_plain_sentence(monkeypatch):
+    """A filter column that reads as a code ("SMV10") is not in any row, so the named sentence fails verify().
+    Before filters were named, "<Column>: <value>" verified with no model call; it still does."""
+    import ragbot.agent.orchestrator as orch
+    from ragbot.models import Answer
+    r = _generated("SELECT COUNT(*) AS N FROM dbo.T WHERE SMV10 = 'x'")
+    monkeypatch.setattr("ragbot.data.tools.load_fixed_tools", lambda *a, **k: [])
+    out = Answer(text="", question="how many with smv10 x")
+    assert orch._templated_answer(out, [r], NF, allow_generated=True)
+    assert out.text == "EmployeeCount: 29 [D1]." and "templated answer (no model call)" in out.warnings
 
 
 def test_is_blank_result():
