@@ -8,6 +8,15 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-10-15 — Phase S4, Stage-3 groundwork, schema samples, the v1.13.0 follow-ups
+
+The people-data rule completed and ready to switch on, but left off as the owner decided (Phase S4); the tool that
+will judge the quality risk levels, and the playbook and decision records for the recommendations that come after
+it, built but not connected (M✓ tooling, N1a, N3a); example values read from the databases the SQL model uses, with
+people kept out of them (G2); the faster embedding build measured and not adopted (I5); and the six follow-ups the
+v1.13.0 audit found. Gate: the full golden set in two halves against the v1.13.0 run, no score down more than 5
+points (`eval/results/20261015T1739.json`, `20261015T1817.json`); leak suite 61 cases, 0 leaks.
+
 ### Added
 - **The quality risk levels can be checked against what happened, with one command** (Phase M, the M✓ gate).
   `scripts/backtest.py` compares every stored daily level with each file's final quality and writes a report:
@@ -37,6 +46,13 @@ each phase is in `docs/ROADMAP.md`.
   attendance), and each has to be closed before the rule means anything. The configuration check lists them.
 
 ### Changed
+- **88 tables of people data in the ordinary databases are hidden from the assistant** (Phase S3 preparation). Employee
+  lists and attendance kept in the ERP, dashboard, finance and production databases had never been used to answer
+  a question; they are now out of reach for everyone. Seven that answers do use (the group headcount list, the
+  floor-manpower table, three dashboard employee tables) stay open until the people-data rule is switched on.
+- **"How many employees …" about a personal detail counts current staff.** The employee details table also keeps
+  people who have left, so the same blood-group question had answered 29 one time and 9 the next; it now always
+  counts active employees and says so in the column name, unless leavers are asked for.
 - **Reading example values from the databases is fenced before it ever runs** (Phase G2). The optional step that
   reads a few sample values per column, to help the SQL model match names, now never reads the three people
   databases, any table of people data in any other database (employee lists, attendance, payroll), or any column

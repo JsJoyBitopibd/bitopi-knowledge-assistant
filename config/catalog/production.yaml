@@ -8,7 +8,20 @@ keywords: [ppm, meeting, meetings, preproduction, pre-production, cutting, techn
            reschedule, checklist, department, factory, unit]
 # Discovered tables never offered to the SQL model (fnmatch, case-insensitive): history/backup
 # copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
-exclude_tables: ["*back", "*backup*", "*$", "*$'", "*_old", "*_bak", "*.tmp*", "*.temp_*", "*_test", "*daytest"]
+exclude_tables:
+- '*back'
+- '*backup*'
+- '*$'
+- '*$'''
+- '*_old'
+- '*_bak'
+- '*.tmp*'
+- '*.temp_*'
+- '*_test'
+- '*daytest'
+# Phase S3 prep, 2026-10-15 (owner's option 1a): people tables the SQL model never read and no built-in
+# tool uses. Hidden for everyone; the 7 it does read are decided when the people-data rule is armed.
+- 'ppm.factoryattendancemode'
 rules:
   - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
   - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.

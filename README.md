@@ -91,7 +91,8 @@ visitor is the shared `open` user (`auth.open_groups: [KA-Managers]`), so the li
 4. **Close the people tables in the other databases.** People data is not only in the three people databases:
    the ERP, the dashboard and the production databases have employee masters and attendance of their own.
    `scripts/check_catalog.py` lists them in its "if armed" note — on 2026-10-15, 95 tables in 11 catalogs
-   (BitopiSplint 51, BiMob 14, Dashboard 10, FM 8, …). For each, decide: add it to that catalog's
+   (BitopiSplint 51, BiMob 14, Dashboard 10, FM 8, …). The 88 the SQL model had never read were excluded that
+   day; **7 remain** (Dashboard 3, BiMob 2, BIMOB_MVC 1, Production 1 — answers use them). For each, decide: add it to that catalog's
    `exclude_tables:` (nobody can query it) or put `restricted_to: [KA-HR]` on the whole catalog. Restricting only
    the three people databases would leave names, designations, joining dates and daily attendance readable.
 5. Add `restricted_to: [KA-HR]` as a top-level key to `config/catalog/Hrms5Misami.yaml`, `config/catalog/HR.yaml`

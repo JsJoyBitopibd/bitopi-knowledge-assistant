@@ -122,6 +122,9 @@ exclude_tables:
 - '*.shadow_*'
 - '*.baseline_*'
 - '*._linechange_*'
+# Phase S3 prep, 2026-10-15 (owner's option 1a): people tables the SQL model never read and no built-in
+# tool uses. Hidden for everyone; the 7 it does read are decided when the people-data rule is armed.
+- 'dbo.vwemployee'
 # Per-factory copies of a TAL-only snapshot that ends in June 2025: they crowd the selection and answer nothing.
 - 'dbo.InventoryStockTal'
 - 'dbo.InventoryStockTal_Updated'

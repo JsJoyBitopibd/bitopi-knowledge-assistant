@@ -77,6 +77,12 @@ exclude_tables:
 - '*.shadow_*'
 - '*.baseline_*'
 - '*._linechange_*'
+# Phase S3 prep, 2026-10-15 (owner's option 1a): people tables the SQL model never read and no built-in
+# tool uses. Hidden for everyone; the 7 it does read are decided when the people-data rule is armed.
+- 'dbo.employeecontact'
+- 'dbo.templeaveprocesslist'
+- 'dbo.templeavetrans'
+- 'dbo.templeavetransnew'
 rules:
 - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
 - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
