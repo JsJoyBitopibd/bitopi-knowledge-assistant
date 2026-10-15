@@ -183,7 +183,9 @@ def test_a_repaired_result_is_templated_with_a_cited_note_and_no_model_call(wire
     _repaired(monkeypatch)
     evs = list(orch.answer_stream("closing balance of 1178108 in the mantainance store", scope=Scope.unrestricted()))
     a = evs[-1].answer
-    assert not a.not_found and a.usage.calls == 0 and a.text.startswith("Balance: 0.875 [D1].")
+    # the one value names what its query filtered on (Golden case 99), the corrected store among them
+    assert not a.not_found and a.usage.calls == 0 and a.text.startswith(
+        "0.875 — Balance where ItemCode is 1178108 and SLolcation is Maintenance Store (Misami) [D1].")
     assert '"mantainance store" in the question was matched to "Maintenance Store (Misami)" as recorded in the data [D2].' in a.text
     assert [r.marker for r in a.references] == ["D1", "D2"] and a.results[1].tool == "lookup"
 

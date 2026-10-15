@@ -301,7 +301,14 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
     """Fill `out` from agent/templated.py when the results qualify and the text verifies: one result, or a fixed
     tool's result [D1] followed by its companion [D2] (an empty companion is left out)."""
     from ..data.tools import companion_tool, load_fixed_tools, merge_companion
-    from .templated import try_template
+    from .templated import filter_params, scalar_filters, try_template
+    filters = scalar_filters(results[0]) if allow_generated else None
+    if filters:
+        # A one-value answer names what its query filtered on ("29 — EmployeeCount where BloodGroup is O-, …").
+        # As with a P2 correction, the values join a copy of the result's params: verify() licenses them and the
+        # card shows them on its Filter line, so "CompanyID is 02" verifies although 02 is in no row.
+        results = [results[0].model_copy(update={"params": {**results[0].params, **filter_params(filters)}}),
+                   *results[1:]]
     tool = next((t for t in load_fixed_tools() if t.get("name") == results[0].tool), None)
     comp = companion_tool(tool) if tool is not None else None
     merged = None
