@@ -1,7 +1,7 @@
 """Local embeddings (bge-m3) and reranker (bge-reranker-v2-m3). Never leave the network.
 
-The embedding model name is written into the index metadata; store.py refuses to open an index
-built with a different model (non-negotiable #6).
+The embedding model name and backend (backend_label()) are written into the index metadata; store.py
+refuses to open an index built with a different model or backend (non-negotiable #6, docs/PLAN.md M7).
 """
 from __future__ import annotations
 
@@ -23,13 +23,40 @@ EMBED_BACKEND = os.getenv("EMBED_BACKEND", "sentence_transformers")
 # question plus most of the chunk; raise it only if scripts/hit_rate.py regresses.
 RERANK_MAX_LENGTH = int(os.getenv("RERANK_MAX_LENGTH", "384"))   # I2: 384 cut rerank time, hit rate unchanged
 
+ST_FP32 = "st-fp32"     # the backend of every index, schema vector file and cache row from before embed_backend
+
+
+def _backend_kind(backend: str | None = None) -> str:
+    """Which embedder EMBED_BACKEND (or `backend`) selects: "onnx", "ollama" or "st" (sentence-transformers,
+    also for any other value — the Embedder has always fallen back to it)."""
+    b = (EMBED_BACKEND if backend is None else backend).strip().lower()
+    return b if b in ("onnx", "ollama") else "st"
+
+
+def backend_label(backend: str | None = None) -> str:
+    """The embed_backend recorded next to embed_model (docs/PLAN.md M7): "st-fp32" (sentence-transformers,
+    the default), "onnx-int8" (EMBED_BACKEND=onnx) or "ollama". Vectors from two backends differ slightly,
+    so the vector store, the schema vector files and the embedding cache each belong to one backend."""
+    return {"onnx": "onnx-int8", "ollama": "ollama"}.get(_backend_kind(backend), ST_FP32)
+
+
+def cache_model(model: str, backend: str) -> str:
+    """The embedding cache's `model` key for (model, backend). st-fp32 keeps the plain model name, so every
+    row cached before embed_backend existed (all st-fp32) still hits — no migration; any other backend gets
+    rows of its own ("BAAI/bge-m3|onnx-int8")."""
+    return model if backend == ST_FP32 else f"{model}|{backend}"
+
 
 class Embedder:
     """embed(texts) -> list of unit-length float vectors (1,024-d for bge-m3)."""
 
     def __init__(self) -> None:
         self.model_name = EMBED_MODEL
-        if EMBED_BACKEND == "ollama":
+        kind = _backend_kind()
+        if kind == "onnx":
+            raise RuntimeError("EMBED_BACKEND=onnx: this version has no ONNX embedder; "
+                               "use sentence_transformers or ollama")
+        if kind == "ollama":
             import ollama  # noqa: F401
             self._impl = self._ollama
         else:

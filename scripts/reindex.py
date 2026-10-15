@@ -1,5 +1,5 @@
-"""Full rebuild of the index (required when the embedding model changes).
-Usage: set EMBED_MODEL in .env first, then: python scripts/reindex.py --yes"""
+"""Full rebuild of the index (required when the embedding model or backend changes).
+Usage: set EMBED_MODEL / EMBED_BACKEND in .env first, then: python scripts/reindex.py --yes"""
 import shutil, sys, _path  # noqa: F401
 from ragbot.config import settings
 if "--yes" not in sys.argv:

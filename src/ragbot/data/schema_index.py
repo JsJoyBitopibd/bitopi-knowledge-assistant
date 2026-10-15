@@ -7,7 +7,8 @@ like document retrieval:
 - dense: bge-m3 vectors, precomputed by scripts/index_schema.py into data/index/schema/<db>.npz.
   Stored as one NumPy matrix rather than a Chroma collection: ~1,300 x 1,024 floats is ~5 MB and a
   dot product over it takes a millisecond. The file records the SHA-256 of the discovered JSON and
-  the embedding model; when either changes the vectors are ignored (not rebuilt mid-question).
+  the embedding model and backend; when any of them changes the vectors are ignored (not rebuilt
+  mid-question).
 - sparse: BM25 over the same documents, built in memory (fast), so exact column names still match
   even with no vector file.
 Then 1-hop foreign-key neighbours of the hits are added, so a join partner is in the prompt too.
@@ -183,13 +184,29 @@ def build(cat: Catalog, embed: bool = True) -> SchemaIndex:
     col_words = [frozenset(w for c in t.columns if not c.get("sensitive") for w in words(c["name"])) for t in tables]
     idx = SchemaIndex(names, KeywordIndex(names, [_with_singulars(d) for d in docs]), col_words=col_words)
     if embed and docs:
-        from ..embed import EMBED_MODEL, get_embedder
+        from ..embed import EMBED_MODEL, backend_label, get_embedder
         vecs = np.asarray(get_embedder().embed(docs), dtype=np.float32)
         p = vectors_path(cat.database)
         p.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(p, names=np.array(names), vectors=vecs, sha=json_sha(cat), model=EMBED_MODEL)
+        np.savez_compressed(p, names=np.array(names), vectors=vecs, sha=json_sha(cat), model=EMBED_MODEL,
+                            embed_backend=backend_label())
         idx.vectors = vecs
     return idx
+
+
+def load_vectors(p: Path, sha: str, names: list[str], backend: Optional[str] = None) -> Optional[np.ndarray]:
+    """The vectors saved in `p`, or None when there are none or they are stale: built from another discovery
+    JSON (`sha`), for other tables (`names`), or with another embedding model or backend (default: the
+    configured one; a file from before embed_backend was recorded counts as st-fp32)."""
+    from ..embed import EMBED_MODEL, ST_FP32, backend_label
+    if not p.exists():
+        return None
+    with np.load(p, allow_pickle=False) as z:
+        stored_backend = str(z["embed_backend"]) if "embed_backend" in z.files else ST_FP32
+        if (str(z["sha"]) == sha and str(z["model"]) == EMBED_MODEL
+                and stored_backend == (backend or backend_label()) and list(z["names"]) == names):
+            return z["vectors"]
+    return None
 
 
 _CACHE: dict[str, tuple[tuple, SchemaIndex]] = {}
@@ -203,7 +220,7 @@ def get_index(cat: Catalog) -> SchemaIndex:
     written by scripts/index_schema.py while the app runs are picked up at the next question instead of
     after a restart. The files are stat'ed at most every _RECHECK_SECONDS: with 17 databases on a Docker
     bind mount the checks alone cost ~70 ms per question. Loads saved vectors only if they were built
-    from the same JSON with the same embedding model; otherwise keyword-only."""
+    from the same JSON with the same embedding model and backend; otherwise keyword-only."""
     now = time.monotonic()
     with _LOCK:
         hit = _CACHE.get(cat.database)
@@ -222,11 +239,7 @@ def get_index(cat: Catalog) -> SchemaIndex:
         if hit and hit[0] == key:
             return hit[1]
     idx = build(cat, embed=False)
-    if p.exists():
-        from ..embed import EMBED_MODEL
-        z = np.load(p, allow_pickle=False)
-        if str(z["sha"]) == key[0] and str(z["model"]) == EMBED_MODEL and list(z["names"]) == idx.names:
-            idx.vectors = z["vectors"]
+    idx.vectors = load_vectors(p, key[0], idx.names)
     with _LOCK:
         _CACHE[cat.database] = (key, idx)
     return idx
