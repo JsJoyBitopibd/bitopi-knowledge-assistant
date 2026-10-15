@@ -21,6 +21,7 @@ from ..agent.templated import is_blank_result
 from ..auth.models import Scope
 from ..config import prompt, settings
 from ..llm import get_chat
+from ..llm.base import LLMError
 from ..models import QueryResult
 from ..ttl_cache import TTLCache
 from .cache import cached_run
@@ -941,6 +942,10 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                     _SQL.put(key, (qr.database if qr.database in cats else db_name, qr.sql or safe),
                              short_ttl if blank else ttl)   # … and kept only briefly; a corrected statement for the day
             return qr
+        except LLMError:
+            # a provider failure inside the empty-result repair (quota, rate, timeout) is not a SQL error: re-asking
+            # the model with it would spend another call on the same outage. The orchestrator reports it.
+            raise
         except Exception as e:
             last_err = f"{e.__class__.__name__}: {e}"
             is_guard = isinstance(e, GuardError)
