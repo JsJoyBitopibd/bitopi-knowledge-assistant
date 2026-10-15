@@ -208,6 +208,36 @@ built), not one. Use run 4 as that day's level per file. Exclude the 14 rows of 
 (7 per run): those files were predicted and settled in the same pass, before `risk.predictable()` existed,
 so their lead time is zero — the rows M5 found and stopped.
 
+**The tool, built 2026-10-15** (`scripts/backtest.py`, `src/ragbot/domain_agents/backtest.py`; read-only over
+signals.db, writes `logs/backtest_<dimension>_<date>.md`, exit 0 enough evidence / 3 not enough / 1 no store).
+Run it in late November with `docker compose exec app python scripts/backtest.py`; `--until YYYY-MM-DD`
+reproduces an earlier baseline exactly. It replaces the hand rules above with general ones:
+- **one level per day** = the last run of the day that stored levels without errors (so 14 Oct is run 4 by rule;
+  a refused or empty run is no day's level and not a date);
+- **no lead time**: a settled row whose outcome was written by the run that stored it is left out first
+  (the 14 rows of runs 1–2);
+- **not final**, left out whole: a file settled more than once, `revised > 0`, predicted again after its
+  outcome, or settled by the run that stored it and later running and settled again. `revised` never rises in
+  production — `settle()` only writes rows with no outcome yet — so a paused file shows up as a second settled
+  row, not as a revision;
+- **over target** = the `dhu` measure stored with the outcome at or above the amber stored with it; too few
+  checked at the end is neither a hit nor a miss;
+- **days ahead** = outcome date − date of the run that stored the level; the headline is the level closest to
+  one window (7 days) ahead and never closer; the lead grid keeps 1–6 (overlaps the outcome window) apart from 7.
+
+**The minimum evidence, set now — before any outcome exists — so it cannot move once results are seen**:
+at least **28 dates** in the daily series, **60 usable settled files** with DHU known at the end, and **15
+judged files each at red, amber and green** 7 or more days ahead. Constants in the code, with no command-line
+override. Below any of them the tool prints INSUFFICIENT EVIDENCE with every shortfall; above them it states
+three facts and no judgement — *ordered* (red share > amber > green), *separated* (red's 95% Wilson interval
+above green's), *lift* (red share − base rate). Whether those facts earn M✓ is the owner's call, recorded here.
+
+**First run, 2026-10-15 09:5x** (`logs/backtest_quality_20261015.md`): INSUFFICIENT EVIDENCE — 2 dates (run 4
+for 14 Oct, run 5 for 15 Oct), 0 usable settled files (the only 14 outcomes were written by the runs that stored
+them), 160 files open, 4 of them settled that way on 14 Oct and running again on 15 Oct. The 28-date minimum
+can be met on 10 November 2026 at the earliest, if one run is stored every day; the file counts take longer,
+because a file has to run a week or more and then finish before it counts.
+
 **The starting picture, 2026-10-14** (`scripts/watch.py --risk-only`, 7-day window): 158 files scored,
 151 of them still running and therefore predicted — 52 critical, 55 watch, 32 on target, 12 too few
 checked. 2,058,760 pieces checked in the window, 24% of them in files at the critical level.

@@ -632,6 +632,12 @@ Detail and evidence per step: `docs/PROGRESS.md` Phase M.
 - Gate: as above, plus a backtest report over past orders (late-shipment share per level), recorded
   in `docs/tuning_log.md` as the baseline the Stage-3 gate compares against.
 
+**The backtest, as built (2026-10-15).** `scripts/backtest.py` is the M✓ gate in one command, built ahead of the
+data so late November is a run, not a project. It reads every stored daily level of the Quality dimension and
+each file's outcome, read-only, and reports the share of files over the DHU target at each level a week or more
+ahead, by factory and by lead time. Its minimum evidence (28 dates, 60 settled files, 15 per level) was fixed in
+`docs/tuning_log.md` before any outcome existed; it states measurements, and the gate remains the owner's call.
+
 ## Phase N — Stage 3: recommendations → v1.14.0 (N4, the model gateway, shipped early in v1.13.0)
 
 - **N1 playbooks.** `config/playbooks/*.yaml`: a risk pattern → candidate actions with parameters.

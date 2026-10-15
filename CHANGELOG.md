@@ -9,6 +9,14 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **The quality risk levels can be checked against what happened, with one command** (Phase M, the M✓ gate).
+  `scripts/backtest.py` compares every stored daily level with each file's final quality and writes a report:
+  how often files marked critical, watch and on target really ended over VistaQ's DHU target, split by factory
+  and by how many days ahead the level was given. The bar for drawing any conclusion was set today, before a
+  single outcome exists, so it cannot be moved once the results are seen: four weeks of daily levels, 60
+  finished files, and 15 at each level a week ahead. Below that the report says "insufficient evidence" and
+  lists what is missing; above it, it states three measurements and leaves the judgement to people. The first
+  run today is, as expected, insufficient: two days of levels and no finished file yet.
 - **The people-data rule is complete and ready to switch on** (Phase S4). Everything that could still show a
   restricted database to someone outside its group is now covered: the recorded names the assistant matches
   questions against, a built-in query's values and its own database, the suggested follow-up questions after a
