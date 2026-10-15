@@ -352,6 +352,11 @@ def _load_discovered(folder: Path, database: str, pats: tuple[str, ...] | None =
     truthful about the default while this database follows its own list — and a later discover_schema.py run
     cannot silently re-close it. Everything downstream (offered_tables, Table.render, the schema index, the
     router, the DENY generator) reads these flags, so nothing else has to know about the override.
+
+    Such a catalog also loses every sampled value (G2). Its opened columns are names, gender, designation and
+    the rest; Table.render pastes samples into the SQL prompt and the schema index embeds them, so a people
+    database's values must never be in a Table — whatever a `discover_schema.py --allow-people-samples` run
+    wrote into the file. The file itself is left as written.
     """
     f = folder / "discovered" / f"{database}.json"
     if not f.exists():
@@ -363,7 +368,8 @@ def _load_discovered(folder: Path, database: str, pats: tuple[str, ...] | None =
         if pats is not None:
             name = t["name"].split(".")[-1]
             sensitive = is_sensitive(name, pats)
-            cols = [{**c, "sensitive": is_sensitive(c.get("name", ""), pats)} for c in cols]
+            cols = [{**{k: v for k, v in c.items() if k != "samples"},
+                     "sensitive": is_sensitive(c.get("name", ""), pats)} for c in cols]
         out.append(Table(t["name"], t.get("kind", "table"), t.get("rows"), t.get("description", ""),
                          t.get("primary_key", []), cols, t.get("foreign_keys", []), sensitive))
     return out

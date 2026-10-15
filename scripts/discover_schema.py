@@ -15,9 +15,21 @@ rolled back before closing. A full --samples pass is thousands of queries; --tab
 to the tables the SQL model has actually needed (data/schema_usage.py). Values sampled in an earlier run
 are kept in the new file unless the column is sampled again.
 
+Every sampled value is pasted into the SQL prompts that show its table and embedded in the schema index, so
+sampling is fenced (src/ragbot/data/discovery.py):
+- a people database is refused before anything connects: its catalog declares its own `sensitive_patterns:`
+  or `restricted_to:`, or no catalog describes it. --allow-people-samples overrides the refusal, but a catalog
+  with `sensitive_patterns:` still drops every sample when it loads (data/catalog.py).
+- a column named for a person or a login (CreatedBy, UserName, EmpName, LoginID) is never sampled.
+- --count-only prints how many sampling queries a run would make, per table and in total, from the discovery
+  file already on disk and the logs. It opens no connection and reads no database.
+- --max-queries N (default 150): a run with more candidate columns than N stops before its first sampling
+  query and writes nothing.
+
 Usage:
   python scripts/discover_schema.py <ConnEnvVarName> <FriendlyName> [--schemas dbo,PPM]
   python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json [--samples]
+  python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --count-only --tables-from-logs
   python scripts/discover_schema.py SQLSERVER_CONN_BITOPISPLINT BitopiSplint --json --samples --tables-from-logs
   python scripts/discover_schema.py SQLSERVER_CONN_PRODUCTION HR --database HR --json
       (--database: another database on the same server, through the same read-only login; the catalog
@@ -25,8 +37,14 @@ Usage:
 """
 import argparse, json, sys, _path  # noqa: F401
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from ragbot.data.catalog import Catalog
 
 ROOT = Path(__file__).resolve().parents[1]
+DISCOVERED = ROOT / "config" / "catalog" / "discovered"
+DEFAULT_MAX_QUERIES = 150
 
 
 def _q(ident: str) -> str:
@@ -36,6 +54,28 @@ def _q(ident: str) -> str:
 
 def _schema_filter(schemas):
     return "" if not schemas else "AND s.name IN (" + ",".join(f"'{s}'" for s in schemas) + ")"
+
+
+def _discovered_file(friendly: str) -> Path:
+    return DISCOVERED / f"{friendly}.json"
+
+
+def _catalog(friendly: str) -> Optional["Catalog"]:
+    """The loaded catalog whose `database:` is `friendly`, or None (the discovery file is named after it)."""
+    from ragbot.data.catalog import load_catalogs
+    return load_catalogs().get(friendly)
+
+
+def _only_tables(a: argparse.Namespace, cat: Optional["Catalog"]) -> Optional[set[str]]:
+    """The lower-case schema.name tables a sampling run is limited to, or None for every small table."""
+    if a.tables:
+        return {t.strip().lower() for t in a.tables.split(",") if t.strip()}
+    if a.tables_from_logs:
+        from ragbot.data.schema_usage import used_tables
+        only = {n.lower() for n in used_tables(cat)} if cat else set()
+        print(f"tables from the logs ({len(only)}): {', '.join(sorted(only)) or 'none'}")
+        return only
+    return None
 
 
 def write_markdown(cur, a, schemas) -> None:
@@ -70,8 +110,11 @@ def write_markdown(cur, a, schemas) -> None:
     print(f"wrote {dest / f'{a.friendly}.md'} ({len(out)} lines)")
 
 
-def write_json(cn, cur, a, schemas) -> None:
-    from ragbot.data.discovery import assemble, sample_candidates
+def write_json(cn, cur, a: argparse.Namespace, schemas: Optional[list[str]], cat: Optional["Catalog"] = None) -> None:
+    """The discovery file. `cat` is the database's catalog (main() loads it for --samples): the logs are read
+    through it for --tables-from-logs. Raises SystemExit(2), before any sampling query and without writing,
+    when the candidates exceed --max-queries."""
+    from ragbot.data.discovery import assemble, budget_refused, sample_candidates
     sf = _schema_filter(schemas)
     tables = [tuple(r) for r in cur.execute(f"""
         SELECT s.name, o.name, o.type,
@@ -106,24 +149,20 @@ def write_json(cn, cur, a, schemas) -> None:
         LEFT JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
         WHERE ep.class = 1 AND ep.name = 'MS_Description' AND o.type IN ('U', 'V') {sf}""").fetchall()]
 
-    dest = ROOT / "config" / "catalog" / "discovered"
-    f = dest / f"{a.friendly}.json"
+    f = _discovered_file(a.friendly)
+    dest = f.parent
     from ragbot.data.discovery import carried_samples
     previous = carried_samples(json.loads(f.read_text(encoding="utf-8")) if f.exists() else None)
     samples = {}
     if a.samples:
-        only = None
-        if a.tables:
-            only = {t.strip().lower() for t in a.tables.split(",") if t.strip()}
-        elif a.tables_from_logs:
-            from ragbot.data.catalog import load_catalogs
-            from ragbot.data.schema_usage import used_tables
-            cat = load_catalogs().get(a.friendly)
-            only = {n.lower() for n in used_tables(cat)} if cat else set()
-            print(f"tables from the logs ({len(only)}): {', '.join(sorted(only)) or 'none'}")
+        only = _only_tables(a, cat)
         cands = sample_candidates(tables, columns, a.sample_max_rows, only=only)
         print(f"sampling {len(cands)} short text columns of tables with <= {a.sample_max_rows:,} rows"
               + (f" in {len(only)} selected table(s)" if only is not None else ""))
+        over = budget_refused(len(cands), a.max_queries)
+        if over:
+            print(f"refused: {over}. No column was sampled and nothing was written.", file=sys.stderr)
+            raise SystemExit(2)
         cn.timeout = 10
         for s, t, c in cands:
             try:
@@ -151,8 +190,43 @@ def write_json(cn, cur, a, schemas) -> None:
           f"{n_s} sensitive columns")
 
 
-def main() -> None:
+def count_only(a: argparse.Namespace) -> int:
+    """--count-only: the sampling queries a --samples run with the same options would make, per table and in
+    total, worked out from the discovery file already on disk (and the logs for --tables-from-logs) with the
+    live candidate rule. Opens no connection. Tables, columns and row counts are those of the file's own run:
+    refresh it with --json (sys.* only) first when the schema may have moved since."""
+    from ragbot.data.discovery import budget_refused, candidates_from_doc, queries_by_table, samples_refused
+    f = _discovered_file(a.friendly)
+    if not f.exists():
+        print(f"no discovery file {f}: run with --json (sys.* only) first", file=sys.stderr)
+        return 1
+    doc: dict[str, Any] = json.loads(f.read_text(encoding="utf-8"))
+    cat = _catalog(a.friendly)
+    only = _only_tables(a, cat)
+    cands = candidates_from_doc(doc, only, a.sample_max_rows)
+    per = queries_by_table(cands)
+    for name, n in per:
+        print(f"  {name}: {n}")
+    print(f"{a.friendly}: {len(cands)} sampling queries over {len(per)} table(s) "
+          f"(from {f.name}, generated {doc.get('generated_at', '?')}; no database was queried)")
+    why = samples_refused(cat)
+    if why:
+        print(f"a --samples run would be refused: {why} (--allow-people-samples overrides)")
+    over = budget_refused(len(cands), a.max_queries)
+    if over:
+        print(f"a --samples run would be refused: {over}")
+    elif not why:
+        print(f"within --max-queries {a.max_queries}")
+    return 0
+
+
+def _connect(a: argparse.Namespace):
     import pyodbc
+    from ragbot.data.connectors import dsn   # loads .env; os.environ alone does not see it
+    return pyodbc.connect(dsn(a.conn_env, a.database), timeout=30, autocommit=False, readonly=True)
+
+
+def _args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("conn_env", help="env var name holding the ODBC connection string")
     ap.add_argument("friendly", help="short name used for the output file, e.g. BitopiSplint")
@@ -165,23 +239,48 @@ def main() -> None:
     ap.add_argument("--tables-from-logs", action="store_true",
                     help="with --samples: only the raw tables schema selection showed or generated SQL read "
                          "(logs/schema_select.csv, logs/sql.csv)")
+    ap.add_argument("--count-only", action="store_true",
+                    help="print the sampling queries a --samples run would make, from the discovery file on disk "
+                         "and the logs; connects to nothing")
+    ap.add_argument("--max-queries", type=int, default=DEFAULT_MAX_QUERIES,
+                    help="with --samples: refuse to start sampling when more columns than this would be read")
+    ap.add_argument("--allow-people-samples", action="store_true",
+                    help="with --samples: sample a database whose catalog declares sensitive_patterns or "
+                         "restricted_to, or that no catalog describes (refused by default)")
     ap.add_argument("--database", default=None,
                     help="open this database instead of the one named in the connection string (same server, same login)")
-    a = ap.parse_args()
+    return ap.parse_args(argv)
 
-    from ragbot.data.connectors import dsn   # loads .env; os.environ alone does not see it
-    cn = pyodbc.connect(dsn(a.conn_env, a.database), timeout=30, autocommit=False, readonly=True)
+
+def main(argv: Optional[list[str]] = None) -> int:
+    a = _args(argv)
+    if a.count_only:
+        return count_only(a)
+    cat = None
+    if a.samples:
+        from ragbot.data.discovery import samples_refused
+        cat = _catalog(a.friendly)
+        why = samples_refused(cat)
+        if why and not a.allow_people_samples:
+            print(f"refused: {why}. Nothing was read; --allow-people-samples overrides.", file=sys.stderr)
+            return 2
+        if why:
+            print(f"--allow-people-samples: sampling anyway ({why})"
+                  + ("; its catalog drops these values when it loads" if cat is not None
+                     and cat.sensitive_patterns is not None else ""), file=sys.stderr)
+    cn = _connect(a)
     try:
         cur = cn.cursor()
         schemas = a.schemas.split(",") if a.schemas else None
         if a.json:
-            write_json(cn, cur, a, schemas)
+            write_json(cn, cur, a, schemas, cat)
         else:
             write_markdown(cur, a, schemas)
     finally:
         cn.rollback()
         cn.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

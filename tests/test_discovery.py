@@ -1,7 +1,8 @@
 """C1: sensitive-name matching and discovered-schema assembly (offline, synthetic sys.* rows)."""
 import pytest
 
-from ragbot.data.discovery import assemble, sample_candidates
+from ragbot.data.discovery import (assemble, budget_refused, candidates_from_doc, queries_by_table, sample_candidates,
+                                   sample_skipped, samples_refused)
 from ragbot.data.sensitive import is_sensitive
 
 
@@ -60,10 +61,81 @@ def test_assemble_shapes_tables_keys_and_descriptions():
 
 def test_sample_candidates_are_small_short_text_and_not_sensitive():
     got = set(sample_candidates(TABLES, COLUMNS, max_rows=200_000))
-    assert ("dbo", "ExportOrder", "ShipmentStatus") in got and ("dbo", "Buyer", "BuyerName") in got
+    assert ("dbo", "ExportOrder", "ShipmentStatus") in got
+    assert ("dbo", "Buyer", "BuyerName") not in got               # a *Name column: the sampling skip list (G2)
     assert ("dbo", "Employee", "Grade") in got
     assert ("dbo", "Employee", "EmpMobileNo") not in got          # sensitive column
     assert ("dbo", "ExportOrder", "Remarks") not in got           # nvarchar(max)
     assert ("dbo", "ExportOrder", "BuyerID") not in got           # not text
     assert ("dbo", "ExportOrderBack", "Status") not in got        # 4M rows: too big to scan
     assert ("rag", "vw_X", "Status") not in got                   # views are never scanned
+
+
+# --- G2: sampling is fenced before the owner-approved run -------------------------------------------------
+
+@pytest.mark.parametrize("name", ["CreatedBy", "UpdatedBy", "ApprovedBy", "UserName", "UserID", "Users", "EmpName",
+                                  "EmpCode", "LoginID", "LoginName", "BuyerName", "Created_By", "createdby",
+                                  "USERNAME", "empname", "loginid", "Name"])
+def test_columns_named_for_a_person_or_a_login_are_never_sampled(name):
+    assert sample_skipped(name), name
+
+
+@pytest.mark.parametrize("name", ["ShipmentStatus", "Status", "Grade", "Buyer", "BuyerStyleNo", "UnitCode",
+                                  "Kind", "Flag", "OrderType", "Season"])
+def test_code_and_status_columns_are_still_sampled(name):
+    assert not sample_skipped(name), name
+
+
+def test_the_skip_list_applies_to_sampling_only():
+    """A skipped column is still an ordinary column: discovery records it, the SQL model may read it."""
+    cols = [("dbo", "Status", "Code", "varchar", 20, True, 1), ("dbo", "Status", "CreatedBy", "varchar", 50, True, 2),
+            ("dbo", "Status", "UserName", "nvarchar", 40, True, 3), ("dbo", "Status", "EmpName", "varchar", 60, True, 4)]
+    tables = [("dbo", "Status", "U", 40)]
+    assert sample_candidates(tables, cols, 200_000) == [("dbo", "Status", "Code")]
+    doc = assemble("DB", "X", tables, cols, [], [], [], {})
+    t = doc["tables"][0]
+    assert [c["name"] for c in t["columns"]] == ["Code", "CreatedBy", "UserName", "EmpName"]
+    assert not any(c["sensitive"] for c in t["columns"])
+    assert not is_sensitive("CreatedBy") and not is_sensitive("UserName")
+
+
+def test_candidates_from_doc_mirror_the_live_rule():
+    """--count-only works from the JSON on disk; it must pick exactly the columns a live run would read from
+    the same sys.* rows, nvarchar lengths included (assemble() stores characters, sys.columns says bytes)."""
+    tables = TABLES + [("dbo", "Codes", "U", 10)]
+    columns = COLUMNS + [
+        ("dbo", "Codes", "C50", "nvarchar", 100, 1, 1),    # nvarchar(50) = 100 bytes: sampled
+        ("dbo", "Codes", "C60", "nvarchar", 120, 1, 2),    # nvarchar(60) = 120 bytes: too long
+        ("dbo", "Codes", "V100", "varchar", 100, 1, 3),    # varchar(100): sampled
+        ("dbo", "Codes", "V101", "varchar", 101, 1, 4),    # too long
+        ("dbo", "Codes", "N10", "nchar", 20, 1, 5),        # nchar(10): sampled
+        ("dbo", "Codes", "Memo", "nvarchar", -1, 1, 6),    # nvarchar(max): never
+        ("dbo", "Codes", "Qty", "int", 4, 1, 7),           # not text
+    ]
+    doc = assemble("DB", "X", tables, columns, [], [], [], {})
+    live = sample_candidates(tables, columns, 200_000)
+    assert candidates_from_doc(doc) == live
+    assert {c for s, t, c in live if t == "Codes"} == {"C50", "V100", "N10"}
+    only = {"dbo.codes"}
+    assert candidates_from_doc(doc, only) == sample_candidates(tables, columns, 200_000, only=only)
+    assert candidates_from_doc(doc, set()) == []
+    assert candidates_from_doc(doc, max_rows=100) == sample_candidates(tables, columns, 100)
+    # ExportOrderID and ShipmentStatus; Grade (EmpMobileNo is sensitive); BuyerName is skipped
+    assert queries_by_table(live) == [("dbo.Codes", 3), ("dbo.ExportOrder", 2), ("dbo.Employee", 1)]
+
+
+def _people(**kw):
+    from ragbot.data.catalog import Catalog
+    return Catalog("HRDemo", "tsql", "X", [], [], **kw)
+
+
+def test_a_people_database_is_refused_and_an_ordinary_one_is_not():
+    assert samples_refused(_people()) is None
+    assert "sensitive_patterns" in samples_refused(_people(sensitive_patterns=("password", "pwd")))
+    assert "restricted_to" in samples_refused(_people(restricted_to=("ka-hr",)))
+    assert "no catalog" in samples_refused(None)
+
+
+def test_the_query_budget():
+    assert budget_refused(150, 150) is None and budget_refused(0, 150) is None
+    assert "151" in budget_refused(151, 150) and "--max-queries 150" in budget_refused(151, 150)
