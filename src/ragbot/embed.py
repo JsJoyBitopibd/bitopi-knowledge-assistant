@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from .cpu import disable_power_throttling
 
@@ -48,14 +49,14 @@ def cache_model(model: str, backend: str) -> str:
 
 
 class Embedder:
-    """embed(texts) -> list of unit-length float vectors (1,024-d for bge-m3)."""
+    """embed(texts) -> list of unit-length float vectors (1,024-d for bge-m3). sentence-transformers or
+    ollama; `backend` overrides EMBED_BACKEND (the parity check needs fp32 whatever .env says)."""
 
-    def __init__(self) -> None:
+    def __init__(self, backend: str | None = None) -> None:
         self.model_name = EMBED_MODEL
-        kind = _backend_kind()
+        kind = _backend_kind(backend)
         if kind == "onnx":
-            raise RuntimeError("EMBED_BACKEND=onnx: this version has no ONNX embedder; "
-                               "use sentence_transformers or ollama")
+            raise RuntimeError("EMBED_BACKEND=onnx is OnnxEmbedder (get_embedder() picks it), not Embedder")
         if kind == "ollama":
             import ollama  # noqa: F401
             self._impl = self._ollama
@@ -80,6 +81,73 @@ class Embedder:
         import ollama
         client = ollama.Client(host=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
         return client.embed(model=EMBED_MODEL.split("/")[-1], input=texts)["embeddings"]
+
+
+def onnx_embedder_dir(precision: str = "int8") -> Path:
+    """Where scripts/export_embedder_onnx.py writes the ONNX embedder: data/models/<name>-int8 (used by
+    EMBED_BACKEND=onnx) and <name>-fp32 (the unquantized export, kept only for its parity check)."""
+    from .config import ROOT
+    return ROOT / "data" / "models" / f"{EMBED_MODEL.split('/')[-1]}-{precision}"
+
+
+ONNX_EMBEDDER_CONFIG = "embedder.json"    # written by the export: model, max_length, pooling
+
+
+def cls_pool(hidden: np.ndarray) -> np.ndarray:
+    """bge-m3's sentence vector, as sentence-transformers computes it: the first ([CLS]) token's last hidden
+    state, L2-normalised. hidden: (texts, tokens, dims) -> (texts, dims) float32."""
+    v = np.asarray(hidden[:, 0, :], dtype=np.float32)
+    return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
+
+
+def _embed_threads() -> int:
+    """EMBED_THREADS, else about one per physical core (the same default as torch, _use_all_cpu_threads)."""
+    if os.getenv("EMBED_THREADS"):
+        return max(1, int(os.environ["EMBED_THREADS"]))
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+class OnnxEmbedder:
+    """bge-m3 as ONNX (scripts/export_embedder_onnx.py; int8 by default), run by onnxruntime: tokenized and
+    truncated like sentence-transformers (max length recorded by the export from its max_seq_length), CLS
+    pooling, L2-normalised. Selected by EMBED_BACKEND=onnx only, and recorded as onnx-int8: store.py refuses
+    an st-fp32 index under it, so its vectors are never mixed with fp32 ones (docs/PLAN.md M7)."""
+
+    def __init__(self, model_dir: Path | str | None = None) -> None:
+        import json
+        import onnxruntime as ort
+        from transformers import AutoTokenizer
+        d = Path(model_dir) if model_dir else onnx_embedder_dir("int8")
+        if not (d / "model.onnx").exists() or not (d / ONNX_EMBEDDER_CONFIG).exists():
+            raise RuntimeError(f"{d / 'model.onnx'} not found — run python scripts/export_embedder_onnx.py")
+        cfg = json.loads((d / ONNX_EMBEDDER_CONFIG).read_text(encoding="utf-8"))
+        if cfg.get("model") != EMBED_MODEL:      # non-negotiable #6: never embed with another model silently
+            raise RuntimeError(f"{d} holds {cfg.get('model')!r} but EMBED_MODEL is {EMBED_MODEL!r}")
+        self.model_name = EMBED_MODEL
+        self.max_length = int(cfg["max_length"])
+        self._tok = AutoTokenizer.from_pretrained(str(d))
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = _embed_threads()
+        so.inter_op_num_threads = 1
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")   # see OnnxReranker
+        self._sess = ort.InferenceSession(str(d / "model.onnx"), sess_options=so, providers=["CPUExecutionProvider"])
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        out = []
+        bs = _batch_size("EMBED_BATCH_SIZE")
+        for i in range(0, len(texts), bs):
+            enc = self._tok(texts[i:i + bs], padding=True, truncation=True, max_length=self.max_length,
+                            return_tensors="np")
+            hidden = self._sess.run(["last_hidden_state"], {"input_ids": enc["input_ids"].astype(np.int64),
+                                                            "attention_mask": enc["attention_mask"].astype(np.int64)})[0]
+            out.append(cls_pool(hidden))
+        return np.concatenate(out).tolist()
+
+    def token_counts(self, texts: list[str]) -> list[int]:
+        """Tokens per text before truncation, special tokens included (the parity check's length split)."""
+        return [len(ids) for ids in self._tok(texts, truncation=False)["input_ids"]]
 
 
 class Reranker:
@@ -169,8 +237,12 @@ def _use_all_cpu_threads() -> None:
 
 
 @lru_cache(maxsize=1)
-def get_embedder() -> Embedder:
+def get_embedder() -> Embedder | OnnxEmbedder:
+    """EMBED_BACKEND: `sentence_transformers` (default), `ollama`, or `onnx` (the int8 export; an index built
+    with another backend refuses to open under it, store.check_index_metadata)."""
     disable_power_throttling()           # Windows ran the models 6-9x slower in background processes
+    if _backend_kind() == "onnx":
+        return OnnxEmbedder()
     return Embedder()
 
 
