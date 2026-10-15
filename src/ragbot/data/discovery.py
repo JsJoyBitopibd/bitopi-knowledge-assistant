@@ -10,17 +10,34 @@ Shape:
     "primary_key": [col, ...], "sensitive": bool,
     "columns": [{"name", "type", "nullable", "description", "sensitive", "samples"?: [...]}],
     "foreign_keys": [{"columns": [...], "ref_table": "dbo.Buyer", "ref_columns": [...]}]}]}
+
+Sampling (`--samples`) is the one part that reads data rows, and every sampled value is pasted into the SQL
+prompts that show its table and embedded in the schema index. So, besides the size and type rule of
+sample_candidates(): a people database is refused outright (samples_refused), columns whose name says they
+hold a person or a login are never sampled (SAMPLE_SKIP_WORDS), and the number of queries is known before a
+run (candidates_from_doc, offline) and capped (budget_refused).
 """
 from __future__ import annotations
 
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 from datetime import datetime
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
-from .sensitive import is_sensitive
+from .sensitive import is_sensitive, words
+
+if TYPE_CHECKING:                       # catalog.py does not import this module; the hint only avoids a load
+    from .catalog import Catalog
 
 # Column types whose values may be sampled (short text codes/statuses only).
 SAMPLE_TYPES = {"varchar", "nvarchar", "char", "nchar"}
+
+# Sampling only, never the guard: words of a column name whose values are a person or a login — CreatedBy,
+# UserName, EmpName, LoginID. The SQL model may still read these columns; what must not happen is their values
+# being pasted into every prompt that shows the table (and embedded), so they reach the provider with questions
+# that never asked about a person. Also hides *Name columns of things (BuyerName, UnitName): the cost of a
+# missing sample is a weaker hint, the cost of a sampled name is a person's name sent to the provider.
+SAMPLE_SKIP_WORDS: tuple[str, ...] = ("user", "login", "by", "emp", "name")
 
 
 def assemble(database: str, conn_env: str,
@@ -95,18 +112,99 @@ def carried_samples(previous: Optional[dict[str, Any]]) -> dict[tuple[str, str, 
     return out
 
 
+def sample_skipped(column: str, skip: tuple[str, ...] = SAMPLE_SKIP_WORDS) -> bool:
+    """True when a column's name says it holds a person or a login (SAMPLE_SKIP_WORDS): one of its words is a
+    skip word or its plural (CreatedBy, UserName, EmpName, Users), or — for a name written as one run with no
+    word boundary to split on ('createdby', 'USERNAME', 'empname') — the name starts or ends with one."""
+    ws = words(column)
+    if any(w in skip or (w.endswith("s") and w[:-1] in skip) for w in ws):
+        return True
+    return len(ws) == 1 and any(ws[0].startswith(s) or ws[0].endswith(s) for s in skip)
+
+
 def sample_candidates(tables: Iterable[tuple], columns: Iterable[tuple], max_rows: int,
                       max_len: int = 100, only: Optional[set[str]] = None) -> list[tuple[str, str, str]]:
-    """Columns worth sampling for their distinct values: short text columns of base tables with at most
-    `max_rows` rows, never a sensitive column or a column of a sensitive table, and — with `only` (lower-
-    case schema.name) — only in those tables. Keeps the production server's cost bounded: each sample is
-    one DISTINCT TOP 31 scan of a small table."""
+    """Columns worth sampling for their distinct values: short text columns (`max_len` in BYTES, as
+    sys.columns reports it: nvarchar(50) is 100) of base tables with at most `max_rows` rows, never a
+    sensitive column, a column of a sensitive table or a column named for a person or login
+    (sample_skipped), and — with `only` (lower-case schema.name) — only in those tables. Keeps the
+    production server's cost bounded: each sample is one DISTINCT TOP 31 scan of a small table."""
     small = {(s, t) for s, t, kind, rows in tables
              if str(kind).strip() == "U" and rows is not None and int(rows) <= max_rows and not is_sensitive(t)
              and (only is None or f"{s}.{t}".lower() in only)}
     out = []
     for s, t, c, typ, mlen, _nullable, _cid in columns:
         if (s, t) in small and typ in SAMPLE_TYPES and mlen is not None and 0 < mlen <= max_len \
-                and not is_sensitive(c):
+                and not is_sensitive(c) and not sample_skipped(c):
             out.append((s, t, c))
     return out
+
+
+def _type_bytes(sql_type: str) -> tuple[str, Optional[int]]:
+    """A discovery document's column type back into sys.columns terms: ('nvarchar', 100) for 'nvarchar(50)'
+    (assemble() halved nvarchar/nchar lengths to characters; this doubles them back), -1 for '(max)', None
+    for a type written without a length ('int', 'decimal')."""
+    m = re.fullmatch(r"\s*([A-Za-z0-9_ ]+?)\s*(?:\(\s*(max|\d+)\s*\))?\s*", sql_type or "", re.IGNORECASE)
+    if not m:
+        return (sql_type or "").strip().lower(), None
+    typ, n = m.group(1).lower(), m.group(2)
+    if n is None:
+        return typ, None
+    if n.lower() == "max":
+        return typ, -1
+    return typ, int(n) * (2 if typ in ("nvarchar", "nchar") else 1)
+
+
+def doc_rows(doc: dict[str, Any]) -> tuple[list[tuple], list[tuple]]:
+    """A discovery document back into the (tables, columns) rows assemble() was built from, shaped as the
+    sys.* queries return them, so sample_candidates() — the live rule, unchanged — can run over it."""
+    tables: list[tuple] = []
+    columns: list[tuple] = []
+    for t in (doc or {}).get("tables", []):
+        s, _, name = str(t["name"]).partition(".")
+        tables.append((s, name, "V" if t.get("kind") == "view" else "U", t.get("rows")))
+        for i, c in enumerate(t.get("columns", []), 1):
+            typ, mlen = _type_bytes(str(c.get("type", "")))
+            columns.append((s, name, c["name"], typ, mlen, c.get("nullable", True), i))
+    return tables, columns
+
+
+def candidates_from_doc(doc: dict[str, Any], tables: Optional[set[str]] = None, max_rows: int = 200_000,
+                        max_len: int = 100) -> list[tuple[str, str, str]]:
+    """The columns a --samples run would read, worked out OFFLINE from a discovery document already on disk
+    (scripts/discover_schema.py --count-only): one sampling query each. `tables` is the same lower-case
+    schema.name filter as sample_candidates' `only`. Row counts are those of the document's own run."""
+    t_rows, c_rows = doc_rows(doc)
+    return sample_candidates(t_rows, c_rows, max_rows, max_len=max_len, only=tables)
+
+
+def queries_by_table(cands: Iterable[tuple[str, str, str]]) -> list[tuple[str, int]]:
+    """[(schema.table, sampling queries)], most first: what --count-only prints."""
+    counts = Counter(f"{s}.{t}" for s, t, _c in cands)
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def budget_refused(n_queries: int, max_queries: int) -> Optional[str]:
+    """Why a sampling run of `n_queries` must not start under the `max_queries` cap, or None when it may."""
+    if n_queries > max_queries:
+        return (f"{n_queries:,} sampling queries exceed --max-queries {max_queries:,}; narrow the run "
+                "(--tables, --tables-from-logs) or raise the cap once the count has been approved")
+    return None
+
+
+def samples_refused(cat: Optional["Catalog"]) -> Optional[str]:
+    """Why a --samples run must not read this database's values, or None when it may.
+
+    A people database — its catalog declares its own `sensitive_patterns:` (Phase R opened names, gender,
+    designation, salary...) or limits who may read it with `restricted_to:` (Phase S) — would have those
+    values pasted into the SQL prompt and embedded in the schema index. A database no catalog describes has
+    no rule to be judged by. scripts/discover_schema.py refuses all three unless --allow-people-samples."""
+    if cat is None:
+        return "no catalog in config/catalog/ describes this database, so nothing says which columns are personal"
+    if cat.sensitive_patterns is not None:
+        return (f"{cat.database} declares its own sensitive_patterns ({', '.join(cat.sensitive_patterns)}): "
+                "a people database, whose names, gender and designation would be sampled")
+    if cat.restricted_to:
+        return (f"{cat.database} is restricted_to {', '.join(cat.restricted_to)}: its values would reach the "
+                "prompts and the schema index")
+    return None
