@@ -142,7 +142,9 @@ scope; admins can look up a user's scope and download their log in the sidebar (
 ### Running ingestion and the aggregates refresh unattended (Phase H4)
 
 **Docker**: `docker compose up -d` runs `ingest-worker` (rescans `data/pdfs` every
-`ingest.watch_interval_seconds`), `aggregates` (daily refresh) and `watch` (`scripts/watch.py --every 60
+`ingest.watch_interval_seconds`), `aggregates` (`scripts/refresh_aggregates.py --at 02:00`: every copy daily
+at 02:00; at start only the missing copies are built, so recreating it does not move the production read)
+and `watch` (`scripts/watch.py --every 60
 --risk-daily`: the morning brief's signals every hour, and once a day the Stage-2 quality risk levels, into
 `data/index/signals.db`) next to the app; nothing else to do. Without `watch` there is no morning brief and no
 stored risk level.
@@ -287,8 +289,13 @@ Schedule the refresh nightly, off-hours:
 
 ```powershell
 python scripts\refresh_aggregates.py                 # once (Task Scheduler: daily 02:00)
-python scripts\refresh_aggregates.py --every 24      # or keep it running
+python scripts\refresh_aggregates.py --at 02:00      # or keep it running: every day at 02:00 local time
 ```
+
+`--at HH:MM` builds only the missing copies when it starts, prints `next refresh at …`, and refreshes every
+copy at that time each day, so restarting or recreating it does not move the daily production read into
+working hours. The older `--every 24` still works, but it refreshes on start and then every 24 hours from there (a
+recreate at 14:58 put the read at about 15:13 every day).
 
 The DBA index on `dbo.ExportOrderBack(ExportOrderID)` (`docs/schema/rag_views_bitopisplint.sql`)
 would make the live query fast too; the copy is the no-DDL workaround until then.
@@ -297,7 +304,7 @@ would make the live query fast too; the copy is the no-DDL workaround until then
 categories, store groups, issue causes (`config/aggregates.yaml` specs with `entity:`) — so a question's
 spelling ("mantainance store of misami") becomes the recorded value ('Maintenance Store (Misami)') in a fixed
 tool's parameter, in the SQL prompt's "Known values" line and in the router's evidence. In Docker the
-`aggregates` service does this daily (`docker compose up -d aggregates`; mount `config/` into it so edited
+`aggregates` service does this daily at 02:00 (`docker compose up -d aggregates`; mount `config/` into it so edited
 specs count). `python scripts\refresh_aggregates.py values_stores values_companies …` refreshes the value
 copies alone (a few hundred rows, seconds). The admin caption's "databases" and `logs/sql_gen.csv` (`repair`
 rows) show when the self-correction after an empty result fired.
