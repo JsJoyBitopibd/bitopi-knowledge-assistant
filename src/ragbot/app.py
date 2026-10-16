@@ -340,6 +340,41 @@ with st.sidebar:
                     w.writeheader(); w.writerows(rows)
                     st.download_button("Download this user's log", buf.getvalue().encode("utf-8"),
                                        file_name=f"audit_{account_name(who) or 'user'}.csv", mime="text/csv")
+    # Phase N2/N3b: the Stage-3 preview, administrators only and off unless agents.recommendations.enabled.
+    from ragbot.domain_agents import recommend as _rec
+    if _rec.enabled(s.get, scope):
+        with st.expander("Recommendations — preview (admin)"):
+            st.caption("Actions from the departments' playbooks for open red and amber Quality files. A preview: "
+                       "the risk levels have not passed their backtest yet, and a cost is shown only when the "
+                       "playbook is approved and every rate it uses has an owner and a date.")
+            for k, o in enumerate(_rec.options(scope, limit=20)):
+                st.markdown(f"**{o.level}** · {o.factory} {o.subject} — {o.action_title} "
+                            f"*({o.playbook}, {o.playbook_status})*")
+                if o.cost:
+                    st.caption("Cost: " + _rec.cost_text(o.cost))
+                if o.blocked:
+                    st.caption("Not yet: " + "; ".join(o.blocked))
+                    continue
+                chosen = {n: st.number_input(n, min_value=p.min, max_value=p.max, key=f"rec-{k}-{n}")
+                          for n, p in o.params.items()}
+                if st.button("Recommend", key=f"rec-{k}"):
+                    try:
+                        st.success(f"Recommendation {_rec.recommend(o, chosen)} stored.")
+                    except _rec.decisions.Refused as e:
+                        st.error(str(e))
+            for r in _rec.stored(scope)[:10]:
+                d = r.get("decision")
+                st.markdown(f"#{r['id']} {r['factory']} {r['subject']} — {r['action']}: "
+                            + (f"**{d['verdict']}** by {d['decided_by']}" if d else "no decision yet"))
+                why = st.text_input("Reason (needed to reject)", key=f"why-{r['id']}")
+                c1, c2 = st.columns(2)
+                for col, verdict in ((c1, "approve"), (c2, "reject")):
+                    if col.button(verdict.capitalize(), key=f"{verdict}-{r['id']}"):
+                        try:
+                            _rec.decide(r["id"], me, verdict, why)
+                            st.rerun()
+                        except _rec.decisions.Refused as e:
+                            st.error(str(e))
 
 scope_label = view.scope_text(pick)
 cid = st.session_state.cid

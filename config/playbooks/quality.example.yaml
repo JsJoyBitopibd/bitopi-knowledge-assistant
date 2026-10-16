@@ -10,8 +10,8 @@
 # A cost is a named calculator over those inputs, computed in Python (domain_agents/playbook.py
 # CALCULATORS). A literal number as an input is refused, and so is a digit in a title.
 #
-# Gate: nothing in the app reads playbooks yet. No recommendation reaches staff until the Stage-2 backtest
-# has passed and the cost sources have real values. `python scripts/check_catalog.py` validates this file
+# Gate: only administrators see playbooks, and only while agents.recommendations.enabled is on (N2, default off).
+# No recommendation reaches staff until the Stage-2 backtest has passed and the cost sources have real values. `python scripts/check_catalog.py` validates this file
 # format; a draft, or a cost source without a value, is not a problem there - it is simply "not ready".
 #
 # Approving: status approved needs approved_by (a named person), approved_on (a date), source_pdf, a

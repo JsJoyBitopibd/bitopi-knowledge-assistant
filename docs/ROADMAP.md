@@ -648,11 +648,14 @@ ahead, by factory and by lead time. Its minimum evidence (28 dates, 60 settled f
   The real playbooks and rates (N1b) are the departments' and the cost owners' to write.
 - **N2 recommendation answers.** "What can we do?" / "Which option costs least?": the tools produce
   the candidates with computed cost and effect; the executive-tier model ranks and explains, citing
-  `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged.
+  `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged. *Built
+  2026-10-16 as an administrators-only preview, off by default* (`domain_agents/recommend.py`, the owner's
+  option A): the candidates and their costs in Python, no model ranking yet — nothing is ready to rank.
 - **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
   recommendation); the outcome is recorded as in M3. *Built ahead of the gate, data-free only (N3a,
   2026-10-15):* `recommendation` and `decision` tables, append-only, with every refusal in code and no
-  caller anywhere in the app; the buttons (N3b) wait for N2 and for sign-in (Phase S3).
+  caller anywhere in the app; the buttons (N3b) wait for N2 and for sign-in (Phase S3). *N3b built
+  2026-10-16* in the admin preview; usable once sign-in makes someone an administrator.
 - **N4 model gateway — built 2026-10-14, ahead of N1–N3; released in v1.13.0.** `get_model(task)` in
   `src/ragbot/llm/__init__.py` with tiers in `settings.yaml` (`llm.tiers`; small: rewrite, route;
   main: answers, SQL, judge; executive: recommendations, cross-domain ranking). On an `LLMError`

@@ -1,0 +1,64 @@
+# DRAFT for the QC department (Phase N1b, 2026-10-16) - started from quality.example.yaml so the admin preview
+# (agents.recommendations.enabled) has something to show. QC writes the real actions, limits and PDF, then approves it.
+#
+# A playbook says what a department does about one risk: WHEN a rule in config/rules/<dimension>.yaml is
+# red (or amber), these are the ACTIONS it may take. It holds no numbers of its own, on purpose:
+#   - a quantity a person chooses is a parameter (param.<name>), checked against min and max;
+#   - a rate (air freight, overtime per hour, an inspector's day) is a named source in config/costs.yaml
+#     (cost.<source>), which carries its owner, source and date and is git-ignored - the repo is public;
+#   - a count of the order file being judged is subject.<count> (Checked, Defects, DefectivePcs, ...).
+# A cost is a named calculator over those inputs, computed in Python (domain_agents/playbook.py
+# CALCULATORS). A literal number as an input is refused, and so is a digit in a title.
+#
+# Gate: only administrators see playbooks, and only while agents.recommendations.enabled is on (N2, default off).
+# No recommendation reaches staff until the Stage-2 backtest has passed and the cost sources have real values. `python scripts/check_catalog.py` validates this file
+# format; a draft, or a cost source without a value, is not a problem there - it is simply "not ready".
+#
+# Approving: status approved needs approved_by (a named person), approved_on (a date), source_pdf, a
+# pdf_page for every action, and min and max for every number a person chooses.
+playbook: quality_dhu_over_target
+title: DHU over target on an order file
+owner: Quality
+author: QC department (to write)
+status: draft                  # draft | approved | retired
+approved_by: null
+approved_on: null
+source_pdf: null              # the QC playbook PDF in data/pdfs/Playbook/, once written
+
+# Which risk this answers. Every key is checked when the file loads: an unknown one (factories: for
+# factory:) stops the load, because ignoring it would silently widen the match.
+when:
+  dimension: quality           # a rule set in config/rules/
+  rule: file_dhu               # a rule in that file; matched on this rule's own level
+  level: [red]                 # red, amber or both - never green or info
+  factory: []                  # factory codes; empty = every factory
+
+actions:
+  - id: add_inline_inspectors
+    title: Add inline inspectors to the lines running the file
+    pdf_page: null             # the page of source_pdf this action is written on
+    params:
+      inspectors:
+        type: integer          # integer | number | boolean | choice
+        min: null
+        max: null
+        unit: people
+    cost:
+      calculator: quantity_x_rate
+      inputs:
+        quantity: param.inspectors
+        rate: cost.qc_inspector_day_rate
+    effect:
+      calculator: none         # no effect is claimed until one is agreed and has a calculator
+
+  - id: rework_defective_pieces
+    title: Rework the defective pieces before they move on
+    pdf_page: null
+    params: {}
+    cost:
+      calculator: quantity_x_rate
+      inputs:
+        quantity: subject.DefectivePcs
+        rate: cost.rework_cost_per_piece
+    effect:
+      calculator: none

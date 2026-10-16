@@ -121,3 +121,8 @@ brief:
   enabled: true
   max_items: 5                    # "Needs your attention" items shown
   stale_after_minutes: 180        # warn when the last watcher run is older (the service runs every 60 minutes)
+# Stage 3 (Phase N2, N3b): the recommendations preview — administrators only, and nothing at all while this is
+# false. Staff see no recommendation until the Stage-2 backtest (M✓) passes and config/costs.yaml has real rates.
+agents:
+  recommendations:
+    enabled: false

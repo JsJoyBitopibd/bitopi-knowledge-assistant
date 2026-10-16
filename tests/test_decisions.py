@@ -347,11 +347,13 @@ def _imports(path) -> set[str]:
 
 
 def test_nothing_in_the_app_imports_playbooks_or_decisions():
-    """No caller in the app, the UI, the agents or the model code until the owner opens the Stage-3 gate.
-    Only the two modules themselves, and check_catalog's offline validation, may import them."""
+    """No caller in the app, the UI, the agents or the model code except through domain_agents/recommend.py
+    (Phase N2/N3b, 2026-10-16), which the app reaches only for administrators while
+    agents.recommendations.enabled is on (tests/test_recommend.py). Only the two modules themselves,
+    recommend.py and check_catalog's offline validation may import them."""
     allowed = {"playbook": {"src/ragbot/domain_agents/playbook.py", "src/ragbot/domain_agents/decisions.py",
-                            "scripts/check_catalog.py"},
-               "decisions": {"src/ragbot/domain_agents/decisions.py"}}
+                            "src/ragbot/domain_agents/recommend.py", "scripts/check_catalog.py"},
+               "decisions": {"src/ragbot/domain_agents/decisions.py", "src/ragbot/domain_agents/recommend.py"}}
     files = sorted((ROOT / "src" / "ragbot").rglob("*.py")) + sorted((ROOT / "scripts").glob("*.py"))
     assert any(f.name == "app.py" for f in files)           # the scan really covers the app
     offenders = []
@@ -373,3 +375,12 @@ def test_the_router_still_refuses_approve():
     from ragbot.agent.router import route
     assert route("Please approve recommendation 3") == "refuse"
     assert route("Can you approve the extra inspectors for FR-26-1985?") == "refuse"
+
+
+def test_the_app_reaches_stage_three_only_behind_the_admin_switch():
+    """app.py imports recommend and nothing else of Stage 3, and calls it only inside `if _rec.enabled(...)`."""
+    text = (ROOT / "src" / "ragbot" / "app.py").read_text(encoding="utf-8")
+    assert "from ragbot.domain_agents import recommend as _rec" in text
+    head, _, body = text.partition("if _rec.enabled(s.get, scope):")
+    assert body, "the Stage-3 panel must sit behind recommend.enabled"
+    assert "_rec." not in head.split("from ragbot.domain_agents import recommend as _rec")[1]

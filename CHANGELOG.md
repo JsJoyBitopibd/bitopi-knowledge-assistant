@@ -8,6 +8,17 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- **Recommendations can be previewed by administrators, and are shown to nobody else** (Stage 3, N2 and N3b).
+  For each open red or amber quality file, the preview lists what the department's playbook says can be done,
+  with a cost only when the playbook is approved and every rate it uses has an owner and a date — today none
+  is, and the preview says why for each option. Administrators can store a recommendation and approve or reject
+  it with a reason; the shared open account cannot. It is switched off by default
+  (`agents.recommendations.enabled`), and with sign-in off nobody is an administrator, so nothing changes for
+  staff: recommendations reach them only after the risk levels pass their backtest and real rates exist.
+  `scripts/recommend_preview.py` shows the same preview on the server. A draft Quality playbook is in place for
+  the QC department to complete and approve.
+
 ## [1.14.0] — 2026-10-15 — Phase S4, Stage-3 groundwork, schema samples, the v1.13.0 follow-ups
 
 The people-data rule completed and ready to switch on, but left off as the owner decided (Phase S4); the tool that

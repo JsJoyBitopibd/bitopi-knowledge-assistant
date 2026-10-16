@@ -319,6 +319,18 @@ python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --json --
 python scripts\index_schema.py Production
 ```
 
+### Recommendations preview (Stage 3)
+
+Off by default. `agents.recommendations.enabled: true` in `config/settings.yaml` shows a "Recommendations —
+preview (admin)" panel to **administrators only** (with sign-in off nobody is one, so it waits for Phase S3).
+It lists the actions of the playbooks in `config/playbooks/` for open red and amber Quality files; a cost appears
+only when the playbook is approved and every rate in `config/costs.yaml` (git- and docker-ignored, mounted by
+`docker-compose.override.yml`) has a value, an owner, a source and a date. On the server, without the app:
+
+```powershell
+docker compose run --rm --no-deps --entrypoint python app scripts/recommend_preview.py
+```
+
 ### Adding a database (Phase J)
 
 Every database on the SQL Server is one catalog file. The login already reads them all, so a new one
