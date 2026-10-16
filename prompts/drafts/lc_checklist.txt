@@ -1,0 +1,1 @@
+A checklist of the documents for an export LC presentation. A title line naming the LC or order, then one checkbox line per document ("[ ] Commercial invoice ..."), using only what the facts state about the LC, the order and the shipment, with any missing value as a placeholder. End with "Checked by: [name]  Date: [date]".

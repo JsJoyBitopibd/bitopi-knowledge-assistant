@@ -678,6 +678,9 @@ ahead, by factory and by lead time. Its minimum evidence (28 dates, 60 settled f
   "delete" requests are still refused.
 - Gate: as above, plus a test that the code has no mail, webhook or ticket-system client, and the
   existing refusal tests unchanged.
+- *Signed off and built 2026-10-16* (`agent/drafts.py`), off by default and for administrators only, in its own
+  panel rather than a chat route, so the router and its refusal tests are untouched; the facts are the verified
+  answer to the subject, and `verify_draft` refuses any marker, number or code that is not in it.
 
 ---
 

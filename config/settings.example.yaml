@@ -91,7 +91,7 @@ llm:
   # one that is not runs on main — the safe end, never the cheap one. Changing a task's tier is config.
   tiers:
     small: [rewrite, route, extract]
-    main: [answer, sql, judge, repair]
+    main: [answer, sql, judge, repair, draft]
     executive: [recommend, prioritise]
   daily_budget: 500            # provider requests per day this deployment may spend (free tier: 500 per model);
                                # the admin caption shows "calls since 13:00 n/budget", scripts/eval.py --budget refuses to overspend
@@ -125,4 +125,7 @@ brief:
 # false. Staff see no recommendation until the Stage-2 backtest (M✓) passes and config/costs.yaml has real rates.
 agents:
   recommendations:
+    enabled: false
+  # Stage 4 (Phase O2): copy-only drafts from cited facts — administrators only, never sent; off by default.
+  drafts:
     enabled: false

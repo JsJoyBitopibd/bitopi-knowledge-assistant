@@ -375,6 +375,26 @@ with st.sidebar:
                             st.rerun()
                         except _rec.decisions.Refused as e:
                             st.error(str(e))
+    # Phase O2: copy-only drafts from cited facts, administrators only and off unless agents.drafts.enabled.
+    from ragbot.agent import drafts as _drafts
+    if _drafts.enabled(s.get, scope):
+        with st.expander("Drafts — copy only (admin)"):
+            st.caption("A draft written only from cited facts, for you to edit and send yourself. Nothing is sent, "
+                       "approved or changed anywhere.")
+            kind = st.selectbox("Draft", list(_drafts.KINDS), format_func=_drafts.KINDS.get, key="draft-kind")
+            about = st.text_input("About (an order, PO, file, line or LC)", key="draft-about")
+            if st.button("Write draft", key="draft-go") and about.strip():
+                with st.spinner("Reading the facts and writing…"):
+                    d = _drafts.make(kind, about, user=user, scope=scope)
+                if d.ok:
+                    st.code(d.text, language=None)          # the code block has its own copy button
+                    blanks = _drafts.placeholders(d.text)
+                    if blanks:
+                        st.caption("To fill in before sending: " + ", ".join(blanks))
+                else:
+                    st.warning("No draft: " + "; ".join(d.problems))
+            for r in _drafts.stored(user, limit=5):
+                st.caption(f"#{r['id']} {r['created']} — {_drafts.KINDS.get(r['kind'], r['kind'])}: {r['subject']}")
 
 scope_label = view.scope_text(pick)
 cid = st.session_state.cid

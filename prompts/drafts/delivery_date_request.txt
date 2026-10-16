@@ -1,0 +1,1 @@
+A request to a buyer for a new delivery or ship date. Subject line first ("Subject: ..."), then the body: the order or PO, the current date, why it cannot be met (from the facts only), and the new date proposed as the placeholder [proposed new date]. Ask for confirmation. Sign off with [your name], [your title].

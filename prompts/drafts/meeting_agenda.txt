@@ -1,0 +1,1 @@
+An agenda for a production meeting. A title line, then [date, time, place], then numbered agenda items: one per open problem in the facts (the line, file or order, what is wrong, with the figures), each ending with the decision the meeting needs to take. Close with "Attendees: [names]".

@@ -1,0 +1,1 @@
+A QC investigation ticket. Lines in this order: "Title:", "Factory / line / file:", "What was found:" (the defect figures and dates from the facts), "Risk:", "Requested action:" (written as [action agreed by QC]), "Owner:" [name], "Due:" [date].

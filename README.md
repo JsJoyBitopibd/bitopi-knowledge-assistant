@@ -331,6 +331,17 @@ only when the playbook is approved and every rate in `config/costs.yaml` (git- a
 docker compose run --rm --no-deps --entrypoint python app scripts/recommend_preview.py
 ```
 
+### Drafts (Stage 4)
+
+Off by default. `agents.drafts.enabled: true` shows a "Drafts — copy only (admin)" panel to administrators: pick
+a kind, say what it is about, and the assistant answers that subject with sources and writes the draft from the
+answer only (`prompts/draft_system.txt`, `prompts/drafts/<kind>.txt`). Nothing is ever sent. On the server:
+
+```powershell
+docker compose run --rm --no-deps --entrypoint python app scripts/draft.py --list
+docker compose run --rm --no-deps --entrypoint python app scripts/draft.py qc_investigation "DHU of file FR-26-317 this week"
+```
+
 ### Adding a database (Phase J)
 
 Every database on the SQL Server is one catalog file. The login already reads them all, so a new one

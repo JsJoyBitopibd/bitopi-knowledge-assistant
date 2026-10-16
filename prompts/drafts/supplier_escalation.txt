@@ -1,0 +1,1 @@
+An escalation email to a supplier about a late or short delivery. Subject line first ("Subject: ..."), then the body: what is outstanding (PO, item, quantity, the date it was due), what it affects, and what is asked of the supplier (a confirmed date by a deadline given as a placeholder). Sign off with [your name], [your title].

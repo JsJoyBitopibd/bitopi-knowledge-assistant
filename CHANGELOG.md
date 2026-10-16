@@ -9,6 +9,13 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Administrators can have the assistant draft documents to copy, and it never sends anything** (Stage 4, Phase O).
+  Five kinds: a supplier escalation email, a production meeting agenda, a request for a new delivery date, a QC
+  investigation ticket and an LC document checklist. The assistant first answers the subject as it would any
+  question, with sources, then writes the draft from that answer alone: every fact carries its source mark, every
+  number is checked against the answer, and anything the data does not say is left as a [blank] to fill in. Drafts
+  are kept, never sent, and the chat still refuses to send, approve, change or delete. Switched off by default
+  (`agents.drafts.enabled`); `scripts/draft.py` writes one on the server.
 - **Recommendations can be previewed by administrators, and are shown to nobody else** (Stage 3, N2 and N3b).
   For each open red or amber quality file, the preview lists what the department's playbook says can be done,
   with a cost only when the playbook is approved and every rate it uses has an owner and a date — today none
