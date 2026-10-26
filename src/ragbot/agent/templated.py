@@ -116,8 +116,9 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
     rows ARE the answer, and the 3-6 s answer-model call that used to restate them is skipped: a
     scalar as "<Column>: <value>", or "<value> — <Column> where <filters>" when its WHERE can be stated
     exactly (Golden case 99 read "EmployeeCount: 29", which did not say what was counted); one row as
-    "Col: v · Col: v", more rows as a table. The caller adds the filter values to the result's params
-    (filter_params), or a value with digits in it would not verify."""
+    "Col: v · Col: v", more rows as a table under a sentence saying what the query looked for
+    (agent/explain.py). The caller adds the filter values to the result's params (filter_params,
+    explain.described_params), or a value with digits in it would not verify."""
     if r.error or not r.rows or not r.columns:
         return None
     if r.tool == "generated" and not allow_generated:
@@ -138,13 +139,20 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
         if filters:
             return f"{fmt(value)} — {label} where {describe_filters(filters)} [{marker}]."
         return f"{lead or f'{label}: {fmt(value)}'} [{marker}]."
+    # A model-written list says what its query looked for (agent/explain.py): "Found 100 rows where ShipDate is
+    # before today (2026-10-26) and InvoicedQty is empty …" instead of a bare "Found 100 matching rows".
+    from . import explain   # lazy: explain reads data/empty_retry, and data/tools.py imports this module
+    desc = explain.describe(r) if describe and r.tool == "generated" else None
     if r.tool == "generated" and len(r.rows) == 1 and len(r.columns) <= 8:
-        return " · ".join(f"{c}: {fmt(v)}" for c, v in zip(r.columns, r.rows[0])) + f" [{marker}]."
+        pairs = " · ".join(f"{c}: {fmt(v)}" for c, v in zip(r.columns, r.rows[0]))
+        if desc and desc.where:
+            return f"One row where {desc.conditions()}: {pairs} [{marker}]."
+        return pairs + f" [{marker}]."
     n = len(r.rows)
     shown = int(settings().get("answer.template_rows", 25))
     lead = _fill(tool["answer_list"], r, n=n) if tool.get("answer_list") else None
     found = f"Found {n} matching row" + ("" if n == 1 else "s")
-    head = f"{lead or found} [{marker}]:"
+    head = explain.lead(desc, n, marker) if lead is None and desc else f"{lead or found} [{marker}]:"
     table = ["| " + " | ".join(r.columns) + " |", "|" + "---|" * len(r.columns)]
     table += ["| " + " | ".join(fmt(v) for v in row) + " |" for row in r.rows[:shown]]
     tail = f"\n\nOnly the first rows are shown here; the query returned {n} in total." if n > shown else ""

@@ -9,6 +9,15 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **A data answer now says what it looked for.** A list used to open with "Found 100 matching rows" and nothing
+  else, so "Which Shipments are at risk?" never said that "at risk" had been read as "past the ship date and not
+  invoiced", nor that 100 was the query's limit rather than the total. The line above the table now states the
+  query's conditions, grouping and sort order, and says "there may be more" when the row limit was reached:
+  "Found 100 rows where ShipDate is before today (2026-10-26) and InvoicedQty is empty, sorted by ShipDate
+  (earliest first), then ExportOrderID [D1]. The query returns at most 100 rows, so there may be more." The
+  sentence is written by the program from the query itself, never by the AI model, so it cannot say anything the
+  query did not do; a condition it cannot put into words is pointed at ("other conditions shown under Show query")
+  instead of being paraphrased. Values it states are shown on the source card's filter line. No extra model call.
 - **Administrators can have the assistant draft documents to copy, and it never sends anything** (Stage 4, Phase O).
   Five kinds: a supplier escalation email, a production meeting agenda, a request for a new delivery date, a QC
   investigation ticket and an LC document checklist. The assistant first answers the subject as it would any

@@ -303,15 +303,23 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
     that names its filters does not verify (a column name that reads as a code, "SMV10"), the plain
     "<Column>: <value>" is tried before the answer model is — as it was before filters were named."""
     from ..data.tools import companion_tool, load_fixed_tools, merge_companion
+    from .explain import described_params
     from .templated import filter_params, scalar_filters, try_template
     original = results
-    filters = scalar_filters(results[0]) if allow_generated and describe else None
+    described = allow_generated and describe and results[0].tool == "generated"
+    filters = scalar_filters(results[0]) if described else None
+    one_value = len(results[0].rows) == 1 and len(results[0].columns) == 1
+    extra = described_params(results[0]) if described and not one_value else {}
     if filters:
         # A one-value answer names what its query filtered on ("29 — EmployeeCount where BloodGroup is O-, …").
         # As with a P2 correction, the values join a copy of the result's params: verify() licenses them and the
         # card shows them on its Filter line, so "CompanyID is 02" verifies although 02 is in no row.
         results = [results[0].model_copy(update={"params": {**results[0].params, **filter_params(filters)}}),
                    *results[1:]]
+    elif extra:
+        # the same for a list's lead ("… where OrderQty is above 500"): the values it states join a copy of the
+        # params; the result's own parameters (today …) keep their values
+        results = [results[0].model_copy(update={"params": {**extra, **results[0].params}}), *results[1:]]
     tool = next((t for t in load_fixed_tools() if t.get("name") == results[0].tool), None)
     comp = companion_tool(tool) if tool is not None else None
     merged = None
@@ -347,7 +355,9 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
         text += "\n\n" + note_text.replace("[D1]", f"[D{len(used)}]")
     block, refs = sources_block([], used)
     ok, problems = verify(text, [], used, nf)
-    if not ok and filters:
+    if not ok and described:
+        # a stated filter or lead that does not verify (a column name that reads as a code, "SMV10"): the plain
+        # template is tried before the answer model is, as it was before queries were described
         return _templated_answer(out, original, nf, allow_generated, scope, describe=False)
     if not ok:
         out.warnings.append(f"template failed verification, using the model: {problems}")
