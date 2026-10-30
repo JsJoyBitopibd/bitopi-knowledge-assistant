@@ -79,7 +79,8 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
           allowed_tables: frozenset[str] | set[str] = frozenset(),
           big_tables: dict[str, int] | None = None,
           allowed_catalogs: dict[str, frozenset[str]] | None = None,
-          sensitive_patterns: tuple[str, ...] | None = None) -> str:
+          sensitive_patterns: tuple[str, ...] | None = None,
+          max_offset: int = 0) -> str:
     """Validate and normalise. Returns SQL with a row cap applied. Raises GuardError otherwise.
 
     `allowed_catalogs` (Phase P3, opt-in: setting data.cross_database_names, unrestricted scopes only) maps the
@@ -92,7 +93,14 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
     `sensitive_patterns` (Phase R) is the list that decides what this catalog hides; None = the global default
     (data/sensitive.py). The column check below is one pass over every column in the statement with no way to
     say which table a column came from, so a catalog that opens its own personal columns is given no
-    `allowed_catalogs` by tools._guard_for — a looser list must never reach another database's columns."""
+    `allowed_catalogs` by tools._guard_for — a looser list must never reach another database's columns.
+
+    `max_offset` (Phase T4) lets one caller page a statement: data/paging.py, for "show the next 200 rows". Every
+    other statement — generated, pasted, replayed — keeps the default 0, and an OFFSET is refused. A page must have
+    an ORDER BY, a literal offset of at most `max_offset` and a literal row count of at most `max_rows`. Since T4 a
+    T-SQL `FETCH NEXT n ROWS` count is held to `max_rows` like TOP is: before, sqlglot's Fetch kept its count where
+    the cap check did not look, so `FETCH NEXT 100000 ROWS ONLY` passed (the connector still fetched at most
+    max_rows)."""
     s = sql.strip().rstrip(";").strip()
     if not s:
         raise GuardError("empty statement")
@@ -168,7 +176,29 @@ def guard(sql: str, allowed_views: set[str], dialect: str, max_rows: int = 200, 
 
     # row cap: read what sqlglot parsed (TOP maps to the `limit` arg in T-SQL), never re-derive from text
     lim = tree.args.get("limit")
-    if lim is not None:
+    off = tree.args.get("offset")
+    if off is not None:
+        if max_offset <= 0:
+            raise GuardError(f"OFFSET is not allowed; return at most {max_rows} rows with TOP / LIMIT")
+        if not tree.args.get("order"):
+            raise GuardError("a page needs an ORDER BY")
+        if lim is None:
+            raise GuardError("a page needs a row count")
+        o = off.expression
+        if not isinstance(o, exp.Literal) or o.is_string or not str(o.this).isdigit():
+            raise GuardError("the offset must be a whole number")
+        if int(o.this) > max_offset:
+            raise GuardError(f"offset {o.this} is beyond the last page ({max_offset})")
+    if isinstance(lim, exp.Fetch):
+        opts = lim.args.get("limit_options")
+        if opts is not None and (opts.args.get("percent") or opts.args.get("with_ties")):
+            raise GuardError("FETCH ... PERCENT / WITH TIES is not allowed; use a numeric row count")
+        c = lim.args.get("count")
+        if not isinstance(c, exp.Literal) or c.is_string or not str(c.this).isdigit():
+            raise GuardError("the FETCH row count must be a whole number")
+        if int(c.this) > max_rows:
+            raise GuardError(f"row cap {c.this} exceeds the maximum of {max_rows}")
+    elif lim is not None:
         rendered = lim.sql(read_dialect).upper()
         if "PERCENT" in rendered:
             raise GuardError("TOP ... PERCENT is not allowed; use a numeric row cap")

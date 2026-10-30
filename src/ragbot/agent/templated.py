@@ -136,6 +136,14 @@ def derived_text(r: QueryResult, marker: str = "D1") -> str:
     from and what was done to them; the count of the earlier rows and every value of the transform are in the
     result's params (`of_rows_label`, `transform_label`), and every computed figure is a cell, so it all verifies."""
     src, what = r.source_rows, r.transform
+    if r.page:
+        # Phase T4: the next page of the same statement, read now (data/paging.py); the row numbers are its params
+        if not r.rows:
+            return f"There are no more rows after the earlier list [{marker}]."
+        last = len(r.rows) < int(settings().get("data.max_rows", 200))
+        head = (f"Rows {r.params.get('rows_from_label')} to {r.params.get('rows_to_label')} of the same query"
+                + (", the last ones" if last else "") + f" [{marker}]:")
+        return head + "\n\n" + _markdown_table(r, int(settings().get("answer.template_rows", 25)))
     if not r.rows:
         return f"None of the earlier answer's {src} rows match: {what} [{marker}]."
     if len(r.rows) == 1 and len(r.columns) == 1:
@@ -194,8 +202,13 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
     shown = int(settings().get("answer.template_rows", 25))
     # Phase T2: after "top 10" the rows are a cut of what the query returned — the lead counts what there was
     total = _int(r.params.get("of_rows_label")) or n
-    lead = _fill(tool["answer_list"], r, n=total) if tool.get("answer_list") else None
-    found = f"Found {total} matching row" + ("" if total == 1 else "s")
+    # a built-in list that stopped at the row limit (TOP (200)) holds at least that many, not exactly that many
+    from .refine import row_cap
+    cap = row_cap(r)
+    at_cap = bool(cap) and cap >= int(settings().get("data.max_rows", 200)) and total >= cap
+    count = f"at least {total}" if at_cap and r.tool != "generated" else total
+    lead = _fill(tool["answer_list"], r, n=count) if tool.get("answer_list") else None
+    found = f"Found {count} matching row" + ("" if total == 1 else "s")
     note = modifier_note(r)
     head = explain.lead(desc, total, marker) if lead is None and desc else f"{lead or found} [{marker}]:"
     for end in (":", ".") if note else ():

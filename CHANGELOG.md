@@ -9,6 +9,18 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **"Next", "last week?" and "add the merchandiser" now work as follow-ups** (Phase T4). A list that stopped at 200
+  rows offers "Show the next 200 rows", which reads rows 201–400 with the same query. A follow-up the table on screen
+  cannot answer — another period, another grouping, a sort over the whole list, a column it does not have — runs the
+  earlier query again: a built-in answer with its period or sort changed (no AI call), or, for anything else, one AI
+  call that changes the earlier query and goes through the same safety checks as any AI-written query. The AI sees
+  the earlier question and query, never the rows. A built-in list that reached its 200-row limit now says "at least
+  200 … orders" instead of "200 orders".
+
+### Fixed
+- **The row limit was not enforced on one form of SQL Server paging.** A query written as `OFFSET … FETCH NEXT n ROWS`
+  passed the safety check with any `n`. The database connection still read at most 200 rows, so no extra data was
+  exposed, but the check now holds that form to the same limit, and only the assistant's own paging may use OFFSET.
 - **Follow-ups work on the table you are looking at, instantly** (Phase T3). After a data answer, "only TAL", "line
   wise", "sort by ship date, top 10", "how many?", "total quantity", "their names" or "hide DHU" used to be sent off
   as new questions and often came back as the same table. Now they reshape the rows already on screen, in well under

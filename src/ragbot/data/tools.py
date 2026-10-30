@@ -541,9 +541,21 @@ def _apply_filter(tool: dict[str, Any], params: dict[str, Any], columns: list[st
 
 
 def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog], user: str = "",
-                   refresh: bool = False, *, scope: Scope) -> QueryResult:
+                   refresh: bool = False, *, scope: Scope, page: int = 0) -> QueryResult:
     cat = cats[tool["database"]]
     sql = tool_sql(tool, params).strip()
+    if page:
+        # Phase T4: the next page of this tool's own SQL (data/paging.py). Its SQL is trusted config like the first
+        # page's; only the row window moves. A tool that keeps one factory in Python reads every factory, so its
+        # pages would not line up with what was shown: it is not paged.
+        from .paging import page_sql
+        try:
+            if tool.get("filter"):
+                raise GuardError("this list cannot be paged")
+            sql = page_sql(sql, cat.dialect, page, int(settings()["data.max_rows"]), _keys_for(_views_in(sql, cat), cat))
+        except GuardError as e:
+            return QueryResult(database=cat.database, engine=cat.engine, views=[], sql=sql, params=params,
+                               tool=tool["name"], columns=[], rows=[], error=str(e))
     if not scope.allows_database(getattr(cat, "restricted_to", ())):
         # Phase S4: fixed tools, their companions and their local copies never pass through _run_guarded, so
         # the database rule is checked here too — whatever the caller filtered. Nothing is run or read.
@@ -557,7 +569,7 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
         return QueryResult(database=cat.database, engine=cat.engine, views=_views_in(sql, cat), sql=sql,
                            params=params, tool=tool["name"], columns=[], rows=[], denied=True,
                            error=f"outside the user's scope: factory {factory}")
-    local = _from_aggregate(tool, params, cat, user, scope) if tool.get("aggregate") and not refresh else None
+    local = _from_aggregate(tool, params, cat, user, scope) if tool.get("aggregate") and not refresh and not page else None
     if local is not None:
         return local
     try:
@@ -725,7 +737,7 @@ def siblings_of(cat: Catalog, cats: dict[str, Catalog]) -> dict[str, Catalog]:
 
 
 def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope,
-               siblings: Optional[dict[str, Catalog]] = None) -> str:
+               siblings: Optional[dict[str, Catalog]] = None, max_offset: int = 0) -> str:
     """Guard with the catalog's FULL offered set as the allow-list (security), independent of which
     tables the prompt happened to show (relevance). Raw tables have no common factory column to filter
     on, so a user limited to some factories may read the rag views only — and may never cross databases."""
@@ -746,23 +758,23 @@ def _guard_for(sql: str, cat: Catalog, max_rows: int, scope: Scope,
                         if t.rows and t.rows > big_rows})
     return guard(sql, cat.view_names, cat.dialect, max_rows,
                  allowed_tables=frozenset(t.name.lower() for t in offered), big_tables=big,
-                 allowed_catalogs=allowed_catalogs, sensitive_patterns=cat.sensitive_patterns)
+                 allowed_catalogs=allowed_catalogs, sensitive_patterns=cat.sensitive_patterns, max_offset=max_offset)
 
 
 def _guard_and_fix(sql: str, cat: Catalog, max_rows: int, scope: Scope,
                    siblings: Optional[dict[str, Catalog]] = None, *,
-                   mode: str = "known") -> tuple[str, list[str]]:
+                   mode: str = "known", max_offset: int = 0) -> tuple[str, list[str]]:
     """Guard a model-written statement, then quote any bare number it compares to a text column (Phase Q,
     data/typefix.py) and guard the result again — the fix only adds quotes, so it passes, and the guard is
     never asked to trust text it has not seen."""
-    safe = _guard_for(sql, cat, max_rows, scope, siblings)
+    safe = _guard_for(sql, cat, max_rows, scope, siblings, max_offset)
     if not settings().get("data.typefix.enabled", True):
         return safe, []
     from . import typefix
     fixed, notes = typefix.fix(safe, cat, mode=mode, siblings=siblings)
     if not notes:
         return safe, []
-    return _guard_for(fixed, cat, max_rows, scope, siblings), notes
+    return _guard_for(fixed, cat, max_rows, scope, siblings, max_offset), notes
 
 
 def _extract_params(sql: str, cat: Catalog) -> dict[str, Any]:
@@ -832,7 +844,8 @@ def _split_database_line(raw: str, cats: dict[str, Catalog], fallback_db: str) -
 
 
 def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bool, tool: str = "generated",
-                 considered: list[str] = (), agent: str = "", cats: Optional[dict[str, Catalog]] = None) -> QueryResult:
+                 considered: list[str] = (), agent: str = "", cats: Optional[dict[str, Catalog]] = None,
+                 max_offset: int = 0) -> QueryResult:
     """One statement through the chain every model-written, corrected or lookup statement takes: guard (the
     catalog's full allow-list) -> virtual-view rewrite with the scope filter -> parameters -> cached_run.
     Raises GuardError / the database's error; a statement that reads no table is refused."""
@@ -844,7 +857,7 @@ def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bo
     if not scope.allows_database(cat.restricted_to):
         raise GuardError(f"outside the user's scope: database {cat.database}")
     siblings = siblings_of(cat, {c.database: c for c in (cats or {}).values()}) if cats else {}
-    safe, _notes = _guard_and_fix(sql, cat, int(s["data.max_rows"]), scope, siblings)
+    safe, _notes = _guard_and_fix(sql, cat, int(s["data.max_rows"]), scope, siblings, max_offset=max_offset)
     sql_exec, views = rewrite_virtual(safe, cat, scope=scope)
     views += [n for n in _views_in(safe, cat, siblings) if not cat.view(n)]
     if not views:

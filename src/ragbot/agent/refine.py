@@ -24,7 +24,7 @@ from typing import Any, Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
-from ..data.modifiers import _words, direction_words, resolve_column
+from ..data.modifiers import direction_words, resolve_column
 from ..data.modifiers import strip as strip_modifiers
 from ..models import QueryResult
 
@@ -53,6 +53,8 @@ class RefinePlan(BaseModel):
     page: Optional[int] = None                   # "next", "more": the next page of the query (T4)
     window: str = ""                             # "last week?": the same query for another period (T4)
     unresolved: list[str] = Field(default_factory=list)    # words that named a column the result does not have
+    regroup: list[str] = Field(default_factory=list)       # … of them, the grouping words ("style wise"): a tool may regroup
+    resort: str = ""                             # … the sort word ("sort by colour"): a tool may sort by it
 
     def empty(self) -> bool:
         return not (self.filters or self.sort or self.limit or self.keep or self.add or self.group_by or self.scalar
@@ -295,6 +297,7 @@ def _clause(c: str, r: QueryResult, plan: RefinePlan) -> bool:
                 if not re.search(r"[a-z]", words, re.I) or len(words.split()) > 5:
                     return False
                 plan.unresolved.append(words.strip())    # "line wise" on a by-type table: the SQL must regroup
+                plan.regroup.append(words.strip())
                 return True
             plan.group_by = cols
             return True
@@ -372,6 +375,7 @@ def parse(message: str, prior: QueryResult) -> Optional[RefinePlan]:
         col = find_column(mods.sort_word, prior)
         if col is None:
             plan.unresolved.append(mods.sort_word)
+            plan.resort = mods.sort_word
         else:
             kind = kind_of(prior, col)
             plan.sort = (col, mods.descending if mods.descending is not None else kind == "number")
@@ -409,9 +413,10 @@ def row_cap(r: QueryResult) -> Optional[int]:
 
 
 def capped(r: QueryResult, max_rows: int) -> bool:
-    """Did the query stop at its row limit? Then the rows are a cut, not the whole answer. A derived result
-    inherits nothing here: its rows are exactly what the earlier answer showed."""
-    if r.transform:
+    """Did the query stop at its row limit? Then the rows are a cut, not the whole answer. Rows reshaped in Python
+    inherit nothing here (they are exactly what the earlier answer showed); a full page of a longer list (T4) is a
+    cut like the first page."""
+    if r.transform and not r.page:
         return False
     cap = row_cap(r)
     return len(r.rows) >= min(cap or max_rows, max_rows)
@@ -575,12 +580,15 @@ def describe(plan: RefinePlan, prior: QueryResult) -> str:
 
 # ---------------------------------------------------------------- chips
 def suggestions(r: QueryResult, limit: int = 5, max_rows: int = 200) -> list[str]:
-    """Follow-ups that reshape this answer, each one a message parse() reads back into a plan the stored rows can
-    answer — a click never costs a model call. Nothing is offered on a scalar, a cut result or an empty one."""
+    """Follow-ups that reshape this answer, each one a message parse() reads back into a plan — a click never costs a
+    model call. On a list that stopped at its row limit only a cut and the next page are offered (T4: the page is
+    read with the same statement, no model). Nothing is offered on a scalar or an empty result."""
     if not r.rows or not r.columns or r.error or len(r.rows) < 3 or (len(r.columns) == 1 and len(r.rows) == 1):
         return []
     out: list[str] = []
     cut = capped(r, max_rows)
+    if (cut or (r.page and len(r.rows) >= max_rows)) and pageable(r):
+        out.append(f"Show the next {max_rows} rows")
     if not cut:
         dims = [c for c in r.columns if any(c in names for names in _DIMENSIONS.values())
                 and c not in ("ExportOrderID", "ExportPONo", "PONumber", "PONo")
@@ -590,12 +598,12 @@ def suggestions(r: QueryResult, limit: int = 5, max_rows: int = 200) -> list[str
             out.append(f"{word.capitalize()} wise")
         dates = [c for c in r.columns if kind_of(r, c) == "date"]
         if dates:
-            out.append(f"Sort by {_words(dates[0])} latest first")
-        nums = [c for c in r.columns if additive(r, c)]
+            out.append(f"Sort by {_chip_words(dates[0])} latest first")
+        nums = [c for c in r.columns if additive(r, c) and c != "Count"]     # adding up counts says nothing new
         if nums and len(r.rows) > 10:
-            out.append(f"Sort by {_words(nums[0])}, top 10")
+            out.append(f"Sort by {_chip_words(nums[0])}, top 10")
         elif nums:
-            out.append(f"Total {_words(nums[0])}")
+            out.append(f"Total {_chip_words(nums[0])}")
         if "Factory" in r.columns:
             counts: dict[str, int] = {}
             for x in r.rows:
@@ -607,3 +615,25 @@ def suggestions(r: QueryResult, limit: int = 5, max_rows: int = 200) -> list[str
     elif len(r.rows) > 10:
         out.append("Top 10")
     return [s for s in out if parse(s, r) is not None][:limit]
+
+
+def pageable(r: QueryResult) -> bool:
+    """Can the next page of this result's query be read? A model-written statement can; a fixed tool can unless it
+    keeps one factory in Python (its pages would not line up with what was shown)."""
+    base = r.tool.split(":")[0]
+    if base == "generated":
+        return bool(r.sql)
+    try:
+        from ..data.tools import load_fixed_tools
+        tool = next((t for t in load_fixed_tools() if t.get("name") == base), None)
+    except Exception:
+        return False
+    return tool is not None and not tool.get("filter")
+
+
+def _chip_words(col: str) -> str:
+    """'ShipDate' -> 'ship date', 'PCD' -> 'PCD', 'OrderQty' -> 'order qty': how a chip names a column (the parser
+    reads it back either way)."""
+    parts = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", col)
+    parts = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", parts)
+    return " ".join(w if w.isupper() and len(w) > 1 else w.lower() for w in re.split(r"[_\s]+", parts) if w)

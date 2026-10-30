@@ -73,6 +73,7 @@ class QueryResult(BaseModel):
     transform: str = ""          # "sorted by ShipDate (latest first), first 10" — "" for rows as the query returned them
     derived_from: str = ""       # the request_id of the answer whose rows these came from
     source_rows: int = 0         # how many rows that answer's result held
+    page: int = 0                # which page of its query this is (0 = the first; Phase T4 paging)
 
     @property
     def row_keys(self) -> list[str]:

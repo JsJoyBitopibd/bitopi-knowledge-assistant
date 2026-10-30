@@ -189,7 +189,11 @@ def test_every_suggested_chip_parses_and_needs_no_requery():
     for c in chips:
         p = refine.parse(c, P)
         assert p is not None and refine.needs_requery(p, P, 200) is None, c
-    assert refine.suggestions(_prior(200)) == ["Top 10"]                     # a cut result: only a cut is offered
+    # a cut result: only the next page (read with the same statement, T4) and a cut are offered
+    assert refine.suggestions(_prior(200)) == ["Show the next 200 rows", "Top 10"]
+    assert refine.needs_requery(refine.parse("Show the next 200 rows", _prior(200)), _prior(200), 200) == "page"
+    no_pages = _prior(200, tool="production_dashboard_window")              # keeps one factory in Python
+    assert refine.suggestions(no_pages) == ["Top 10"]
     one = P.model_copy(update={"columns": ["Count"], "rows": [[5]]})
     assert refine.suggestions(one) == []
 
@@ -233,9 +237,27 @@ def test_orchestrator_answers_a_refine_without_any_model_call(wired):
 def test_a_follow_up_the_rows_cannot_answer_goes_on_as_usual(monkeypatch, wired):
     monkeypatch.setattr(orch, "_route", lambda q, user: "refuse")         # the usual path, stopped early
     monkeypatch.setattr(orch, "standalone_question", lambda q, h, u="": q)
+    import ragbot.data.requery as rq
+    monkeypatch.setattr(rq, "requery", lambda *a, **k: None)              # T4 finds no safe way to re-run it
     a = list(orch.answer_stream("style wise", history=[{"role": "user", "text": "x"}], scope=Scope.unrestricted(),
                                 state=_state()))[-1].answer
     assert a.route == "refuse" and a.kind == ""
     cut = list(orch.answer_stream("only TAL", history=[{"role": "user", "text": "x"}], scope=Scope.unrestricted(),
                                   state=_state(_prior(200))))[-1].answer
     assert cut.route == "refuse"
+
+
+def test_a_full_page_is_a_cut_like_the_first_page():
+    page2 = _prior(200).model_copy(update={"transform": "page 2", "page": 1,
+                                           "sql": "SELECT a FROM rag.v ORDER BY a OFFSET 200 ROWS FETCH FIRST 200 ROWS ONLY"})
+    assert refine.capped(page2, 200) and refine.needs_requery(plan("only TAL", page2), page2, 200) == "capped"
+    assert refine.suggestions(page2) == ["Show the next 200 rows", "Top 10"]
+    last_page = page2.model_copy(update={"rows": page2.rows[:37]})
+    assert not refine.capped(last_page, 200)
+
+
+def test_chips_keep_acronyms_and_never_add_up_counts():
+    assert refine._chip_words("PCD") == "PCD" and refine._chip_words("ShipDate") == "ship date"
+    assert refine._chip_words("OrderQty") == "order qty" and refine._chip_words("ExportPONo") == "export PO no"
+    grouped = refine.apply(plan("line wise"), P)
+    assert not any(c.startswith("Total count") for c in refine.suggestions(grouped))

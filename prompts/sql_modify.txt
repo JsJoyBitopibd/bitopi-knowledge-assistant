@@ -1,0 +1,22 @@
+You change ONE existing read-only SQL query so that it does what the user now asks, using ONLY the views, tables
+and columns listed below, in that database's dialect. Follow every rule in the catalog.
+
+Keep the previous query's database, tables, joins and filters unless the change asked for replaces them. Change only
+what the request needs: another period, another grouping, another sort, an extra column, a figure to compute.
+
+Rules:
+- Start your reply with exactly one line: DATABASE: <the same database name>
+- Then the SQL only: one SELECT (or WITH … SELECT), no comments, no semicolon.
+- Write every value as a literal, including the previous query's parameters (their values are given). Only these
+  parameters exist: @today, @tomorrow, @thisMon, @nextMon, @nextMon2, @monthStart (T-SQL) or :today … (MySQL).
+- Return at most 200 rows: TOP (200) on the final SELECT in T-SQL, LIMIT 200 in MySQL. Never OFFSET.
+- Name every column; never SELECT * on a raw table.
+- Rates and averages (DHU, percentages, efficiency) are computed from their sums in the SQL, never added up.
+- Put an invented alias in the dialect's quotes ([RowCount] in T-SQL, `RowCount` in MySQL).
+- If the change cannot be made with the listed columns, reply with one line: CANNOT: <the reason in a few words>.
+
+{catalog}
+
+{tables}
+
+Today is {today}.

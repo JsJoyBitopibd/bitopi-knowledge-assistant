@@ -169,3 +169,16 @@ def test_modifier_lines_for_the_sql_prompt():
     lines = T._modifier_lines("TAL orders sorted by ship date latest first, top 500", 200)
     assert 'ORDER BY the column that holds "ship date", largest / latest first (DESC)' in lines
     assert "Return at most 200 rows" in lines                              # never more than data.max_rows
+
+
+def test_a_built_in_list_at_its_row_limit_says_at_least():
+    tool = {"answer_list": "{n} {factory} order(s) have a ship date {window}"}
+    r = _res(200, factory="TAL", window="next week").model_copy(
+        update={"sql": "SELECT TOP (200) ExportOrderID, OrderQty FROM rag.vw_ExportOrder ORDER BY ShipDate"})
+    text = try_template(r, tool)
+    assert text.startswith("at least 200 TAL order(s) have a ship date next week [D1]:")
+    assert verify(text, [], [r], "System doesn't have the data.")[0]
+    small = r.model_copy(update={"rows": r.rows[:30]})
+    assert try_template(small, tool).startswith("30 TAL order(s)")
+    top20 = r.model_copy(update={"rows": r.rows[:20], "sql": "SELECT TOP (20) ExportOrderID FROM rag.vw_ExportOrder"})
+    assert try_template(top20, {"answer_list": "The next {n} PCD(s) from today"}).startswith("The next 20 PCD(s)")

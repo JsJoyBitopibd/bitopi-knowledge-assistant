@@ -127,10 +127,19 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     yield Stage("understanding", "Understanding the question…")
     # Phase T3: a follow-up that only reshapes the previous answer's rows ("only TAL", "line wise", "sort by date",
     # "top 5", "how many?") is answered from those rows in Python — no rewrite, no routing, no query, no model.
-    refined = _refine(question, state, nf, usage, scope)
-    if refined is not None:
-        yield Stage("refining", "Re-shaping the earlier result…")
-        yield Final(_log(refined, user, scope)); return
+    # Phase T4: what the rows cannot answer (a page, another period, a column they lack, a cut list) runs the earlier
+    # query again, changed — a fixed tool with new parameters or one "modify this statement" call.
+    follow = _refine_plan(question, state)
+    if follow is not None:
+        plan, prior, reason = follow
+        if reason is None:
+            yield Stage("refining", "Re-shaping the earlier result…")
+            refined = _refine(plan, prior, question, state, nf, usage, scope)
+        else:
+            yield Stage("querying", "Re-running the earlier query…")
+            refined = _requery(plan, prior, reason, question, state, nf, usage, scope, user, refresh)
+        if refined is not None:
+            yield Final(_log(refined, user, scope)); return
     q = question
     if history:
         with trace.span("rewrite"):
@@ -271,21 +280,49 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     yield Final(_log(out, user, scope))
 
 
-def _refine(question: str, state: Optional[ConversationState], nf: str, usage: Usage,
-            scope: Scope) -> Optional[Answer]:
-    """The answer to a follow-up that the previous answer's rows can answer by themselves (agent/refine.py), or None
-    to go on as usual: no earlier rows, a message that is not a pure reshape, or one that needs the query run again
-    (a column the rows do not have, a cut result, a page, another period — Phase T4)."""
+def _refine_plan(question: str, state: Optional[ConversationState]) -> Optional[tuple[Any, QueryResult, Optional[str]]]:
+    """(plan, the earlier result, why the rows cannot answer it — None when they can) for a follow-up that reshapes
+    the previous answer (agent/refine.py); None for anything else, which goes on as a question of its own."""
     if state is None:
         return None
     prior = state.last_result()
     if prior is None:
         return None
     from . import refine
-    max_rows = int(settings().get("data.max_rows", 200))
     plan = refine.parse(question, prior)
-    if plan is None or refine.needs_requery(plan, prior, max_rows) is not None:
+    if plan is None:
         return None
+    return plan, prior, refine.needs_requery(plan, prior, int(settings().get("data.max_rows", 200)))
+
+
+def _requery(plan: Any, prior: QueryResult, reason: str, question: str, state: ConversationState, nf: str,
+             usage: Usage, scope: Scope, user: str, refresh: bool) -> Optional[Answer]:
+    """The earlier query run again, changed (data/requery.py), answered from a template like any data result. None
+    when there is no safe way to run it, so the follow-up is treated as a new question."""
+    from ..data.requery import requery
+    parent = state.last.request_id if state.last else ""
+    r = requery(plan, prior, state.last_question or question, user=user, refresh=refresh, scope=scope, parent=parent)
+    if r is None or (r.error and plan.page is None):
+        return None
+    out = Answer(text="", question=question, rewritten_question=f"{state.last_question} — {reason}", route="requery",
+                 kind="requery", usage=usage, prior_request_id=parent, agent=prior.agent)
+    if r.error:                                    # the next page could not be read: say so, keep the chips
+        out.text, out.not_found = nf + " " + prompt("page_unavailable").strip(), True
+        out.warnings.append(f"page: {r.error}")
+        return out
+    if not _templated_answer(out, [r], nf, allow_generated=True, scope=scope):
+        return None
+    out.follow_ups = []
+    out.warnings.append(f"re-ran the earlier query ({reason})")
+    return out
+
+
+def _refine(plan: Any, prior: QueryResult, question: str, state: ConversationState, nf: str, usage: Usage,
+            scope: Scope) -> Optional[Answer]:
+    """The answer to a follow-up that the previous answer's rows answer by themselves (agent/refine.py), with no
+    query and no model call; None only if its text did not verify (logged), and the usual path answers."""
+    from . import refine
+    max_rows = int(settings().get("data.max_rows", 200))
     parent = state.last.request_id if state.last else ""
     derived = refine.apply(plan, prior, parent=parent, max_rows=max_rows)
     out = Answer(text="", question=question, rewritten_question=f"{state.last_question} — {derived.transform}",
