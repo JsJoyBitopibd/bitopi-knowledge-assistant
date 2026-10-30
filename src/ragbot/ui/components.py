@@ -27,14 +27,14 @@ def inject_css() -> None:
     st.html(f"<style>{css}</style>")       # style only: Streamlit puts it where it takes no space
 
 
-def sortable_table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
+def sortable_table(header: Sequence[str], rows: Sequence[Sequence[Any]], mark: Sequence[str] = ()) -> None:
     """A table whose column names sort it (view.sortable_table_html + sort_table.js, which binds once per page).
     The cells are escaped; the only script is the repo's own sort_table.js."""
-    st.html(view.sortable_table_html(header, rows) + f"<script>{_SORT_JS.read_text(encoding='utf-8')}</script>",
+    st.html(view.sortable_table_html(header, rows, mark) + f"<script>{_SORT_JS.read_text(encoding='utf-8')}</script>",
             unsafe_allow_javascript=True)
 
 
-def answer_text(text: str, results: Sequence[Any] = ()) -> None:
+def answer_text(text: str, results: Sequence[Any] = (), mark: Sequence[str] = ()) -> None:
     """The answer's Markdown, with each Markdown table drawn as a sortable table in its place. A templated answer's
     table previews its result's first rows; it is drawn with all of them, so sorting covers every row returned, and
     the "only the first rows are shown" note is left out of the display (Copy, Export and the logs keep the text)."""
@@ -45,7 +45,7 @@ def answer_text(text: str, results: Sequence[Any] = ()) -> None:
     expanded = any(f is not None for f in full)
     for (kind, part), rows in zip(parts, full):
         if kind == "table":
-            sortable_table(part[0], rows or part[1])
+            sortable_table(part[0], rows or part[1], mark)
             continue
         if expanded:
             part = view.PREVIEW_NOTE.sub("", part)
@@ -125,20 +125,21 @@ def suggestion_pills(title: str, picks: Sequence[str], ask: Callable[[str], None
 
 # ── conversation ──────────────────────────────────────────────────────────────────────────────────────────────
 
-def progress_done(status: Any, refs: Sequence[Any], seconds: Optional[float]) -> None:
+def progress_done(status: Any, refs: Sequence[Any], seconds: Optional[float], kind: str = "", understood: str = "") -> None:
     """Finish a progress line: the design's "✓ Queried rag.vw_X · 432 rows", listing what was read inside."""
-    status.update(label=view.done_label(refs, seconds), state="complete", expanded=False)
+    status.update(label=view.done_label(refs, seconds, kind, understood), state="complete", expanded=False)
     reads = view.read_list(refs)
     if reads:
         with status:
             st.html('<div class="ka-read">' + "".join(f"<span>{view.esc(x)}</span>" for x in reads) + "</div>")
 
 
-def replay_progress(refs: Sequence[Any], seconds: Optional[float]) -> None:
-    progress_done(st.status(view.done_label(refs, seconds), state="complete", expanded=False), refs, seconds)
+def replay_progress(refs: Sequence[Any], seconds: Optional[float], kind: str = "", understood: str = "") -> None:
+    label = view.done_label(refs, seconds, kind, understood)
+    progress_done(st.status(label, state="complete", expanded=False), refs, seconds, kind, understood)
 
 
-def result_tables(refs: Sequence[Any], results: Sequence[Any], text: str = "") -> None:
+def result_tables(refs: Sequence[Any], results: Sequence[Any], text: str = "", mark: Sequence[str] = ()) -> None:
     """C8: the rows behind each [D#] reference, in the answer: a sortable table, and a bar chart for label → number.
     A templated answer already carries the rows as a table in its text (drawn sortable by answer_text); the rows
     are then not repeated."""
@@ -156,7 +157,7 @@ def result_tables(refs: Sequence[Any], results: Sequence[Any], text: str = "") -
             df = present.frame(res)
             st.bar_chart(df.set_index(chart[0])[chart[1]], color="#0E5E50")
         if not in_text:
-            sortable_table(res.columns, [[fmt(v) for v in row] for row in res.rows])
+            sortable_table(res.columns, [[fmt(v) for v in row] for row in res.rows], mark)
         st.caption(present.caption(res))
 
 

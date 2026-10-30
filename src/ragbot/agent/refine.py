@@ -55,10 +55,13 @@ class RefinePlan(BaseModel):
     unresolved: list[str] = Field(default_factory=list)    # words that named a column the result does not have
     regroup: list[str] = Field(default_factory=list)       # … of them, the grouping words ("style wise"): a tool may regroup
     resort: str = ""                             # … the sort word ("sort by colour"): a tool may sort by it
+    # "only zara" when no column of the rows holds "zara": the rows on screen cannot say (they may be a cut, or the
+    # value spelled otherwise), so the earlier query is run again with it as a filter (T4)
+    unknown_filter: str = ""
 
     def empty(self) -> bool:
         return not (self.filters or self.sort or self.limit or self.keep or self.add or self.group_by or self.scalar
-                    or self.distinct or self.page is not None or self.window or self.unresolved)
+                    or self.distinct or self.page is not None or self.window or self.unresolved or self.unknown_filter)
 
 
 # ---------------------------------------------------------------- columns: kinds and words
@@ -223,6 +226,16 @@ def _bare_filter(text: str, r: QueryResult) -> Optional[Filter]:
     return Filter(column=col, op="eq", value=found[0]) if len(found) == 1 else Filter(column=col, op="in", value=found)
 
 
+_VALUE = re.compile(r"[\w&'./ -]+")
+_CLAUSE_WORDS = re.compile(r"\b(?:and|or|how|many|sort|sorted|top|by|wise|show|total)\b", re.I)
+
+
+def _one_value(text: str) -> bool:
+    """Does the text read as one value ("zara", "Kmart Australia", "C/09/7") rather than more clauses?"""
+    t = text.strip()
+    return 0 < len(t.split()) <= 4 and bool(_VALUE.fullmatch(t)) and not _CLAUSE_WORDS.search(t)
+
+
 def _filter(plan: RefinePlan, r: QueryResult, col: str, op_word: str, val: str) -> bool:
     """"OrderQty above 500", "ShipDate between 1 Nov and 15 Nov", "status is cancelled" — on a column of the result."""
     op = dict(_OPS)[op_word]
@@ -334,9 +347,15 @@ def _clause(c: str, r: QueryResult, plan: RefinePlan) -> bool:
         return _filter(plan, r, col, m["op"].lower(), m["val"])
     m = _BARE.match(c)
     if m:
-        f = _bare_filter(m["val"] or m["val2"], r)
+        value = (m["val"] or m["val2"]).strip()
+        f = _bare_filter(value, r)
         if f is not None:
             plan.filters.append(f)
+            return True
+        # "only zara" said in so many words, and no column of these rows holds it: a filter on the earlier query
+        if re.match(r"^(?:(?:show|list|give)\s+(?:me\s+)?)?(?:only|just)\b|\bonly$", c, re.I) and _one_value(value) \
+                and not find_column(value, r):
+            plan.unknown_filter = value.strip("'\"")
             return True
     m = _ADD.match(c)
     if m:
@@ -432,6 +451,8 @@ def needs_requery(plan: RefinePlan, prior: QueryResult, max_rows: int) -> Option
         return "column not in result: " + ", ".join(plan.unresolved)
     if plan.add:
         return "add column: " + ", ".join(plan.add)
+    if plan.unknown_filter:
+        return f"filter on a value the rows do not hold: {plan.unknown_filter}"
     if capped(prior, max_rows) and (plan.filters or plan.sort or plan.group_by or plan.scalar or plan.distinct):
         return "capped"
     return None

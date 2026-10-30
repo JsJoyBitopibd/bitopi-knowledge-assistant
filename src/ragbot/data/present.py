@@ -49,4 +49,6 @@ def chart_columns(r: QueryResult) -> Optional[tuple[str, str]]:
 
 def caption(r: QueryResult) -> str:
     what = ", ".join(r.views) if r.views else r.database
-    return f"{len(r.rows)} row(s) · as of {r.as_of:%d %b %Y %H:%M} · {what}"
+    # Phase T8: rows reshaped from the previous answer say what was done; their time is that query's
+    done = f" · {r.transform}" if r.transform else ""
+    return f"{len(r.rows)} row(s){done} · as of {r.as_of:%d %b %Y %H:%M} · {what}"

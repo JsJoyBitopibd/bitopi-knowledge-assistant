@@ -21,6 +21,12 @@
     return t;
   }
 
+  // a date cell shows "12 Oct 2026" and carries its ISO value in data-v (view.sortable_table_html, Phase T8)
+  function cellText(cell) {
+    if (!cell) return "";
+    return cell.getAttribute("data-v") || cell.textContent;
+  }
+
   document.addEventListener("click", function (e) {
     var btn = e.target && e.target.closest ? e.target.closest("button.ka-sort") : null;
     if (!btn) return;
@@ -40,8 +46,8 @@
     var sign = next === "descending" ? -1 : 1;
     body.sort(function (a, b) {
       if (!next) return Number(a.getAttribute("data-i")) - Number(b.getAttribute("data-i"));
-      var x = value(a.cells[col] ? a.cells[col].textContent : "", kind);
-      var y = value(b.cells[col] ? b.cells[col].textContent : "", kind);
+      var x = value(cellText(a.cells[col]), kind);
+      var y = value(cellText(b.cells[col]), kind);
       if (x === null && y === null) return 0;
       if (x === null) return 1;
       if (y === null) return -1;

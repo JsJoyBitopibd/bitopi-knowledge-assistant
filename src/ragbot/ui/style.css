@@ -212,6 +212,9 @@ th[aria-sort] .ka-sort { color: var(--ink); }
 .ka-sortable td.ka-num { text-align: right; }
 .ka-sortable tr.ka-total td { font-weight: 600; border-top: 1px solid var(--line-strong); }
 .ka-sortable tbody tr:hover td { background: #FAFBF9; }
+/* Phase T8: a row holding a record the question named (an order, a file, a line) */
+.ka-sortable tr.ka-hit td { background: var(--badge); }
+.ka-sortable tr.ka-hit td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* action row under an answer */
 [class*="st-key-actions_"] { gap: 4px; align-items: center; }
@@ -254,6 +257,9 @@ th[aria-sort] .ka-sort { color: var(--ink); }
 
 /* ── composer (input card) ──────────────────────────────────────────────────────────────────────────────── */
 .st-key-composer { gap: 0; }
+/* Phase T8: the input stays at the bottom of the window while a long answer scrolls */
+.st-key-composer { position: sticky; bottom: 0; z-index: 5; background: linear-gradient(to bottom, rgba(244, 245, 242, 0), var(--page) 18px);
+  padding-top: 18px; }
 .st-key-composer [data-testid="stChatInput"] { background: #fff; border: 1px solid var(--line-strong);
   border-radius: 14px 14px 0 0; border-bottom: 0; box-shadow: 0 6px 24px rgba(20, 33, 29, 0.08); padding: 8px 8px 0 10px; }
 .st-key-composer [data-testid="stChatInput"] > div { background: transparent; border: 0; }

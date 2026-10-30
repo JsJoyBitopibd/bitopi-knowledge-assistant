@@ -103,3 +103,16 @@ def test_answer_stream_with_or_without_state_gives_the_same_answer(wire):
         assert isinstance(evs[-1], Final)
     assert outs[0].text == outs[1].text == good
     assert [r.marker for r in outs[0].references] == [r.marker for r in outs[1].references]
+
+
+def test_a_reshape_that_found_nothing_or_a_greeting_keeps_the_table_on_screen():
+    data = _turn("RHL orders next week", [_res(ROWS)], "r1")
+    failed = {**_turn("only zara", [], "r2"), "kind": "requery", "not_found": True}
+    hello = {**_turn("hi", [], "r3", route="meta"), "kind": "social"}
+    for after in ([failed], [hello], [failed, hello]):
+        st = ConversationState.from_history([data, *after], "c")
+        assert st.last_result() is not None and st.anchor_request_id == "r1", after
+    docs = _turn("who approves a PCD change?", [], "r4", route="documents")
+    gone = {**_turn("x", [], "r5"), "not_found": True}
+    for after in ([docs], [gone], [failed, docs]):
+        assert ConversationState.from_history([data, *after], "c").last_result() is None, after

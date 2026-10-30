@@ -411,6 +411,19 @@ def _refine_plan(question: str, state: Optional[ConversationState]) -> Optional[
     return plan, prior, refine.needs_requery(plan, prior, int(settings().get("data.max_rows", 200)))
 
 
+def _asked(plan: Any, prior: QueryResult) -> str:
+    """The change a follow-up asked for, in the user's terms, for the sentence after a not-found."""
+    from .refine import describe
+    if plan.unknown_filter:
+        return f"for \"{plan.unknown_filter}\" only"
+    if plan.window:
+        return f"for {plan.window}"
+    if plan.add:
+        return f"with {', '.join(plan.add)} added"
+    done = describe(plan, prior)
+    return f"({done})" if done else "as you asked"
+
+
 def _requery(plan: Any, prior: QueryResult, reason: str, question: str, state: ConversationState, nf: str,
              usage: Usage, scope: Scope, user: str, refresh: bool) -> Optional[Answer]:
     """The earlier query run again, changed (data/requery.py), answered from a template like any data result. None
@@ -425,6 +438,13 @@ def _requery(plan: Any, prior: QueryResult, reason: str, question: str, state: C
     if r.error:                                    # the next page could not be read: say so, keep the chips
         out.text, out.not_found = nf + " " + prompt("page_unavailable").strip(), True
         out.warnings.append(f"page: {r.error}")
+        return out
+    if not _has_rows([r]) and plan.page is None:
+        # The earlier query, changed as asked, found nothing ("only zara" among RHL's orders for next week). That is
+        # the answer; a fresh question without the earlier filters would answer something else.
+        out.text, out.not_found = nf + " " + prompt("requery_empty").strip().replace("{change}", _asked(plan, prior)), True
+        out.results = [r]
+        out.warnings.append(f"re-ran the earlier query ({reason}): no rows")
         return out
     if not _templated_answer(out, [r], nf, allow_generated=True, scope=scope):
         return None
@@ -542,6 +562,17 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
     if not text:
         return False
     used = [results[0]] + ([results[1]] if merged else [])
+    # Phase T8: one line above a long table saying what its rows hold (agent/summary.py) — computed from the rows,
+    # licensed through `*_label` params; dropped again below if, against expectation, it does not verify
+    plain_first = used[0]
+    if merged is None and describe:
+        from .summary import summarize
+        summ = summarize(results[0])
+        if summ:
+            line, sparams = summ
+            used[0] = used[0].model_copy(update={"params": {**used[0].params, **sparams}})
+            head, sep, rest = text.partition("\n\n")
+            text = f"{head}\n\n{line}\n\n{rest}" if sep else f"{text}\n\n{line}"
     if merged is None and len(results) > 1 and tool is not None and not results[1].error and results[1].rows:
         more = try_template(results[1], comp, marker="D2")
         if more:
@@ -565,6 +596,16 @@ def _templated_answer(out: Answer, results: list[QueryResult], nf: str, allow_ge
         text += "\n\n" + note_text.replace("[D1]", f"[D{len(used)}]")
     block, refs = sources_block([], used)
     ok, problems = verify(text, [], used, nf)
+    if not ok and used[0] is not plain_first:
+        # the summary line is the newest part: without it, the answer is what it was before Phase T8
+        summary_at = text.find("\n\nAcross these ")
+        if summary_at >= 0:
+            end = text.find("\n\n", summary_at + 2)
+            text = text[:summary_at] + (text[end:] if end >= 0 else "")
+        used[0] = plain_first
+        block, refs = sources_block([], used)
+        ok, problems = verify(text, [], used, nf)
+        out.warnings.append("summary line dropped: it did not verify")
     if not ok and described:
         # a stated filter or lead that does not verify (a column name that reads as a code, "SMV10"): the plain
         # template is tried before the answer model is, as it was before queries were described
@@ -671,6 +712,13 @@ def log_feedback(user: str, index: int, thumb: Any, answer_text: str, scope: str
     append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "feedback",
                                           f"turn {index}", "", "", "", "", "", f"thumb={thumb} | {answer_text[:200]}",
                                           "", request_id, "", "", "", ""])
+
+
+def log_stopped(user: str, question: str, scope: str = "") -> None:
+    """A question whose answer the user stopped (Phase T8): logs/chat.csv still shows it was asked."""
+    append_row("chat.csv", _CHAT_HEADER, [datetime.now().isoformat(timespec="seconds"), user, scope, "stopped",
+                                          question, "", "", "", "", "", "stopped by the user before the answer",
+                                          "", "", "", "", "", ""])
 
 
 # `scope` (PRD FR-6.2): what the user was allowed to see when they asked, so an administrator can

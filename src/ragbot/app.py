@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import streamlit as st  # noqa: E402
 
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
-from ragbot.agent.orchestrator import answer_stream, log_feedback  # noqa: E402
+from ragbot.agent.orchestrator import answer_stream, log_feedback, log_stopped  # noqa: E402
 from ragbot.agent.state import ConversationState  # noqa: E402
 from ragbot.auth import session as auth_session  # noqa: E402
 from ragbot.auth.filters import scope_where  # noqa: E402
@@ -502,6 +502,11 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool, o
     """Run answer_stream(): progress in a status line, the draft text as it is written, then the verified
     answer in its place. Returns (the Final Answer, seconds)."""
     t0 = time.perf_counter()
+    # Phase T8: Stop. A click restarts the page, which ends this run at its next update (the next stage or token —
+    # a running database query or model call finishes first); the next run records the question as stopped.
+    stop = st.empty()
+    stop.button("Stop", key=f"stop_{st.session_state.cid}_{len(st.session_state.history)}", type="tertiary",
+                icon=":material/stop_circle:", help="Stop writing this answer")
     status = st.status("Understanding the question…", expanded=False)
     draft = st.empty()
     text, final = "", None
@@ -524,9 +529,38 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool, o
         elif isinstance(ev, Final):
             final = ev.answer
     draft.empty()              # the verified text below replaces the provisional draft
+    stop.empty()
     secs = time.perf_counter() - t0
-    ui.progress_done(status, final.references if final else [], secs)
+    if final is not None:
+        ui.progress_done(status, final.references, secs, final.kind,
+                         _understood({"q": q, "rewritten": final.rewritten_question, "kind": final.kind,
+                                      "route": final.route}))
     return final, secs
+
+
+def _understood(t: dict) -> str:
+    """How a question was read, when that differs from what was typed (a follow-up rewritten with the conversation,
+    a reply to a clarifying question completed) — shown on the progress line (Phase T8). Not for reshapes, re-runs
+    or replies about the conversation, whose rewritten text is internal."""
+    asked, read = str(t.get("q") or "").strip(), str(t.get("rewritten") or "").strip()
+    if not read or read.lower().rstrip("?.! ") == asked.lower().rstrip("?.! "):
+        return ""
+    if t.get("kind") in ("refine", "requery", "meta", "social") or t.get("route") in ("refine", "requery", "meta"):
+        return ""
+    return read
+
+
+def _marks(question: str) -> list[str]:
+    """The records a question names (orders, POs, files, lines, styles, employees): rows holding one are highlighted
+    in the answer's table (Phase T8). Never a factory — that would mark every row."""
+    if not question:
+        return []
+    try:
+        from ragbot.data.entities import question_entities
+        e = question_entities(question)
+        return [str(x) for x in (*e.eos, *e.pos, *e.files, *e.lines, *e.styles, *e.employees)]
+    except Exception:
+        return []
 
 
 def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> None:
@@ -534,9 +568,10 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
     if t.get("error_kind"):
         st.warning(t["text"])   # a friendly quota/timeout/auth message, not a normal answer
         return
-    ui.answer_text(t["text"], t.get("results") or [])    # tables in the answer become sortable tables
+    mark = _marks(t.get("q") or "")
+    ui.answer_text(t["text"], t.get("results") or [], mark)    # tables in the answer become sortable tables
     refs, results = t.get("refs") or [], t.get("results") or []
-    ui.result_tables(refs, results, t["text"])
+    ui.result_tables(refs, results, t["text"], mark)
     if t.get("not_found"):
         st.caption("Try one of the questions below, or add an order number, factory or date to your question."
                    if t.get("follow_ups") else
@@ -545,8 +580,10 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
         with st.popover("Copy", type="tertiary", icon=":material/content_copy:"):
             st.code(t["text"], language=None, wrap_lines=True)
         ui.csv_buttons(refs, results, f"{cid}_{i}")
-        if t.get("q") and (any(r.kind != "pdf" for r in refs)
-                           or (t.get("not_found") and t.get("route") in ("data", "both"))):
+        # not on rows reshaped from the previous answer or a reply about the conversation: re-asking "line wise"
+        # or "you haven't replied?" with the cache bypassed would not read anything new
+        if t.get("q") and t.get("kind") not in ("refine", "meta", "social") and (
+                any(r.kind != "pdf" for r in refs) or (t.get("not_found") and t.get("route") in ("data", "both"))):
             # database answers may come from the short SQL result cache (their as-of time shows when the rows were
             # read); this re-asks the question with the cache bypassed — also on a not-found data answer (P2), so a
             # question whose records arrived since can be asked again live
@@ -576,7 +613,8 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
         # so the transcript shows what was asked and the refine reader answers it without a model call
         ui.follow_ups((t.get("refine_suggestions") or [])[:5], f"rf_{cid}_{i}", ask, label="Refine")
         ui.follow_ups(t.get("follow_ups") or [], f"{cid}_{i}", ask,
-                      label="Questions I can answer" if t.get("not_found") else "Follow up")
+                      label="Questions I can answer" if t.get("not_found")
+                      else "Ask again" if t.get("route") in ("stopped", "meta") else "Follow up")
 
 
 def conversation_head(head) -> None:
@@ -595,6 +633,15 @@ def conversation_head(head) -> None:
 
 def conversation(q: str | None, refresh: bool) -> None:
     hist_all = st.session_state.history
+    stopped = view.dangling_question(hist_all)
+    if stopped is not None:
+        # Phase T8: the previous run ended before its answer (Stop, or a click on anything else while it was being
+        # written). Say so, offer the question again, and keep a line in chat.csv.
+        hist_all.append({"role": "assistant", "text": "Stopped before an answer was written.", "q": stopped,
+                         "refs": [], "results": [], "follow_ups": [stopped], "request_id": "", "seconds": None,
+                         "not_found": False, "error_kind": "", "scope": scope.key(), "route": "stopped",
+                         "kind": "meta"})
+        log_stopped(user, stopped, scope.key())
     head = st.container(key="convo_head")
     with st.container(key="convo_body"):         # keyed so style.css can let the rail wrap under a narrow thread
         thread_col, rail_col = st.columns([2.6, 1], gap="large")
@@ -619,7 +666,7 @@ def conversation(q: str | None, refresh: bool) -> None:
                 st.html(view.user_bubble_html(t["text"]))
                 continue
             with st.chat_message("assistant", avatar=ui.AVATAR):
-                ui.replay_progress(t.get("refs") or [], t.get("seconds"))
+                ui.replay_progress(t.get("refs") or [], t.get("seconds"), t.get("kind") or "", _understood(t))
                 answer_body(t, i, latest=(i == len(hist_all) - 1 and not q), shown=shown)
         if not q:
             conversation_head(head)
@@ -639,7 +686,12 @@ def conversation(q: str | None, refresh: bool) -> None:
             except Exception:  # last-resort guard: never show a raw traceback to a user
                 with open(log_dir() / "errors.log", "a", encoding="utf-8") as fh:
                     fh.write(f"\n=== {datetime.now().isoformat()} q={q!r}\n{traceback.format_exc()}")
-                st.error("Something went wrong answering that. The team has been notified — please try again.")
+                msg = "Something went wrong answering that. The team has been notified — please try again."
+                st.error(msg)
+                # a turn of its own, so the next run does not read the unanswered question as stopped
+                st.session_state.history.append({"role": "assistant", "text": msg, "q": q, "refs": [], "results": [],
+                                                 "error_kind": "other", "route": "error", "request_id": "",
+                                                 "seconds": None, "not_found": True, "scope": scope.key()})
                 conversation_head(head)
                 st.stop()
             i = len(st.session_state.history)   # index this assistant turn will have in history

@@ -94,7 +94,7 @@ def rerun_tool(plan: Any, prior: QueryResult, tool: dict[str, Any], cats: dict[s
     parameter for each; None otherwise (the model is asked instead)."""
     from .modifiers import direction_words, order_clause
     from .tools import _group_by, _sort_column, _window, run_fixed_tool
-    if plan.filters or plan.add or plan.keep or plan.scalar or plan.distinct \
+    if plan.filters or plan.add or plan.keep or plan.scalar or plan.distinct or plan.unknown_filter \
             or set(plan.unresolved) - set(plan.regroup) - ({plan.resort} if plan.resort else set()):
         return None
     specs = tool.get("params") or {}
@@ -160,6 +160,9 @@ def _change(plan: Any, prior: QueryResult) -> str:
         parts.append("compute in the SQL: " + ", ".join(others))
     if plan.window:
         parts.append(f"the same for the period: {plan.window}")
+    if plan.unknown_filter:
+        parts.append(f"keep only the rows for \"{plan.unknown_filter}\" (match it, case aside, in the column that "
+                     "holds such values; keep every other filter)")
     return "; ".join(parts)
 
 

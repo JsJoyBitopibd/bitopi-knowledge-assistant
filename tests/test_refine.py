@@ -103,7 +103,7 @@ def test_what_the_rows_cannot_answer_is_marked_for_a_requery():
 def test_anything_else_is_not_a_refine():
     for msg in ("What is the PCD for export order TAL-25-1493-215?", "Which RHL orders have a ship date next week?",
                 "show TAL orders with a PCD next week", "hi", "who approves a PCD change?", "b+ blood group",
-                "SELECT * FROM rag.vw_ExportOrder", "", "sort it", "only foo"):
+                "SELECT * FROM rag.vw_ExportOrder", "", "sort it", "foo bar baz qux"):
         assert plan(msg) is None, msg
 
 
@@ -159,7 +159,7 @@ def test_count_total_distinct_values():
                                  "only TAL and RHL", "hide DHU", "last 5"])
 def test_every_derived_answer_verifies(msg):
     p = plan(msg)
-    if p is None:
+    if p is None or refine.needs_requery(p, P, 200) is not None:
         return
     d = refine.apply(p, P, parent="r")
     text = try_template(d, None)
@@ -261,3 +261,11 @@ def test_chips_keep_acronyms_and_never_add_up_counts():
     assert refine._chip_words("OrderQty") == "order qty" and refine._chip_words("ExportPONo") == "export PO no"
     grouped = refine.apply(plan("line wise"), P)
     assert not any(c.startswith("Total count") for c in refine.suggestions(grouped))
+
+
+def test_only_a_value_the_rows_do_not_hold_is_a_filter_for_the_earlier_query():
+    p = plan("only uniqlo")
+    assert p.unknown_filter == "uniqlo" and p.filters == []
+    assert refine.needs_requery(p, P, 200) == "filter on a value the rows do not hold: uniqlo"
+    assert plan("uniqlo") is None                     # without "only" a bare unknown word is not read as a filter
+    assert plan("only buyer and line").keep == ["Buyer", "Line"]   # column names still mean columns

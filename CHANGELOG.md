@@ -9,6 +9,14 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Answers are easier to read and to follow** (Phase T8). A long table opens with one line on what is in it — "Across
+  these 141 rows: 20 styles; PCD from 22 Aug 2026 to 24 Oct 2026; total OrderQty 460247" — worked out by the program
+  from the rows. Column headings read as words ("Ship date", "Export order ID"), dates show as "12 Oct 2026" and still
+  sort correctly, and the rows of the order or line you asked about are highlighted. The line above each answer says
+  what happened: "Refined the previous result · 5 of 143 rows · no new query", "Read the next page …", or how a
+  question was understood after a follow-up. The input box stays at the bottom of the window, and a **Stop** button
+  ends an answer that is taking too long. "Only <buyer>" now filters the list on screen even when that buyer is not in
+  the rows shown, and says so plainly when no row matches.
 - **The assistant understands messages about the conversation** (Phase T7). "You showed me the BGL, not TAL" now
   re-asks the previous question for TAL and says so; "you haven't replied?" or "say that again" shows the last answer
   again instead of starting a database search; "what can you tell me about Inventory?" or "which database access do

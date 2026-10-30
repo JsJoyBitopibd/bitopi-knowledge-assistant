@@ -209,7 +209,7 @@ def test_column_kinds():
 def test_sortable_table_html():
     html = view.sortable_table_html(["Buyer", "Orders"], [["H&M", "12"], ["**Total**", "12"]])
     assert '<button type="button" class="ka-sort" title="Sort by Buyer">Buyer' in html
-    assert '<th scope="col" data-kind="num" class="ka-num">' in html and '<td class="ka-num">12</td>' in html
+    assert '<th scope="col" data-kind="num" data-col="Orders" class="ka-num">' in html and '<td class="ka-num">12</td>' in html
     assert '<tr data-i="1" class="ka-total"><td>Total</td>' in html          # emphasis stripped, kept last
     assert "H&amp;M" in html
     evil = view.sortable_table_html([EVIL], [[EVIL]])

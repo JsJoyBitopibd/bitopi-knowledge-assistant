@@ -40,6 +40,7 @@ class ConversationState(BaseModel):
     last_request_id: str = ""
     last_not_found: bool = False
     last_error: bool = False                 # the last answer was a provider or database failure message
+    anchor_request_id: str = ""              # the data answer whose rows are still "the table on screen" (T3/T4)
     pending_clarification: Optional[dict[str, Any]] = None   # set when the last turn asked a question (T6)
 
     @classmethod
@@ -49,21 +50,28 @@ class ConversationState(BaseModel):
         results hold rows; an errored or denied result is never kept."""
         turns: list[PriorTurn] = []
         last: Optional[dict] = None
+        anchor = ""                                 # the request whose rows are "the table on screen"
         for t in history or ():
             if not isinstance(t, dict) or t.get("role") != "assistant":
                 continue
             last = t
             if t.get("error_kind") or t.get("not_found"):
+                # a reshape of the table that found nothing ("only zara") leaves the table where it was; any other
+                # not-found or failure means the user is no longer looking at it
+                if t.get("kind") not in ("refine", "requery"):
+                    anchor = ""
                 continue
             results = [r for r in (t.get("results") or [])
                        if isinstance(r, QueryResult) and r.rows and not r.error and not r.denied]
             if not results:
+                if t.get("kind") not in ("meta", "social"):   # "hi" or "say that again" does not move the table
+                    anchor = ""
                 continue
+            anchor = str(t.get("request_id") or "")
             turns.append(PriorTurn(question=str(t.get("q") or ""), rewritten=str(t.get("rewritten") or ""),
                                    route=str(t.get("route") or ""), text=str(t.get("text") or ""),
-                                   results=results, request_id=str(t.get("request_id") or ""),
-                                   page=int(t.get("page") or 0)))
-        state = cls(conversation_id=conversation_id, turns=turns[-limit:] if limit > 0 else [])
+                                   results=results, request_id=anchor, page=int(t.get("page") or 0)))
+        state = cls(conversation_id=conversation_id, turns=turns[-limit:] if limit > 0 else [], anchor_request_id=anchor)
         if last is not None:
             state.last_question = str(last.get("q") or "")
             state.last_rewritten = str(last.get("rewritten") or "")
@@ -82,11 +90,12 @@ class ConversationState(BaseModel):
         return self.turns[-1] if self.turns else None
 
     def last_result(self) -> Optional[QueryResult]:
-        """The result a follow-up acts on: the first result with rows of the newest data turn — but only when that
-        turn is also the conversation's last answer. After a documents answer or a not-found, "sort by date" has
-        nothing of its own to sort, and reaching back past it would act on rows the user is no longer looking at."""
+        """The result a follow-up acts on: the first result with rows of the newest data turn — the table on screen.
+        A documents answer or a not-found takes it away ("sort by date" then has nothing of its own to sort, and
+        reaching back past it would act on rows the user is no longer looking at); a greeting, a "say that again" or
+        a reshape that found nothing ("only zara") leaves it in place."""
         t = self.last
-        if t is None or (self.last_request_id and t.request_id != self.last_request_id):
+        if t is None or not self.anchor_request_id or t.request_id != self.anchor_request_id:
             return None
         return next((r for r in t.results if r.rows and r.tool != "lookup"), None)
 

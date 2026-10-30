@@ -205,3 +205,26 @@ def test_next_page_through_the_orchestrator(wired, ran):
 def test_another_period_through_the_orchestrator_uses_the_tool_lead(wired, ran):
     a = list(orch.answer_stream("last week?", scope=U, state=_state(_orders(30))))[-1].answer
     assert a.route == "requery" and "TAL order(s) have a ship date last week" in a.text
+
+
+def test_only_a_value_not_in_the_rows_asks_the_model_to_add_the_filter(ran, monkeypatch):
+    chat = Chat(["DATABASE: BitopiSplint\nSELECT TOP (200) ExportOrderID FROM rag.vw_ExportOrder WHERE Factory = 'TAL' "
+                 "AND Buyer LIKE '%uniqlo%'"])
+    monkeypatch.setattr(RQ, "get_chat", lambda: chat)
+    prior = _orders(200)
+    plan = refine.parse("only uniqlo", prior)
+    assert plan.unknown_filter == "uniqlo"
+    RQ.requery(plan, prior, "TAL orders shipping next week?", scope=U)
+    m = chat.seen[0][1][0]
+    assert 'keep only the rows for "uniqlo"' in m and "keep every other filter" in m and "@factory = TAL" in m
+    assert ran[0][0] == "guarded"                    # not a fixed tool re-run: the tool has no buyer parameter
+
+
+def test_an_empty_requery_says_nothing_matches_instead_of_asking_afresh(wired, monkeypatch):
+    empty = QueryResult(database="BitopiSplint", engine="sqlserver", views=["rag.vw_ExportOrder"], sql="SELECT …",
+                        columns=["ExportOrderID"], rows=[])
+    monkeypatch.setattr(RQ, "requery", lambda *a, **k: empty)
+    a = list(orch.answer_stream("only uniqlo", scope=U, state=_state(_orders())))[-1].answer
+    assert a.route == "requery" and a.not_found
+    assert a.text == ("System doesn't have the data. I ran the earlier question again for \"uniqlo\" only, "
+                      "and no rows match.")

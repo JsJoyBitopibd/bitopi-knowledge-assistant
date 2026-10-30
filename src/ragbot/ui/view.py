@@ -157,21 +157,62 @@ def _plain(cell: Any) -> str:
     return s
 
 
-def sortable_table_html(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+_SPLIT_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def humanize(col: Any) -> str:
+    """A column name as a heading: 'ShipDate' -> 'Ship date', 'ExportOrderID' -> 'Export order ID', 'order_qty' ->
+    'Order qty'; acronyms ('DHU', 'PCD') and names that already read as words ('Total OrderQty') are kept (Phase T8).
+    The real name stays on the column's sort button, so a reader can still match it to Show query."""
+    s = _plain(col)
+    if not s or " " in s or (s.isupper() and len(s) <= 5):
+        return s
+    words = [w for part in re.split(r"[_\s]+", s) for w in _SPLIT_CAMEL.split(part) if w]
+    if len(words) <= 1:
+        return s[:1].upper() + s[1:]
+    out = [w if (w.isupper() and len(w) > 1) else w.lower() for w in words]
+    return out[0][:1].upper() + out[0][1:] + " " + " ".join(out[1:])
+
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def display_date(text: str) -> str:
+    """'2026-10-12' -> '12 Oct 2026', '2026-10-12 09:15' -> '12 Oct 2026 09:15' (CLAUDE.md: dates are shown that way;
+    the ISO text stays in the answer, Copy, Export and the cell's data-v for sorting)."""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2})(?::\d{2})?)?$", text or "")
+    if not m or not 1 <= int(m[2]) <= 12:
+        return text
+    return f"{int(m[3])} {_MONTHS[int(m[2]) - 1]} {m[1]}" + (f" {m[4]}" if m[4] else "")
+
+
+def sortable_table_html(header: Sequence[str], rows: Sequence[Sequence[Any]], mark: Iterable[str] = ()) -> str:
     """A table whose column names are sort buttons (ui/sort_table.js does the sorting in the browser). Numbers sit
-    right-aligned; a 'Total' row keeps its place at the bottom; every cell is escaped."""
+    right-aligned; a 'Total' row keeps its place at the bottom; every cell is escaped. Phase T8: headings read as
+    words with the real name on the button's title; dates show as '12 Oct 2026' and sort by their ISO `data-v`; a
+    row holding one of `mark` (the records the question names) is highlighted."""
     kinds = column_kinds(rows, len(header))
     num = ' class="ka-num"'
     head = "".join(
-        f'<th scope="col" data-kind="{k}"{num if k == "num" else ""}>'
-        f'<button type="button" class="ka-sort" title="Sort by {esc(_plain(h))}">{esc(_plain(h))}'
+        f'<th scope="col" data-kind="{k}" data-col="{esc(_plain(h))}"{num if k == "num" else ""}>'
+        f'<button type="button" class="ka-sort" title="Sort by {esc(_plain(h))}">{esc(humanize(h))}'
         '<span class="ka-sort-ic" aria-hidden="true"></span></button></th>'
         for h, k in zip(header, kinds))
+    marks = {str(m).strip().casefold() for m in mark if str(m).strip()}
+
+    def cell(v: Any, k: str) -> str:
+        text = _plain(v)
+        if k == "date":
+            return f'<td data-v="{esc(text)}">{esc(display_date(text))}</td>'
+        return f'<td{num if k == "num" else ""}>{esc(text)}</td>'
+
     body = []
     for i, r in enumerate(rows):
-        total = ' class="ka-total"' if r and _plain(r[0]).lower() == "total" else ""
-        cells = "".join(f'<td{num if k == "num" else ""}>{esc(_plain(v))}</td>' for v, k in zip(r, kinds))
-        body.append(f'<tr data-i="{i}"{total}>{cells}</tr>')
+        classes = ["ka-total"] if r and _plain(r[0]).lower() == "total" else []
+        if marks and any(_plain(v).casefold() in marks for v in r):
+            classes.append("ka-hit")
+        cls = f' class="{" ".join(classes)}"' if classes else ""
+        body.append(f'<tr data-i="{i}"{cls}>{"".join(cell(v, k) for v, k in zip(r, kinds))}</tr>')
     return (f'<div class="ka-table-wrap"><table class="ka-sortable"><thead><tr>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
@@ -188,24 +229,36 @@ def read_list(refs: Sequence[Any]) -> list[str]:
     return out
 
 
-def done_label(refs: Sequence[Any], seconds: Optional[float] = None) -> str:
-    """The progress line once an answer is done (the design's "✓ Queried rag.vw_X · 432 rows")."""
+def done_label(refs: Sequence[Any], seconds: Optional[float] = None, kind: str = "", understood: str = "") -> str:
+    """The progress line once an answer is done (the design's "✓ Queried rag.vw_X · 432 rows"). Phase T8: rows
+    reshaped from the previous answer say so ("Refined the previous result · 5 of 143 rows"), a page says which,
+    a reply that needed no source says that instead of "No source found", and a question completed from a reply to
+    a clarifying question says how it was understood."""
     data = [r for r in refs or [] if r.kind != "pdf"]
     pdfs = [r for r in refs or [] if r.kind == "pdf"]
-    parts = []
+    parts = [f"Understood as “{understood}”"] if understood else []
     if data:
         first = data[0]
         view = ", ".join(first.views or []) or first.tool or first.database
-        rows = f" · {first.row_count:,} row{'s' if first.row_count != 1 else ''}" if first.row_count is not None else ""
+        n = first.row_count
+        rows = f" · {n:,} row{'s' if n != 1 else ''}" if n is not None else ""
         more = f" + {len(data) - 1} more" if len(data) > 1 else ""
-        parts.append(f"Queried {view}{rows}{more}")
+        transform = getattr(first, "transform", None) or ""
+        if transform.startswith("page "):
+            parts.append(f"Read the next page of {view}{rows}{more}")
+        elif transform:
+            src = getattr(first, "source_rows", None)
+            of = f" · {n:,} of {src:,} rows" if n is not None and src else rows
+            parts.append(f"Refined the previous result{of} · no new query")
+        else:
+            parts.append(f"Queried {view}{rows}{more}")
     if pdfs:
         files = sorted({r.source for r in pdfs})
         pages = sorted({r.page for r in pdfs if r.source == files[0] and r.page is not None})
         where = f"{files[0]} p. {', '.join(map(str, pages))}" if pages else files[0]
         parts.append(f"Read {where}" + (f" + {len(files) - 1} more" if len(files) > 1 else ""))
-    if not parts:
-        parts.append("No source found")
+    if not data and not pdfs:
+        parts.append("No database or document needed" if kind in ("social", "meta", "clarify") else "No source found")
     if seconds is not None:
         parts.append(f"{seconds:.1f} s")
     return " · ".join(parts)
@@ -229,8 +282,10 @@ def export_markdown(history: Sequence[dict], title: str, scope_label: str, when:
                                  + (f" · “{r.quote}”" if r.quote else ""))
                 else:
                     asof = f" · as of {r.as_of:%d %b %Y %H:%M}" if r.as_of else ""
+                    derived = f" · derived from the previous answer: {r.transform}" \
+                        if getattr(r, "transform", None) and not str(r.transform).startswith("page ") else ""
                     lines.append(f"- [{r.marker}] {r.database} · {', '.join(r.views or [])} · "
-                                 f"{r.row_count if r.row_count is not None else '?'} row(s){asof}")
+                                 f"{r.row_count if r.row_count is not None else '?'} row(s){asof}{derived}")
                     if r.sql:
                         lines += ["", "  ```sql", *("  " + ln for ln in r.sql.strip().splitlines()), "  ```"]
             lines.append("")
@@ -450,13 +505,24 @@ def source_card_html(ref: Any) -> str:
     # what the query filtered on, so they would read as duplicates of the value beside them.
     params = " · ".join(f"{k} {v}" for k, v in (ref.params or {}).items()
                         if not str(k).endswith("_label") and v not in (None, ""))
+    # Phase T8: rows reshaped from the previous answer keep that query's card, and say what was done to them
+    transform = getattr(ref, "transform", None) or ""
+    derived = bool(transform) and not transform.startswith("page ")
+    src = getattr(ref, "source_rows", None)
+    count = (f"{ref.row_count:,} of {src:,}" if derived and src and ref.row_count is not None
+             else f"{ref.row_count:,}" if ref.row_count is not None else "")
     rows = [("As of", f"{ref.as_of:%d %b %Y %H:%M}" if ref.as_of else "", False),
-            ("Rows", f"{ref.row_count:,}" if ref.row_count is not None else "", False),
+            ("Changed", transform if derived else "", False),
+            ("Page", transform[5:] if transform.startswith("page ") else "", False),
+            ("Rows", count, False),
             ("Filter", params, False),
             ("Row key", "; ".join(ref.row_keys or []), False),
             ("Tool", ref.tool if ref.tool and ref.tool != "generated" else "", True)]
     engine = {"sqlserver": "SQL Server", "mysql": "MySQL", "local": "local copy"}.get(ref.engine or "", ref.engine or "")
-    return (f'<div class="ka-src-head"><span class="ka-src-n">{n}</span><span class="ka-src-kind">Live data · '
+    if derived:
+        engine = "no new query: the rows of the previous answer"
+    kind = "Derived from the previous answer · " if derived else "Live data · "
+    return (f'<div class="ka-src-head"><span class="ka-src-n">{n}</span><span class="ka-src-kind">{kind}'
             f'{esc(ref.database)}</span></div>'
             f'<span class="ka-src-name ka-mono">{esc(", ".join(ref.views or []))}</span>{_dl(rows)}'
             + (f'<span class="ka-src-engine">{esc(engine)}</span>' if engine else ""))
@@ -503,3 +569,12 @@ def risk_html(r: Any) -> Optional[str]:
         parts.append(f'<div class="ka-risk-caveat">{esc(r.caveat)}</div>')
     parts.append("</div>")
     return "".join(parts)
+
+
+def dangling_question(history: Sequence[dict]) -> Optional[str]:
+    """The question of a turn that never got its answer — the last turn is the user's, because Stop (or a click on
+    anything else) restarted the page while the answer was being written (Phase T8). None when every question has
+    its answer."""
+    if history and history[-1].get("role") == "user":
+        return str(history[-1].get("text") or "")
+    return None
