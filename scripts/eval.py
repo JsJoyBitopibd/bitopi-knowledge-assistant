@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from ragbot.agent.orchestrator import answer
+from ragbot.agent.state import ConversationState
 from ragbot.auth.models import Scope
 from ragbot.config import settings
 from ragbot.evaluation import (SCORES, baseline_rows, blocks, infra_failure, kind_changed, outage_row, pick_baseline,
@@ -50,6 +51,55 @@ def mean_sub(rows, kind):
     return sum(xs) / len(xs) if xs else 1.0
 
 
+def converse(c: dict) -> tuple[list[dict], Optional[ConversationState], bool]:
+    """Run a conversation case's earlier turns (`turns`: questions, or {"q": …} objects) the way app.py does — each
+    answer stored with its rows, request id and route, the state rebuilt before each turn — and return the history as
+    text, the state for the last question, and whether every earlier turn got an answer."""
+    full: list[dict] = []
+    for t in c.get("turns") or []:
+        q = t["q"] if isinstance(t, dict) else str(t)
+        text = [{"role": h["role"], "text": h["text"]} for h in full]
+        res = answer(q, history=text, user="eval", scope=Scope.unrestricted(),
+                     state=ConversationState.from_history(full, f"eval{c['id']}"))
+        turn = {"role": "assistant", "text": res.text, "q": q, "results": res.results, "request_id": res.request_id,
+                "route": res.route, "rewritten": res.rewritten_question, "not_found": res.not_found,
+                "error_kind": res.error_kind, "kind": res.kind, "clarify": res.clarify}
+        full += [{"role": "user", "text": q}, turn]
+        if infra_failure(res):
+            return [], None, False
+    return ([{"role": h["role"], "text": h["text"]} for h in full],
+            ConversationState.from_history(full, f"eval{c['id']}"), True)
+
+
+def model_calls(res) -> int:
+    """Every model call the answer cost: the answer model (usage) and the SQL, route and rewrite calls, which the
+    request's timings record as llm.<purpose> (ragbot/trace.py)."""
+    return res.usage.calls + sum(1 for k in (res.timings or {}) if str(k).startswith("llm.") and k != "llm.answer")
+
+
+def conversation_checks(c: dict, res) -> list[str]:
+    """The behaviour a conversation case expects of its last answer; the names of the checks that failed."""
+    failed = []
+    routes = c.get("expected_route")
+    if routes and res.route not in ([routes] if isinstance(routes, str) else routes):
+        failed.append(f"route {res.route} not in {routes}")
+    calls = model_calls(res)
+    if c.get("expect_no_model") and calls:
+        failed.append(f"{calls} model call(s)")
+    if c.get("expected_prefix") and not res.text.startswith(c["expected_prefix"]):
+        failed.append("prefix")
+    for s in c.get("expected_contains") or []:
+        if s.lower() not in res.text.lower():
+            failed.append(f"missing {s!r}")
+    if c.get("expected_column") and not any(c["expected_column"] in r.columns for r in res.results):
+        failed.append(f"no column {c['expected_column']}")
+    if c.get("expected_not_rewritten") and res.rewritten_question.strip() != c["q"].strip():
+        failed.append(f"rewritten as {res.rewritten_question!r}")
+    if "expected_not_found" in c and bool(res.not_found) != bool(c["expected_not_found"]):
+        failed.append(f"not_found={res.not_found}")
+    return failed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int); ap.add_argument("--sleep", type=float, default=0.0)
@@ -82,16 +132,28 @@ def main():
             raise SystemExit(2)
     rows = []
     for c in cases:
-        res = answer(c["q"], history=c.get("history"), where={"category": c["category"]} if c.get("category") else None,
-                     user="eval", scope=Scope.unrestricted())   # the golden set; scope leaks: scripts/scope_check.py
-        row = {"id": c["id"], "kind": c.get("kind", ""), "route": res.route, "answer": res.text, "warnings": res.warnings}
+        history, state, earlier_ok = c.get("history"), None, True
+        if "turns" in c:
+            # Phase T9: a scripted conversation — the earlier turns run first, as the app would run them, and only the
+            # last answer is scored
+            history, state, earlier_ok = converse(c)
+        res = answer(c["q"], history=history, where={"category": c["category"]} if c.get("category") else None,
+                     user="eval", scope=Scope.unrestricted(), state=state)   # scope leaks: scripts/scope_check.py
+        row = {"id": c["id"], "kind": c.get("kind", ""), "route": res.route, "answer": res.text, "warnings": res.warnings,
+               "model_calls": model_calls(res)}
         markers = set(re.findall(r"\[([PD]\d+)\]", res.text))
         row["citation_valid"] = 1.0 if markers <= {r.marker for r in res.references} else 0.0
-        if infra_failure(res):
+        if infra_failure(res) or not earlier_ok:
             # the provider was out (quota, timeout): there is no answer to score. Scored, it counted as wrong —
             # and the quota message is marked not-found, so on a not-found case it would have counted as right.
             row.update(citation_valid=None, hit=None, faithful=None, correct=None, unscored=True,
-                       error_kind=res.error_kind)
+                       error_kind=res.error_kind or "earlier turn failed")
+        elif c.get("kind") == "conversation" and not c.get("expected"):
+            # behaviour checks: how the follow-up was handled, not live figures that change every day
+            failed = conversation_checks(c, res)
+            row.update(hit=None, faithful=None, correct=0.0 if failed else 1.0)
+            if failed:
+                row["failed_checks"] = failed
         elif c.get("expected_route"):
             row.update(hit=None, faithful=None, correct=1.0 if res.route == c["expected_route"] else 0.0)
         elif c.get("expected_not_found"):
@@ -137,7 +199,8 @@ def main():
                "n": len(rows), "hit_rate": mean("hit"), "faithfulness": mean("faithful"), "correctness": mean("correct"),
                "citation_validity": mean("citation_valid"),
                "not_found_ok": mean_sub(rows, "not_found"), "refuse_ok": mean_sub(rows, "refuse"),
-               "unscored": sum(1 for r in rows if r.get("unscored"))}
+               "unscored": sum(1 for r in rows if r.get("unscored")),
+               "conversation_ok": mean_sub(rows, "conversation")}
     out = ROOT / "eval" / "results"; out.mkdir(parents=True, exist_ok=True)
     stamp = summary["date"].replace(":", "").replace("-", "")
     (out / f"{stamp}.json").write_text(json.dumps({"summary": summary, "rows": rows}, indent=1, ensure_ascii=False),

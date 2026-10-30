@@ -888,3 +888,44 @@ Also deferred: re-running discovery for the other sixteen databases. The JSONs w
 2026-10-04 and the patterns gained `medical, tax, bonus, increment, pay` at 17:17 the same day, so those
 databases offer the model tables the guard then refuses. Read-only, about a minute, and it changes what they
 offer — so it is a decision, not a chore.
+
+# Phase T — dynamic data answers and a chat that follows on → v1.15.0
+
+Asked for on 2026-10-30: "optimize the chatbot so that it can reply dynamically and return any data sorted or found
+using user data, and the user will be able to chat with it a little bit more; improve user experience as well." What
+the code did then: the conversation reached the orchestrator as text only, so the rows, SQL and parameters of the
+previous answer stayed in the UI and every follow-up ("line wise?", "only TAL", "sort by date", "last week?", "show date
+beside the data" — all real questions in logs/chat.csv) became a new question; fixed tools ran their own ORDER BY and
+TOP whatever was asked; nothing could be paged past 200 rows; a three-word new topic was glued onto the previous
+question while a long follow-up without a pronoun never saw it; "You showed me the BGL, not TAL", "you haven't
+replied?" and "hi" got one fixed paragraph. Owner decisions that day: finish the ERP sign-in first and keep the
+person's identity for "my" questions (Phase U), save conversations per user (Phase U), two releases.
+
+Cheapest first, everywhere: the rows already read (Python, no model, no database) → the earlier query run again with
+what changed (a fixed tool's parameters, or the next page; no model) → one model call that changes the earlier
+statement → a new question. The rules that do not move: every figure is a cell of a result or a value the program
+computed from cells (counts and totals) and verifies; a result cut at its row limit is never filtered, grouped, counted
+or sorted in Python; the guard only gains a positive rule (OFFSET for the paging code alone) and a tighter one (a FETCH
+count capped like TOP); no row ever goes to the SQL model; nothing widens the user's scope.
+
+- **T0** ERP sign-in landed, with the person's identity (employee code, company, unit → factory) kept but granting nothing.
+- **T1** `agent/state.py`: the earlier data turns, their results and the last answer reach `answer_stream(state=)`.
+- **T2** `data/modifiers.py`: "sorted by …", "top 10", "last 5" cut out of the question; fixed tools sort through an
+  `order_by` whitelist parameter (9 tools); limits are cut in Python with the true count; the SQL prompt is told.
+- **T3** `agent/refine.py`: filter, group (sums of quantities, never rates), count, total, distinct, sort, cut, hide or
+  keep columns on the rows on screen; a derived `QueryResult` keeps the earlier query's database, SQL and as-of time and
+  states its transform; Refine chips.
+- **T4** `data/requery.py` + `data/paging.py`: the next page; a fixed tool re-run for another period, grouping or sort;
+  one `sql_modify` call for a column the rows lack, a cut list, a value the rows do not hold; an empty re-query says so.
+- **T5** `agent/continuation.py`: follow-up or new, without a model; a follow-up's SQL prompt gets `{context}` (the
+  previous question, statement and shape, never rows); a new question skips the rewrite call.
+- **T6** `agent/clarify.py`: a clarifying question offers its choices as chips and merges the reply into the question.
+- **T7** `agent/meta.py` + `agent/capabilities.py`: corrections, "no reply", capability questions and greetings.
+- **T8** presentation: a summary line from the rows, readable headings, displayed dates, highlighted rows, honest
+  progress lines and source cards for derived rows and pages, a sticky composer and Stop.
+- **T9** the golden set gains scripted conversations (`turns`), scored on behaviour; `scripts/eval.py` runs them.
+- **T10** the gate: the full golden set against the v1.14.0 baseline, the leak suite, then v1.15.0.
+
+Deferred to Phase U (v1.16.0): saved conversations per user, "my / our" questions bound to the signed-in identity, a
+personal home page, and the phone layout. Left out on purpose: share-by-link (a viewer may have another scope), and a
+Stop that interrupts a running database query (Streamlit only stops at the next update).
