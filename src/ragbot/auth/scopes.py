@@ -60,7 +60,8 @@ def scope_for_groups(groups: Iterable[str], cfg: dict[str, Any]) -> Optional[Sco
 
 
 def restriction_problems(cats: dict[str, Any], cfg: dict[str, Any], provider: str, open_groups: Iterable[str],
-                         users: dict[str, Any], agents: Optional[dict[str, Any]] = None) -> tuple[list[str], list[str]]:
+                         users: dict[str, Any], agents: Optional[dict[str, Any]] = None, *,
+                         erp_groups: Iterable[str] = (), erp_admins: Iterable[str] = ()) -> tuple[list[str], list[str]]:
     """Phase S4: (problems, warnings) about the per-database rule as configured — what scripts/check_catalog.py
     prints. A problem is a setting that would deny the wrong people: a `restricted_to:` group that
     config/scopes.yaml does not configure (nobody could read the database), a restriction while sign-in is off
@@ -85,6 +86,14 @@ def restriction_problems(cats: dict[str, Any], cfg: dict[str, Any], provider: st
         if provider == "local" and not set(groups) & held:
             problems.append(f"restricted_to {name}: no account in config/users.yaml holds {', '.join(groups)}"
                             " — nobody can read this database")
+        if provider == "erp":
+            # every ERP user holds auth.erp.groups; the user names in auth.erp.admins also hold the admin groups
+            erp_held = {str(g).lower() for g in erp_groups}
+            if any(str(a).strip() for a in erp_admins):
+                erp_held |= {str(g).lower() for g in cfg.get("admins") or []}
+            if not set(groups) & erp_held:
+                problems.append(f"restricted_to {name}: auth.provider is erp and neither auth.erp.groups nor the admins "
+                                f"hold {', '.join(groups)} — nobody signing in through the ERP can read this database")
     if not restricted:
         warnings.append("not armed: no catalog names restricted_to (Phase S3) — everyone who reaches the app can "
                         "read every database, the people databases included")

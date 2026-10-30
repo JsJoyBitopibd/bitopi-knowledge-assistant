@@ -90,8 +90,51 @@ class Scope(BaseModel):
                 f"g={','.join(sorted(self.groups))}")
 
 
+_IDENT = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def ident_field(v: object) -> str:
+    """An identity value as the ERP sends it, or '' when it is missing or not a short plain code. These values end
+    up as bound SQL parameters and in cache keys (Phase U), so anything but letters, digits, '-' and '_' is dropped."""
+    s = str(v).strip() if isinstance(v, (str, int)) and not isinstance(v, bool) else ""
+    return s if _IDENT.match(s) else ""
+
+
+class Identity(BaseModel):
+    """Who the signed-in person is in the company's own records (Phase T0): what the ERP verify service returns
+    beside the account (docs/ERP_SIGN_IN_API.md). It never grants access — the scope does that — it only lets a
+    question say "my" or "our" (Phase U). Empty for every provider but erp, and for the open user."""
+    model_config = ConfigDict(frozen=True)
+
+    employee_code: str = ""
+    company_id: str = ""
+    unit_id: str = ""
+    department: str = ""
+    home_factory: str = ""          # derived from the company or unit (auth/erp.py); "" when unknown
+
+    @field_validator("employee_code", "company_id", "unit_id", "home_factory", mode="before")
+    @classmethod
+    def _codes(cls, v):
+        return ident_field(v)
+
+    @field_validator("department", mode="before")
+    @classmethod
+    def _department(cls, v):
+        s = str(v or "").strip()
+        return s[:64] if s and all(c.isalnum() or c in " &/-_.()" for c in s) else ""
+
+    def known(self) -> bool:
+        return bool(self.employee_code or self.company_id or self.unit_id)
+
+    def key(self) -> str:
+        """Canonical text for cache keys of questions that say "my"/"our" (Phase U)."""
+        return f"e={self.employee_code};c={self.company_id};u={self.unit_id};h={self.home_factory}"
+
+
 class User(BaseModel):
-    name: str                       # the account name, lower case (sAMAccountName for AD)
+    name: str                       # the account name, lower case (sAMAccountName for AD, the ERP user name)
     display: str = ""
     groups: list[str] = []
     scope: Scope
+    account_id: str = ""            # the ERP's UserCode (auth.provider: erp); "" for the other providers
+    identity: Identity = Identity()

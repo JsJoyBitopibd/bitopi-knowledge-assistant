@@ -85,7 +85,8 @@ def offline(cats) -> int:
     from ragbot.auth.scopes import load_scopes, restriction_problems
     s = settings()
     bad, notes = restriction_problems(cats, load_scopes(), str(s.get("auth.provider") or "local"),
-                                      s.get("auth.open_groups") or [], load_users(), agents)
+                                      s.get("auth.open_groups") or [], load_users(), agents,
+                                      erp_groups=s.get("auth.erp.groups") or [], erp_admins=s.get("auth.erp.admins") or [])
     for p in bad:
         print(f"[offline] {p}")
         problems += 1

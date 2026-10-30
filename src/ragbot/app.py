@@ -20,8 +20,10 @@ import streamlit as st  # noqa: E402
 
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
 from ragbot.agent.orchestrator import answer_stream, log_feedback  # noqa: E402
+from ragbot.auth import session as auth_session  # noqa: E402
 from ragbot.auth.filters import scope_where  # noqa: E402
-from ragbot.auth.providers import open_user, sign_in, sign_in_required  # noqa: E402
+from ragbot.auth.providers import (end_session, open_user, restore_session, session_hours, sign_in,  # noqa: E402
+                                   sign_in_hint, sign_in_required, start_session)
 from ragbot.config import log_dir, settings  # noqa: E402
 from ragbot.index_version import index_version  # noqa: E402
 from ragbot.store import Registry  # noqa: E402
@@ -46,23 +48,45 @@ def _sign_in_form() -> None:
     conversation, so no answer given to someone else can be seen or re-rendered."""
     _, mid, _ = st.columns([1, 1.1, 1])
     with mid:
+        _browser_script()                 # after a sign-out: the browser forgets its session cookie
         st.html(view.brand_html(light=True))
         with st.form("sign_in"):
-            name = st.text_input("User name", placeholder="your Windows (domain) account")
+            name = st.text_input("User name", placeholder=sign_in_hint())
             pw = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Sign in", type="primary", width="stretch")
         if submitted:
             res = sign_in(name, pw)
             if res.user is not None:
+                token = start_session(res.user)
                 st.session_state.clear()
                 st.session_state.user = res.user
+                if token:                 # stay signed in on this browser for auth.session_hours
+                    st.session_state.browser_script = auth_session.set_cookie_js(token, session_hours())
                 st.rerun()
             st.error(_SIGN_IN_ERRORS.get(res.reason, _SIGN_IN_ERRORS["invalid"]))
     st.stop()
 
 
+def _browser_script() -> None:
+    """Run a pending cookie script once: store the session token after a sign-in, forget it after a sign-out."""
+    js = st.session_state.pop("browser_script", None)
+    if js:
+        st.html(js, unsafe_allow_javascript=True)
+
+
+def _cookie_user():
+    """The user a valid session cookie names (auth/session.py), or None. st.context.cookies holds the cookies the
+    browser sent when this page was loaded."""
+    try:
+        return restore_session(st.context.cookies.get(auth_session.COOKIE))
+    except Exception:
+        return None
+
+
 if "user" not in st.session_state:
     guest = open_user()                   # auth.provider: none — one shared, still scoped, user; no form
+    if guest is None:
+        guest = _cookie_user()            # signed in earlier on this browser: no form after a reload
     if guest is None:
         _sign_in_form()
     st.session_state.user = guest
@@ -296,8 +320,11 @@ with st.sidebar:
     footer = f"Signed in as {me.display or me.name}" if sign_in_required() else "Open access · no sign-in"
     st.html(view.data_status_html(fresh, footer, _index_note(ver, _scan, scope.is_admin)))
     if sign_in_required() and st.button("Sign out", key="sign_out", width="stretch"):
+        end_session(me)               # this account's session tokens stop working, on every browser
         st.session_state.clear()      # the next person starts with no history, refs or PDF buttons
+        st.session_state.browser_script = auth_session.clear_cookie_js()
         st.rerun()
+    _browser_script()                 # after a sign-in: the browser keeps the session token
     # route, tokens and raw warnings (which can quote database errors) are for administrators only
     admin = st.toggle("Admin details", value=False, help="Show routing and token counts under each answer") \
         if scope.is_admin else False

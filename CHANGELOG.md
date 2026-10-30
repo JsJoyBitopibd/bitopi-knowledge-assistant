@@ -9,6 +9,15 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Staff can sign in with their BIS / BiMob user name and password** (Phase T0, `auth.provider: erp`). The
+  assistant never reads or compares passwords: it asks the ERP team's verify service (`docs/ERP_SIGN_IN_API.md`)
+  and accepts only a reply that follows the contract; anything else (wrong key, rate limit, server error, timeout,
+  an odd reply) is "the sign-in service cannot be reached", never a sign-in. A signed-in user stays signed in on
+  that browser for 12 hours (`auth.session_hours`) and Sign out ends the session on every browser. The employee
+  code, company, unit and department the service returns are kept on the user, each only when it is a short plain
+  code, together with the factory they point at; they grant nothing and are there for "my" and "our" questions in
+  a later release. Every attempt is written to `logs/auth.csv` without the password. Switched off until the owner
+  sets `auth.provider: erp`; `scripts/mock_erp_verify.py` is a stand-in for trying it.
 - **A data answer now says what it looked for.** A list used to open with "Found 100 matching rows" and nothing
   else, so "Which Shipments are at risk?" never said that "at risk" had been read as "past the ship date and not
   invoiced", nor that 100 was the query's limit rather than the total. The line above the table now states the

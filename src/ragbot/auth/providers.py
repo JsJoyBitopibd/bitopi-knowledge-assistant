@@ -5,8 +5,10 @@
   LDAP_DOMAIN, LDAP_BASE_DN; optional LDAP_PORT, LDAP_USE_SSL (default true; false = StartTLS),
   LDAP_CA_FILE, LDAP_TLS_VALIDATE (default true).
 - local: config/users.yaml with bcrypt hashes (scripts/add_local_user.py) — development and tests only.
+- erp: the company system's own user name and password, checked by the ERP team's verify service
+  (auth/erp.py, contract in docs/ERP_SIGN_IN_API.md).
 
-Passwords are never logged or stored. An empty password is refused before any bind: Active Directory
+Every attempt is logged to logs/auth.csv (time, account, result, duration). Passwords are never logged or stored. An empty password is refused before any bind: Active Directory
 treats a simple bind with an empty password as an anonymous bind and reports success.
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ from typing import Any, Optional, Protocol
 import yaml
 
 from ..config import env, settings
-from .models import User
+from .models import Identity, User
 from .scopes import load_scopes, scope_for_groups
 
 _ACCOUNT = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -76,7 +78,26 @@ class LocalProvider:
         u = {k.lower(): v for k, v in users.items()}.get(name)
         if not u or not bcrypt.checkpw(password.encode("utf-8"), str(u.get("password_hash", "")).encode("utf-8")):
             return AuthResult(None, "invalid")
-        return _result(name, u.get("name", ""), list(u.get("groups") or []), self.cfg)
+        return _with_identity(_result(name, u.get("name", ""), list(u.get("groups") or []), self.cfg), u)
+
+    def restore(self, name: str, display: str = "", account_id: str = "",
+                identity: Optional[dict[str, Any]] = None) -> Optional[User]:
+        """A user from a signed session: still in config/users.yaml, with the groups the file gives today."""
+        u = {k.lower(): v for k, v in load_users(self.users_file).items()}.get(account_name(name))
+        if not u:
+            return None
+        return _with_identity(_result(account_name(name), u.get("name", ""), list(u.get("groups") or []), self.cfg), u).user
+
+
+def _with_identity(res: AuthResult, spec: dict[str, Any]) -> AuthResult:
+    """A local account may carry an `identity:` block (employee_code, company_id, unit_id, department) so personal
+    questions can be tried without the ERP (Phase T0). The factory is derived the same way as for an ERP user."""
+    ident = spec.get("identity") if isinstance(spec, dict) else None
+    if res.user is not None and isinstance(ident, dict):
+        from .erp import home_factory
+        base = Identity(**{k: ident.get(k) for k in ("employee_code", "company_id", "unit_id", "department")})
+        res.user.identity = base.model_copy(update={"home_factory": home_factory(base.company_id, base.unit_id)})
+    return res
 
 
 def _cn(dn: str) -> str:
@@ -138,6 +159,12 @@ class LdapProvider:
         return _result(name, display, groups, self.cfg)
 
 
+def _throttle_key(username: str) -> str:
+    """The account a failure counts against. An ERP user name need not be a Windows account name (account_name
+    returns '' for it), and one shared '?' bucket would let five wrong guesses lock out all of them."""
+    return account_name(username) or (username or "").strip().lower()[:128] or "?"
+
+
 class LoginThrottle:
     """At most `max_failures` failed sign-ins per account within `window_s`; then the account is refused
     until the oldest failure leaves the window. Per process, shared by every browser session."""
@@ -155,15 +182,15 @@ class LoginThrottle:
 
     def allowed(self, username: str) -> bool:
         with self._lock:
-            return len(self._trim(account_name(username) or "?", time.monotonic())) < self.max_failures
+            return len(self._trim(_throttle_key(username), time.monotonic())) < self.max_failures
 
     def failed(self, username: str) -> None:
         with self._lock:
-            self._fails[account_name(username) or "?"].append(time.monotonic())
+            self._fails[_throttle_key(username)].append(time.monotonic())
 
     def succeeded(self, username: str) -> None:
         with self._lock:
-            self._fails.pop(account_name(username) or "?", None)
+            self._fails.pop(_throttle_key(username), None)
 
 
 _THROTTLE: Optional[LoginThrottle] = None
@@ -178,32 +205,117 @@ def sign_in(username: str, password: str, provider: Optional[AuthProvider] = Non
             s = settings()
             _THROTTLE = LoginThrottle(int(s.get("auth.max_failures", 5)), int(s.get("auth.lockout_seconds", 600)))
         throttle = _THROTTLE
+    t0 = time.perf_counter()
     if not throttle.allowed(username):
-        return AuthResult(None, "locked")
-    res = (provider or get_provider()).authenticate(username, password)
-    if res.user is None and res.reason == "invalid":
-        throttle.failed(username)
-    elif res.user is not None:
-        throttle.succeeded(username)
+        res = AuthResult(None, "locked")
+    else:
+        try:
+            res = (provider or get_provider()).authenticate(username, password)
+        except Exception as e:                    # a missing .env line or a bad URL: say so in the log, not the UI
+            res = AuthResult(None, "unavailable")
+            _audit(username, f"unavailable: {type(e).__name__}: {str(e)[:200]}", t0)
+            return res
+        if res.user is None and res.reason == "invalid":
+            throttle.failed(username)
+        elif res.user is not None:
+            throttle.succeeded(username)
+    _audit(username, res.reason if res.user is None else "ok", t0)
     return res
 
 
+AUTH_HEADER = ["ts", "provider", "account", "result", "ms"]
+
+
+def _audit(username: str, result: str, t0: float) -> None:
+    """One row per sign-in attempt in logs/auth.csv: who tried, how it ended, how long it took. Never the
+    password. A failed write never blocks a sign-in."""
+    try:
+        from datetime import datetime
+        from ..logs import append_row
+        append_row("auth.csv", AUTH_HEADER, [datetime.now().isoformat(timespec="seconds"), provider_kind(),
+                                             (username or "").strip()[:128], result,
+                                             f"{(time.perf_counter() - t0) * 1000:.0f}"])
+    except Exception:
+        pass
+
+
+def provider_kind() -> str:
+    return str(settings().get("auth.provider", "local")).strip().lower()
+
+
 def get_provider() -> AuthProvider:
-    kind = str(settings().get("auth.provider", "local")).lower()
+    kind = provider_kind()
     if kind == "ldap":
         return LdapProvider.from_env()
     if kind == "local":
         return LocalProvider()
+    if kind == "erp":
+        from .erp import ErpProvider
+        return ErpProvider.from_settings()
     if kind == "none":
         raise RuntimeError("auth.provider is 'none': there is no sign-in (the app uses open_user())")
-    raise RuntimeError(f"auth.provider must be 'ldap', 'local' or 'none', not {kind!r}")
+    raise RuntimeError(f"auth.provider must be 'erp', 'ldap', 'local' or 'none', not {kind!r}")
+
+
+SIGN_IN_HINTS = {"erp": "the user name you use for BIS / BiMob", "ldap": "your Windows (domain) account",
+                 "local": "your assistant account"}
+
+
+def sign_in_hint() -> str:
+    """The user-name field's placeholder: which account the provider expects."""
+    return SIGN_IN_HINTS.get(provider_kind(), "your account")
+
+
+def session_hours() -> float:
+    """How long a sign-in lasts on one browser (auth/session.py); 0 = sign in on every page load. Only providers
+    that can rebuild a user without the password (erp, local) keep one: an AD user's groups need a bind."""
+    if provider_kind() not in ("erp", "local"):
+        return 0.0
+    try:
+        return max(0.0, float(settings().get("auth.session_hours", 12)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def start_session(user: User) -> Optional[str]:
+    """The signed token for a user who has just signed in, or None when sessions are off."""
+    hours = session_hours()
+    if hours <= 0:
+        return None
+    from . import session
+    return session.issue(user.name, user.display, provider_kind(), hours, account_id=user.account_id,
+                         identity=user.identity.model_dump())
+
+
+def restore_session(token: Optional[str]) -> Optional[User]:
+    """The user a browser's session cookie names, rebuilt with today's configuration; None when there is no valid
+    token (bad signature, another provider's, expired, signed out) or the account no longer qualifies."""
+    if not token or session_hours() <= 0:
+        return None
+    from . import session
+    claims = session.read(token, provider_kind())
+    if claims is None:
+        return None
+    try:
+        provider = get_provider()
+        return provider.restore(claims["n"], str(claims.get("d") or ""), str(claims.get("a") or ""),
+                                identity=session.identity_from(claims))
+    except Exception:
+        return None
+
+
+def end_session(user: User) -> None:
+    """Sign-out: every session token issued to this account so far stops working, on every browser."""
+    if session_hours() > 0:
+        from . import session
+        session.revoke(user.name)
 
 
 OPEN_USER = "open"
 
 
 def sign_in_required() -> bool:
-    return str(settings().get("auth.provider", "local")).lower() != "none"
+    return provider_kind() != "none"
 
 
 def open_user() -> Optional[User]:

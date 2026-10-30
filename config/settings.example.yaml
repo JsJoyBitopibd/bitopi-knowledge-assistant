@@ -14,10 +14,18 @@ paths:
 # local = config/users.yaml, for development and tests. none = no sign-in: every visitor is one shared user
 # whose scope is open_groups (from config/scopes.yaml) — only where the network decides who reaches the app.
 auth:
-  provider: ldap
+  provider: ldap           # erp = the company system's user name and password (docs/ERP_SIGN_IN_API.md)
   open_groups: [KA-Managers]   # auth.provider: none only; groups not in config/scopes.yaml stop the app
   max_failures: 5          # failed sign-ins per account ...
   lockout_seconds: 600     # ... within this window, then the account waits
+  session_hours: 12        # erp/local: stay signed in on a browser this long (0 = sign in on every page load)
+  erp:                     # auth.provider: erp (.env ERP_VERIFY_URL, ERP_VERIFY_API_KEY)
+    groups: [KA-Managers]  # what every ERP user may see (config/scopes.yaml): the same as open access today
+    admins: []             # ERP user names that also see the admin details and the audit panel
+    timeout_seconds: 5
+    # the ERP's unit_id → factory code, for a person whose company has no factory in config/reference/entities.yaml
+    # (Phase T0). Used only to say "your factory" and to read "my"/"our" in a question; it never widens the scope.
+    unit_factories: {}     # e.g. { "1": TAL, "2": RHL }
 
 scope:
   # a first folder under data/pdfs with one of these names holds that factory's documents (data/pdfs/TAL/…);

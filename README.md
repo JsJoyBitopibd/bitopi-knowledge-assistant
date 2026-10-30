@@ -54,6 +54,16 @@ in every SQL statement (never by the prompt). Setup:
 2. Active Directory: in `config/settings.yaml` set `auth.provider: ldap`; in `.env` set `LDAP_HOST`,
    `LDAP_DOMAIN`, `LDAP_BASE_DN` (LDAPS on 636 by default; `LDAP_USE_SSL=false` uses StartTLS on 389;
    plain LDAP is never used). No service account is needed: the user's own password is checked.
+   The company system's own accounts: `auth.provider: erp` — staff type the user name and password they
+   use for BIS / BiMob, and the assistant asks the ERP team's verify service whether they match (the
+   contract is `docs/ERP_SIGN_IN_API.md`; `.env` sets `ERP_VERIFY_URL` and `ERP_VERIFY_API_KEY`). Every ERP
+   user gets the groups in `auth.erp.groups`; the user names in `auth.erp.admins` also get the admin groups.
+   The service may also return the person's employee code, company and unit: they are kept on the user
+   (never as access) so a later release can answer "my" and "our" questions; `auth.erp.unit_factories` maps
+   a unit to a factory when the company has none. Signed-in users stay signed in on that browser for
+   `auth.session_hours` (12); Sign out ends it on every browser. Every attempt is logged to `logs/auth.csv`
+   without the password. To try it without the ERP: `python scripts/mock_erp_verify.py` with
+   `ERP_VERIFY_ALLOW_HTTP=true` (test accounts in `config/erp_mock_users.example.yaml`).
    For development only, `auth.provider: local` with users added by `python scripts/add_local_user.py`.
    No sign-in at all: `auth.provider: none` — every visitor is one shared user, `open`, whose scope is the
    groups in `auth.open_groups` (they must exist in `config/scopes.yaml`, or the app stops). Anyone who can

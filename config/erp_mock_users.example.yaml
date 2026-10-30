@@ -1,0 +1,16 @@
+# TEST accounts for scripts/mock_erp_verify.py only - never real ERP users or passwords. The mock compares
+# bcrypt hashes; the plain test password is kept here so a tester can sign in to a trial instance.
+# test.user password (mock only): qGKHno3Gu67zzI7M
+users:
+  test.user:
+    password_hash: "$2b$10$up1WikCZHgf5uCpRrwM5O.bbB2upD7rs34eo9q4QGyvbkfyGReq9C"
+    user_code: T0001
+    name: Test User
+    employee_code: T-0001
+    company_id: "02"
+    unit_id: "1"
+  inactive.user:
+    password_hash: "$2b$10$up1WikCZHgf5uCpRrwM5O.bbB2upD7rs34eo9q4QGyvbkfyGReq9C"
+    user_code: T0002
+    name: Inactive Test User
+    active: false
