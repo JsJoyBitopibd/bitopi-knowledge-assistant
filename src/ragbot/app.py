@@ -20,6 +20,7 @@ import streamlit as st  # noqa: E402
 
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
 from ragbot.agent.orchestrator import answer_stream, log_feedback  # noqa: E402
+from ragbot.agent.state import ConversationState  # noqa: E402
 from ragbot.auth import session as auth_session  # noqa: E402
 from ragbot.auth.filters import scope_where  # noqa: E402
 from ragbot.auth.providers import (end_session, open_user, restore_session, session_hours, sign_in,  # noqa: E402
@@ -504,7 +505,10 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool, o
     status = st.status("Understanding the question…", expanded=False)
     draft = st.empty()
     text, final = "", None
-    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh, scope=scope):
+    # Phase T: the earlier answers' rows and queries travel with the question, so a follow-up can reshape them
+    state = ConversationState.from_history(st.session_state.history[:-1], st.session_state.cid,
+                                           int(settings().get("answer.prior_turns", 3)))
+    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh, scope=scope, state=state):
         if isinstance(ev, Stage):
             # the sources appear as soon as the search is done; the model's answer arrives in one burst (I3)
             label = ev.label + (f" Reading: {'; '.join(ev.sources)}" if ev.sources else "")
@@ -636,7 +640,9 @@ def conversation(q: str | None, refresh: bool) -> None:
             i = len(st.session_state.history)   # index this assistant turn will have in history
             turn = {"role": "assistant", "text": a.text, "refs": a.references, "q": q, "results": a.results,
                     "follow_ups": a.follow_ups, "request_id": a.request_id, "seconds": secs,
-                    "not_found": a.not_found, "error_kind": a.error_kind, "scope": scope.key(), "route": a.route}
+                    "not_found": a.not_found, "error_kind": a.error_kind, "scope": scope.key(), "route": a.route,
+                    "rewritten": a.rewritten_question, "kind": a.kind, "refine_suggestions": a.refine_suggestions,
+                    "clarify": a.clarify, "repeat_of": a.repeat_of, "prior_request_id": a.prior_request_id}
             st.session_state.history.append(turn)
             st.session_state.src_turn = None
             answer_body(turn, i, latest=True, shown=i, a=a)

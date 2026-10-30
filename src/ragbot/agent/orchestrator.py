@@ -31,6 +31,7 @@ from ..ttl_cache import TTLCache
 from .citations import normalize_markers, sources_block, verify
 from .events import Event, Final, Replace, Stage, Token
 from .rewrite import standalone_question
+from .state import ConversationState
 from .router import _DOC_HINT, route
 from .templated import is_blank_result
 
@@ -60,10 +61,11 @@ def _answer_key(question: str, where: Optional[dict[str, Any]], scope: Scope) ->
 
 
 def answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-           user: str = "", refresh: bool = False, *, scope: Scope) -> Answer:
+           user: str = "", refresh: bool = False, *, scope: Scope,
+           state: Optional[ConversationState] = None) -> Answer:
     """Blocking entry point: the verified Answer from answer_stream()."""
     final: Optional[Answer] = None
-    for ev in answer_stream(question, history, where, user, refresh, scope=scope):
+    for ev in answer_stream(question, history, where, user, refresh, scope=scope, state=state):
         if isinstance(ev, Final):
             final = ev.answer
     assert final is not None, "answer_stream() must end with a Final event"
@@ -71,16 +73,19 @@ def answer(question: str, history: Optional[list[dict]] = None, where: Optional[
 
 
 def answer_stream(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
-                  user: str = "", refresh: bool = False, *, scope: Scope) -> Iterator[Event]:
+                  user: str = "", refresh: bool = False, *, scope: Scope,
+                  state: Optional[ConversationState] = None) -> Iterator[Event]:
     """Streaming entry point. Always ends with exactly one Final. A provider failure (quota, timeout,
     auth) becomes a soft answer the UI can show instead of a traceback; the raw cause stays in
     warnings and the call log. refresh=True reads the database live (skips the SQL result cache).
     scope: what this user may see (PRD FR-4); required, so no call can forget it.
-    Each call is one request (ragbot/trace.py): the Final answer carries its request_id and timings."""
+    Each call is one request (ragbot/trace.py): the Final answer carries its request_id and timings.
+    state: the conversation so far (agent/state.py, Phase T) — earlier results a follow-up can reshape or re-run;
+    None for a self-contained question (scripts, the eval harness)."""
     drafting = False
     _, ctx = trace.start()
     try:
-        for ev in trace.run_steps(ctx, _answer_stream(question, history, where, user, refresh, scope)):
+        for ev in trace.run_steps(ctx, _answer_stream(question, history, where, user, refresh, scope, state)):
             if isinstance(ev, Token):
                 drafting = True
             elif isinstance(ev, Replace):
@@ -95,7 +100,8 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
 
 
 def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
-                   user: str, refresh: bool, scope: Scope) -> Iterator[Event]:
+                   user: str, refresh: bool, scope: Scope,
+                   state: Optional[ConversationState] = None) -> Iterator[Event]:
     from ..index_version import refresh_if_changed
     refresh_if_changed()   # pick up a background ingest without a restart (cheap: one stat)
     s = settings()
@@ -124,6 +130,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     with trace.span("route"):
         r = _route(q, user)
     out = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
+    if state is not None and state.turns:
+        out.warnings.append(f"state: {len(state.turns)} prior data turn(s)")
 
     if r == "refuse":
         out.text = prompt("refusal").strip()

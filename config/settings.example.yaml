@@ -109,6 +109,7 @@ llm:
 answer:
   not_found_text: "System doesn't have the data."
   history_turns: 3
+  prior_turns: 3           # Phase T: earlier answers whose rows a follow-up may reshape or re-run (agent/state.py)
   cache_ttl_seconds: 3600         # repeat documents question served from cache; 0 = off
   templated: true                 # fixed-tool results written from a template, no model call (C7)
   templated_generated: true       # model-written SQL results too (J3): the rows are the answer, no answer-model call

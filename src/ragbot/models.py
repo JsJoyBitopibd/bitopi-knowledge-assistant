@@ -132,3 +132,9 @@ class Answer(BaseModel):
     request_id: str = ""         # joins this answer's rows in chat.csv, calls.csv and sql.csv (ragbot/trace.py)
     timings: dict[str, float] = Field(default_factory=dict)    # seconds per stage, "total" end to end
     databases_considered: list[str] = Field(default_factory=list)  # catalogs the SQL model saw, also on a not-found (P0)
+    # Phase T: what kind of reply this is, and what a follow-up can do with it
+    kind: str = ""               # refine|requery|clarify|meta|social ("" = an ordinary answer; see `route`)
+    prior_request_id: str = ""   # the earlier answer this one reshaped or re-ran (refine, requery, page)
+    refine_suggestions: list[str] = Field(default_factory=list)  # chips that reshape this answer's rows (agent/refine.py)
+    clarify: Optional[dict[str, Any]] = None   # route clarify: {"slot", "choices"} for the reply chips (T6)
+    repeat_of: str = ""          # a meta reply that shows an earlier answer again: its request_id (T7)
