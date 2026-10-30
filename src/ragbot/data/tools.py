@@ -215,7 +215,54 @@ def tool_sql(tool: dict[str, Any], params: Optional[dict[str, Any]] = None) -> s
             keys = params.get(name) or spec.get("default", [])
             exprs = [spec["columns"][k] for k in keys if k in spec.get("columns", {})]
             sql = sql.replace("{" + name + "}", ", ".join(exprs))
+        elif kind == "order_by":
+            # Phase T2: a sort the question asked for, already rendered by modifiers.order_clause from the tool's
+            # whitelist; anything else falls back to the tool's own order
+            clause = params.get(name)
+            allowed = {f"[{c}]" for c in (spec.get("columns") or {}).values()}
+            if not (isinstance(clause, str) and clause.rsplit(" ", 1)[0] in allowed
+                    and clause.rsplit(" ", 1)[-1] in ("ASC", "DESC")):
+                clause = ""
+            then = spec.get("then", "")
+            if clause and clause.rsplit(" ", 1)[0].strip("[]") == then:
+                then = ""                    # SQL Server refuses a column listed twice in ORDER BY (error 169)
+            sql = sql.replace("{" + name + "}", ", ".join(x for x in (clause, then) if x) if clause
+                              else str(spec.get("default", "")))
     return sql
+
+
+def _sort_column(word: str, spec: dict[str, Any]) -> Optional[tuple[str, str]]:
+    """(column, kind) of an `order_by` parameter's whitelist that the user's sort word means — by the whitelist's
+    own words ("quantity" → OrderQty) or the column's name — and how its direction reads (number, date, text)."""
+    from .modifiers import resolve_column
+    cols: dict[str, str] = spec.get("columns") or {}
+    key = resolve_column(word, list(cols))
+    col = cols[key] if key is not None else resolve_column(word, sorted(set(cols.values())))
+    if col is None:
+        return None
+    kind = "number" if col in (spec.get("numbers") or ()) else "date" if col in (spec.get("dates") or ()) else "text"
+    return col, kind
+
+
+def _modifier_lines(question: str, max_rows: int) -> str:
+    """The sort / limit a question asks for as plain lines for the SQL prompt (Phase T2), or '(none)'."""
+    from .modifiers import strip
+    lines = strip(question)[1].lines(max_rows)
+    return "\n".join(f"- {ln}" for ln in lines) if lines else "(none)"
+
+
+def apply_limit(r: QueryResult, question: str) -> QueryResult:
+    """Phase T2: "top 10", "last 5" applied to a result's rows in Python, in the order the query returned them (the
+    tool's own, or the sort it was asked for). A copy — the cached result is never cut. The labels say how many there
+    were and which were kept, so the lead stays true ("34 orders …; the first 10 are shown") and the figures verify."""
+    from .modifiers import strip
+    _, mods = strip(question)
+    n = mods.limit
+    if not n or r.error or len(r.rows) <= n or (len(r.columns) == 1 and len(r.rows) == 1):
+        return r
+    rows = r.rows[-n:] if mods.from_end else r.rows[:n]
+    labels = {"shown_label": f"{'last' if mods.from_end else 'first'} {n}", "of_rows_label": str(len(r.rows))}
+    return r.model_copy(update={"rows": rows, "params": {**r.params, **labels}})
 
 
 def _expand_list(sql: str, name: str, values: list[Any]) -> tuple[str, dict[str, Any]]:
@@ -300,9 +347,16 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]],
     the next tool can match and a restricted database's recorded values are never resolved or shown."""
     # a pasted card list or table header arrives on many lines; `.` in the patterns does not cross a newline
     question = re.sub(r"\s+", " ", question).strip()
+    # Phase T2: "sorted by quantity", "top 10" are cut out first — the patterns were written for the question
+    # without them — and become the tool's order_by / limit parameters (data/modifiers.py)
+    from .modifiers import strip
+    question, mods = strip(question)
     for tool in tools:
         if tool.get("database") in denied:
             continue
+        specs = tool.get("params") or {}
+        if mods.sort_word and not any(sp.get("type") == "order_by" for sp in specs.values()):
+            continue                                  # a sort this tool's SQL cannot apply: the model writes it
         m = re.search(tool["match"], question)
         if not m:
             continue
@@ -324,6 +378,18 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]],
                 continue
             if spec.get("type") == "measures":
                 params[name] = _measures(question, spec)
+                continue
+            if spec.get("type") == "order_by":
+                if not mods.sort_word:
+                    continue                          # the tool's own order (its `default:`): SQL unchanged
+                hit = _sort_column(mods.sort_word, spec)
+                if hit is None:
+                    break                             # a column this tool does not return: the model writes it
+                col, kind = hit
+                desc = mods.descending if mods.descending is not None else kind == "number"
+                from .modifiers import direction_words, order_clause
+                params[name] = order_clause(col, desc)
+                params["sort_label"] = f"sorted by {col} ({direction_words(desc, kind)})"
                 continue
             if spec.get("type") == "value":
                 # P2.1: a recorded name the question uses — however spelled — from the value index; the bound
@@ -857,6 +923,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
               .replace("{tables}", tables_text or "(none selected for this question)")
               .replace("{values}", "Known values (recorded spellings of words in the question):\n" + values_text)
               .replace("{entities}", "Records the question names (filter on these columns):\n" + entities_text)
+              .replace("{modifiers}", "Sort and limit the user asked for (apply exactly; map the words to a column "
+                                      "of the chosen table):\n" + _modifier_lines(question, int(s["data.max_rows"])))
               .replace("{today}", date.today().isoformat()))
     messages = [{"role": "user", "content": question}]
     fallback = _pick_catalog(question, cats)
@@ -1113,7 +1181,7 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
         if hit:
             tool, params = hit
             if tool["database"] in cats:
-                result = run_fixed_tool(tool, params, cats, user, refresh, scope=scope)
+                result = apply_limit(run_fixed_tool(tool, params, cats, user, refresh, scope=scope), question)
                 a = pick_agent(question, tool)
                 result.agent = a.name if a is not None and agent_readable(a, cats, known) else ""
                 extra = run_companion(tool, result, cats, user, refresh, scope=scope)
@@ -1133,4 +1201,5 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
             if agent is not None:
                 picked = _with_agent_catalog(question, picked, cats, agent, qvec)
         r = generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec, agent=agent.name if agent else "")
+        r = apply_limit(r, question) if r.tool == "generated" else r    # the model's own TOP kept, or cut here
         return [r, *r.lookups]       # the DISTINCT lookups a repair ran are sources too: [D2]… (data/empty_retry.py)

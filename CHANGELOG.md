@@ -9,6 +9,14 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Ask for a sort or a number of rows and get it** (Phase T2). "Which TAL orders have a PCD next week sorted by
+  quantity, top 10?" used to come back in PCD order with every row, because the built-in answer ran its own fixed
+  sort. Now "sorted by …", "highest … first", "top 10", "last 5" and "top 5 lines by DHU" are read from the question:
+  the built-in order answers sort by the column asked for, and the answer says so and keeps the real count — "34
+  TAL order(s) have a PCD next week, sorted by OrderQty (largest first); the first 10 are shown". A sort a built-in
+  answer cannot do is handed to the AI-written query, which is told the sort and limit explicitly. Only column names
+  from a fixed list ever reach the SQL. Behind the scenes (T1), each question now also carries the earlier answers'
+  rows and queries, which the next steps use for follow-ups.
 - **Staff can sign in with their BIS / BiMob user name and password** (Phase T0, `auth.provider: erp`). The
   assistant never reads or compares passwords: it asks the ERP team's verify service (`docs/ERP_SIGN_IN_API.md`)
   and accepts only a reply that follows the contract; anything else (wrong key, rate limit, server error, timeout,

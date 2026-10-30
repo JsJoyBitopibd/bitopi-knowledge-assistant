@@ -33,4 +33,6 @@ Choosing what to query:
 
 {entities}
 
+{modifiers}
+
 Today is {today}.

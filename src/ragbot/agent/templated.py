@@ -107,6 +107,24 @@ def describe_filters(filters: Filters) -> str:
     return " and ".join(f"{col} is {_either(vals)}" for col, vals in filters)
 
 
+def _int(v: Any) -> int:
+    try:
+        return int(str(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+def modifier_note(r: QueryResult) -> str:
+    """', sorted by OrderQty (largest first); the first 10 are shown' — what a sort or a limit the question asked for
+    did (Phase T2, data/tools.apply_limit), from the result's `*_label` parameters, so every figure verifies."""
+    parts = []
+    if r.params.get("sort_label"):
+        parts.append(f", {r.params['sort_label']}")
+    if r.params.get("shown_label"):
+        parts.append(f"; the {r.params['shown_label']} are shown")
+    return "".join(parts)
+
+
 def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False,
                  marker: str = "D1", describe: bool = True) -> Optional[str]:
     """The answer text for one data result, or None when it should be left to the model.
@@ -150,9 +168,16 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
         return pairs + f" [{marker}]."
     n = len(r.rows)
     shown = int(settings().get("answer.template_rows", 25))
-    lead = _fill(tool["answer_list"], r, n=n) if tool.get("answer_list") else None
-    found = f"Found {n} matching row" + ("" if n == 1 else "s")
-    head = explain.lead(desc, n, marker) if lead is None and desc else f"{lead or found} [{marker}]:"
+    # Phase T2: after "top 10" the rows are a cut of what the query returned — the lead counts what there was
+    total = _int(r.params.get("of_rows_label")) or n
+    lead = _fill(tool["answer_list"], r, n=total) if tool.get("answer_list") else None
+    found = f"Found {total} matching row" + ("" if total == 1 else "s")
+    note = modifier_note(r)
+    head = explain.lead(desc, total, marker) if lead is None and desc else f"{lead or found} [{marker}]:"
+    for end in (":", ".") if note else ():
+        if f" [{marker}]{end}" in head:              # a tool's lead ends "[D1]:", a described list's "[D1]."
+            head = head.replace(f" [{marker}]{end}", f"{note} [{marker}]{end}", 1)
+            break
     table = ["| " + " | ".join(r.columns) + " |", "|" + "---|" * len(r.columns)]
     table += ["| " + " | ".join(fmt(v) for v in row) + " |" for row in r.rows[:shown]]
     tail = f"\n\nOnly the first rows are shown here; the query returned {n} in total." if n > shown else ""

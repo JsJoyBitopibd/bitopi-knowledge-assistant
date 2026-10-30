@@ -96,6 +96,7 @@
   answer_list: '{n} {factory} order(s) have a PCD {window}'
   match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\bPCD\b.*\b(this week|next week|next \d+ days)\b|\b(this week|next week|next \d+ days)\b.*\bPCD\b.*\b(TAL|RHL|BGL|KTL)\b'
   params:
+    order_by: { type: order_by, default: 'PCD, ExportOrderID', then: ExportOrderID, numbers: [OrderQty], dates: [PCD, ShipDate], columns: { quantity: OrderQty, qty: OrderQty, 'order quantity': OrderQty, pcd: PCD, 'ship date': ShipDate, shipment: ShipDate, ship: ShipDate, buyer: Buyer, style: StyleName, 'order id': ExportOrderID, order: ExportOrderID, eo: ExportOrderID, po: ExportPONo, factory: Factory } }
     factory: { from_group: [1, 4], upper: true }
     window:  { from_group: [2, 3], type: date_window }
   sql: |
@@ -104,7 +105,7 @@
       PCD, ShipDate, ExportOrderStatus, ShipmentStatus
     FROM rag.vw_ExportOrder
     WHERE Factory = @factory AND PCD >= @from AND PCD < @to
-    ORDER BY PCD, ExportOrderID
+    ORDER BY {order_by}
 
 - name: orders_by_factory_ship_window
   agent: order
@@ -117,6 +118,7 @@
   answer_list: '{n} {factory} order(s) have a ship date {window}'
   match: '(?i)\b(TAL|RHL|BGL|KTL)\b.*\b(ship(?:ment|ping|-|\s+)?date|shipping)\b.*\b(this week|next week|next \d+ days)\b'
   params:
+    order_by: { type: order_by, default: 'ShipDate, ExportOrderID', then: ExportOrderID, numbers: [OrderQty], dates: [PCD, ShipDate], columns: { quantity: OrderQty, qty: OrderQty, 'order quantity': OrderQty, pcd: PCD, 'ship date': ShipDate, shipment: ShipDate, ship: ShipDate, buyer: Buyer, style: StyleName, 'order id': ExportOrderID, order: ExportOrderID, eo: ExportOrderID, po: ExportPONo, factory: Factory } }
     factory: { from_group: 1, upper: true }
     window:  { from_group: 3, type: date_window }
   sql: |
@@ -125,7 +127,7 @@
       PCD, ShipDate, ShipmentStatus
     FROM rag.vw_ExportOrder
     WHERE Factory = @factory AND ShipDate >= @from AND ShipDate < @to
-    ORDER BY ShipDate, ExportOrderID
+    ORDER BY {order_by}
 
 - name: ppm_meetings_by_factory_window
   agent: order
@@ -160,13 +162,14 @@
   answer_list: 'Next PCDs at {factory}: {n} order(s)'
   match: '(?i)\b(TAL|RHL|BGL|KTL|CKDL)\b.*\b(?:upcoming|next|latest|nearest)\s+pcds?\b|\b(?:upcoming|next|latest|nearest)\s+pcds?\b.*\b(TAL|RHL|BGL|KTL|CKDL)\b'
   params:
+    order_by: { type: order_by, default: 'PCD, ExportOrderID', then: ExportOrderID, numbers: [OrderQty], dates: [PCD, ShipDate], columns: { quantity: OrderQty, qty: OrderQty, 'order quantity': OrderQty, pcd: PCD, 'ship date': ShipDate, shipment: ShipDate, ship: ShipDate, buyer: Buyer, style: StyleName, 'order id': ExportOrderID, order: ExportOrderID, eo: ExportOrderID, po: ExportPONo, factory: Factory } }
     factory: { from_group: [1, 2], upper: true }
   sql: |
     SELECT TOP (20) ExportOrderID, Buyer, StyleName, OrderQty, PCD, ShipDate, Factory
     FROM rag.vw_ExportOrder
     WHERE Factory = @factory AND PCD >= CAST(GETDATE() AS date)
       AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
-    ORDER BY PCD, ExportOrderID
+    ORDER BY {order_by}
 
 - name: upcoming_pcds_by_buyer
   agent: order
@@ -179,13 +182,14 @@
   # the buyer is a capitalised word next to "upcoming/next PCD"; factory codes are not buyers
   match: '(?i)\b(?-i:(?!(?:TAL|RHL|BGL|KTL|CKDL|PCD)\b)([A-Z][A-Za-z0-9&.\-]{1,24}))\s+(?:upcoming|next)\s+pcds?\b|\b(?:upcoming|next)\s+pcds?\s+(?:for|of)\s+(?:buyer\s+)?(?-i:(?!(?:TAL|RHL|BGL|KTL|CKDL)\b)([A-Z][A-Za-z0-9&.\-]{1,24}))'
   params:
+    order_by: { type: order_by, default: 'PCD, ExportOrderID', then: ExportOrderID, numbers: [OrderQty], dates: [PCD, ShipDate], columns: { quantity: OrderQty, qty: OrderQty, 'order quantity': OrderQty, pcd: PCD, 'ship date': ShipDate, shipment: ShipDate, ship: ShipDate, buyer: Buyer, style: StyleName, 'order id': ExportOrderID, order: ExportOrderID, eo: ExportOrderID, po: ExportPONo, factory: Factory } }
     buyer: { from_group: [1, 2] }
   sql: |
     SELECT TOP (20) ExportOrderID, Buyer, StyleName, OrderQty, PCD, ShipDate, Factory
     FROM rag.vw_ExportOrder
     WHERE Buyer LIKE '%' + @buyer + '%' AND PCD >= CAST(GETDATE() AS date)
       AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
-    ORDER BY PCD, ExportOrderID
+    ORDER BY {order_by}
 
 - name: upcoming_pcds
   agent: order
@@ -197,11 +201,13 @@
   description: The next PCDs from today across all buyers ("next PCD", "upcoming PCDs", "latest PCD").
   answer_list: 'The next {n} PCD(s) from today'
   match: '(?i)\b(?:upcoming|next|latest|nearest)\s+pcds?\b|\bpcds?\s+(?:coming\s+up|upcoming)\b'
+  params:
+    order_by: { type: order_by, default: 'PCD, ExportOrderID', then: ExportOrderID, numbers: [OrderQty], dates: [PCD, ShipDate], columns: { quantity: OrderQty, qty: OrderQty, 'order quantity': OrderQty, pcd: PCD, 'ship date': ShipDate, shipment: ShipDate, ship: ShipDate, buyer: Buyer, style: StyleName, 'order id': ExportOrderID, order: ExportOrderID, eo: ExportOrderID, po: ExportPONo, factory: Factory } }
   sql: |
     SELECT TOP (20) ExportOrderID, Buyer, StyleName, OrderQty, PCD, ShipDate, Factory
     FROM rag.vw_ExportOrder
     WHERE PCD >= CAST(GETDATE() AS date) AND ExportOrderStatus NOT IN ('CLOSED', 'CANCELLED')
-    ORDER BY PCD, ExportOrderID
+    ORDER BY {order_by}
 
 # ---- Phase K: Stage-1 agent tools (docs/AGENTS_DESIGN.md). `agent:` names the domain agent that owns the
 # tool (config/agents/<agent>.yaml); it is logged with the answer and picks the agent's charter.
@@ -270,6 +276,7 @@
   answer_list: '{n} {factory} line(s) below their day target on the latest production day in the data'
   match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\b(TAL|RHL|BGL)\b.*\blines?\b.*\b(?:below|under|behind|short\s+of|missed?)\b.*\btargets?\b'
   params:
+    order_by: { type: order_by, default: 'ShortPcs DESC', then: LineNumber, numbers: [ShortPcs, DayTarget, OutputPcs], columns: { short: ShortPcs, shortfall: ShortPcs, gap: ShortPcs, target: DayTarget, 'day target': DayTarget, output: OutputPcs, line: LineNumber, unit: Unit, factory: Factory } }
     factory: { from_group: 1, upper: true }
   sql: |
     SELECT TOP (200)
@@ -280,7 +287,7 @@
       AND ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput WHERE Factory = @factory)
     GROUP BY ProductionDate, Factory, Unit, LineNumber
     HAVING SUM(DayTarget) > 0 AND SUM(OutputPcs) < SUM(DayTarget)
-    ORDER BY ShortPcs DESC
+    ORDER BY {order_by}
 
 - name: lines_below_target
   agent: production
@@ -292,6 +299,8 @@
   description: Sewing lines whose output was below their day target on the latest production day in the data (all factories in scope).
   answer_list: '{n} line(s) below their day target on the latest production day in the data'
   match: '(?i)^(?!.*\b(?:most|top|least|per|each|grouped|by\s+(?:supplier|buyer|factory|line|unit|merchandiser|purpose)s?)\b).*?\blines?\b.*\b(?:below|under|behind|short\s+of|missed?)\b.*\btargets?\b'
+  params:
+    order_by: { type: order_by, default: 'ShortPcs DESC', then: LineNumber, numbers: [ShortPcs, DayTarget, OutputPcs], columns: { short: ShortPcs, shortfall: ShortPcs, gap: ShortPcs, target: DayTarget, 'day target': DayTarget, output: OutputPcs, line: LineNumber, unit: Unit, factory: Factory } }
   sql: |
     SELECT TOP (200)
       ProductionDate, Factory, Unit, LineNumber,
@@ -300,7 +309,7 @@
     WHERE ProductionDate = (SELECT MAX(ProductionDate) FROM rag.vw_LineDailyOutput)
     GROUP BY ProductionDate, Factory, Unit, LineNumber
     HAVING SUM(DayTarget) > 0 AND SUM(OutputPcs) < SUM(DayTarget)
-    ORDER BY ShortPcs DESC
+    ORDER BY {order_by}
 
 # "Behind schedule", as a fact the data can show: a confirmed order whose ship date has passed and that
 # has no export invoice yet. The order's own ShipmentStatus is not kept up to date (rag.vw_OrderShipment).
@@ -875,6 +884,7 @@
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(TAL|RHL|BGL)\b).*\b(?:line\s+output|output\s+(?:by|per|of\s+each)\s+line|end[\s-]?line\s+output|lines?\s+output|lines?\s+by\s+output|sewing\s+output)\b'
   unless: *vq_unless
   params:
+    order_by: { type: order_by, default: 'EndlineOutput DESC', then: Line, numbers: [EndlineOutput, Checked], columns: { output: EndlineOutput, 'endline output': EndlineOutput, 'end line output': EndlineOutput, checked: Checked, line: Line, unit: Unit, factory: Factory } }
     window: { from_group: 1, type: date_window, default: 'today' }
     factory: { from_group: 2, upper: true }
   heavy: true
@@ -886,7 +896,7 @@
     FROM rag.vw_LineDayQuality
     WHERE (@factory = '' OR Factory = @factory) AND InspectionDate >= @from AND InspectionDate < @to
     GROUP BY Factory, Unit, Line
-    ORDER BY EndlineOutput DESC
+    ORDER BY {order_by}
 
 - name: endline_output_by_line_window
   agent: production
@@ -900,6 +910,7 @@
   match: '(?i)^(?!.*\b(?:TAL|RHL|BGL)\b)(?=(?:.*?\b({period})\b)?).*\b(?:line\s+output|output\s+(?:by|per|of\s+each)\s+line|end[\s-]?line\s+output|lines?\s+output|lines?\s+by\s+output|sewing\s+output)\b'
   unless: *vq_unless
   params:
+    order_by: { type: order_by, default: 'EndlineOutput DESC', then: Line, numbers: [EndlineOutput, Checked], columns: { output: EndlineOutput, 'endline output': EndlineOutput, 'end line output': EndlineOutput, checked: Checked, line: Line, unit: Unit, factory: Factory } }
     window: { from_group: 1, type: date_window, default: 'today' }
   heavy: true
   sql: |
@@ -910,7 +921,7 @@
     FROM rag.vw_LineDayQuality
     WHERE InspectionDate >= @from AND InspectionDate < @to
     GROUP BY Factory, Unit, Line
-    ORDER BY EndlineOutput DESC
+    ORDER BY {order_by}
 
 - name: rejects_window
   agent: quality
