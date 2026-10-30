@@ -46,6 +46,28 @@ pilot; a viewer URL later).
 | Tool | fixed tool name, or `generated` | |
 | SQL | the exact statement executed | collapsed by default; parameters shown separately |
 
+### Derived result (Phase T3)
+
+A follow-up that only reshapes the previous answer's rows ("only TAL", "line wise", "sort by date, top 10", "how
+many?") is answered in Python from those rows, with no new query. Its `[D#]` is the earlier query's reference —
+same database, view(s), SQL and **as-of time** (no new read happened) — plus what was done to the rows:
+
+```
+[D1]  BitopiSplint (SQL Server) · rag.vw_ExportOrder
+      Derived from the previous answer · where Factory is TAL, first 5 · 5 of 143 rows · as of 30 Oct 2026 09:15
+      Tool: orders_by_factory_ship_window:refined   ▸ show SQL (the earlier statement)
+```
+
+| Field | Source | Notes |
+|---|---|---|
+| Transform | `QueryResult.transform` / `Reference.transform` | written by `agent/refine.describe`, never by the model |
+| Rows | len(rows) of the derived result, and `source_rows` of the earlier one | "5 of 143 rows" |
+| As-of | the earlier query's execution time | unchanged by the reshape |
+
+Counts and sums computed in Python are cells of the derived rows, so the verifier checks them like any returned
+value. A result that stopped at its row limit is never filtered, grouped, counted or sorted in Python: that follow-up
+runs the query again (Phase T4) and gets a normal reference.
+
 ## Not found
 
 When no source answers the question the reply is exactly:

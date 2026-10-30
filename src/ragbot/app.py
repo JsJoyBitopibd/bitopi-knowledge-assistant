@@ -570,6 +570,9 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
                    + f" · {gauge()}"
                    + (f" · {' | '.join(a.warnings)}" if a.warnings else ""))
     if latest:
+        # Phase T3: reshape this answer's rows (agent/refine.py) — the chip's text is sent as the next message,
+        # so the transcript shows what was asked and the refine reader answers it without a model call
+        ui.follow_ups((t.get("refine_suggestions") or [])[:5], f"rf_{cid}_{i}", ask, label="Refine")
         ui.follow_ups(t.get("follow_ups") or [], f"{cid}_{i}", ask,
                       label="Questions I can answer" if t.get("not_found") else "Follow up")
 

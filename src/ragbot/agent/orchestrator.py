@@ -90,6 +90,8 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
                 drafting = True
             elif isinstance(ev, Replace):
                 drafting = False
+            elif isinstance(ev, Final):
+                _refine_chips(ev.answer)
             yield ev
     except LLMError as e:
         if drafting:
@@ -123,6 +125,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             yield Final(_log(a, user, scope)); return
 
     yield Stage("understanding", "Understanding the question…")
+    # Phase T3: a follow-up that only reshapes the previous answer's rows ("only TAL", "line wise", "sort by date",
+    # "top 5", "how many?") is answered from those rows in Python — no rewrite, no routing, no query, no model.
+    refined = _refine(question, state, nf, usage, scope)
+    if refined is not None:
+        yield Stage("refining", "Re-shaping the earlier result…")
+        yield Final(_log(refined, user, scope)); return
     q = question
     if history:
         with trace.span("rewrite"):
@@ -261,6 +269,47 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _refine(question: str, state: Optional[ConversationState], nf: str, usage: Usage,
+            scope: Scope) -> Optional[Answer]:
+    """The answer to a follow-up that the previous answer's rows can answer by themselves (agent/refine.py), or None
+    to go on as usual: no earlier rows, a message that is not a pure reshape, or one that needs the query run again
+    (a column the rows do not have, a cut result, a page, another period — Phase T4)."""
+    if state is None:
+        return None
+    prior = state.last_result()
+    if prior is None:
+        return None
+    from . import refine
+    max_rows = int(settings().get("data.max_rows", 200))
+    plan = refine.parse(question, prior)
+    if plan is None or refine.needs_requery(plan, prior, max_rows) is not None:
+        return None
+    parent = state.last.request_id if state.last else ""
+    derived = refine.apply(plan, prior, parent=parent, max_rows=max_rows)
+    out = Answer(text="", question=question, rewritten_question=f"{state.last_question} — {derived.transform}",
+                 route="refine", kind="refine", usage=usage, prior_request_id=parent, agent=prior.agent)
+    if not _templated_answer(out, [derived], nf, scope=scope):
+        return None                                # should not happen (it is logged): the usual path answers
+    out.follow_ups = []
+    out.warnings = [w for w in out.warnings if w != "templated answer (no model call)"] + ["refined (no model call)"]
+    return out
+
+
+def _refine_chips(a: Answer) -> None:
+    """Chips that reshape a data answer's rows (agent/refine.py suggestions): each one is read back by the refine
+    parser, so a click is answered without a model call or a query."""
+    if a.refine_suggestions or a.not_found or a.error_kind or not a.results:
+        return
+    first = next((r for r in a.results if r.rows and not r.error and r.tool != "lookup"), None)
+    if first is None:
+        return
+    try:
+        from .refine import suggestions
+        a.refine_suggestions = suggestions(first, max_rows=int(settings().get("data.max_rows", 200)))
+    except Exception:
+        a.refine_suggestions = []
 
 
 def _names_a_record(question: str) -> bool:

@@ -68,6 +68,11 @@ class QueryResult(BaseModel):
     candidates: list[str] = Field(default_factory=list)         # recorded values a lookup found when nothing matched (chips)
     checked: bool = False        # a lookup ran or an identifier was filtered: the documents cannot rescue this question
     lookups: list[Any] = Field(default_factory=list)            # the DISTINCT lookups that ran (QueryResult, tool "lookup"): [D2]…
+    # Phase T3/T4: rows reshaped from an earlier answer's result (agent/refine.py) or a re-run of its query. The
+    # database, views, SQL and as_of stay the earlier query's; `transform` says what was done to its rows.
+    transform: str = ""          # "sorted by ShipDate (latest first), first 10" — "" for rows as the query returned them
+    derived_from: str = ""       # the request_id of the answer whose rows these came from
+    source_rows: int = 0         # how many rows that answer's result held
 
     @property
     def row_keys(self) -> list[str]:
@@ -106,6 +111,8 @@ class Reference(BaseModel):
     tool: Optional[str] = None
     sql: Optional[str] = None
     params: Optional[dict[str, Any]] = None
+    transform: Optional[str] = None      # a derived result (Phase T3): what was done to the earlier query's rows
+    source_rows: Optional[int] = None    # … and how many rows that query had returned
 
 
 class Usage(BaseModel):

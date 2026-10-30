@@ -9,6 +9,14 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Follow-ups work on the table you are looking at, instantly** (Phase T3). After a data answer, "only TAL", "line
+  wise", "sort by ship date, top 10", "how many?", "total quantity", "their names" or "hide DHU" used to be sent off
+  as new questions and often came back as the same table. Now they reshape the rows already on screen, in well under
+  a second and with no AI call: "From the earlier answer's 143 rows, where Factory is TAL, first 5: 5 rows [D1]". The
+  source card keeps the original query and its time and says what was done to its rows. Counts and totals are added
+  up by the program, never by the AI, and only for quantities — a rate such as DHU is never re-added. When the rows
+  cannot answer (a column that is not in the table, a list that stopped at its row limit, another period), the
+  question goes on as before. Each data answer also offers a few of these follow-ups as buttons.
 - **Ask for a sort or a number of rows and get it** (Phase T2). "Which TAL orders have a PCD next week sorted by
   quantity, top 10?" used to come back in PCD order with every row, because the built-in answer ran its own fixed
   sort. Now "sorted by …", "highest … first", "top 10", "last 5" and "top 5 lines by DHU" are read from the question:

@@ -60,11 +60,14 @@ def sources_block(chunks: list[Chunk], results: list[QueryResult], max_rows: int
             # the query's filter (factory, date window, order id …): without it neither the answering model
             # nor a reviewer can tell WHICH orders a bare count of 632 refers to
             filt = f" · filter: {', '.join(f'{k}={v}' for k, v in r.params.items())}" if r.params else ""
-            parts.append(f"[{m}] DATABASE {r.database} ({r.engine}) · views: {', '.join(r.views)}{filt} · "
+            # Phase T3: rows reshaped in Python from an earlier answer's query say so, and keep that query's time
+            derived = f" · derived: {r.transform} (from {r.source_rows} rows of the query)" if r.transform else ""
+            parts.append(f"[{m}] DATABASE {r.database} ({r.engine}) · views: {', '.join(r.views)}{filt}{derived} · "
                          f"{len(r.rows)} row(s) as of {r.as_of:%d %b %Y %H:%M}\n{head}\n{body}{more}")
         refs.append(Reference(marker=m, kind="data", database=r.database, engine=r.engine, views=r.views,
                               row_keys=r.row_keys, row_count=len(r.rows), as_of=r.as_of, tool=r.tool, sql=r.sql,
-                              params={k: str(v) for k, v in r.params.items()}))
+                              params={k: str(v) for k, v in r.params.items()},
+                              transform=r.transform or None, source_rows=r.source_rows or None))
     return "<sources>\n" + "\n\n".join(parts) + "\n</sources>", refs
 
 

@@ -125,6 +125,28 @@ def modifier_note(r: QueryResult) -> str:
     return "".join(parts)
 
 
+def _markdown_table(r: QueryResult, shown: int) -> str:
+    table = ["| " + " | ".join(r.columns) + " |", "|" + "---|" * len(r.columns)]
+    table += ["| " + " | ".join(fmt(v) for v in row) + " |" for row in r.rows[:shown]]
+    return "\n".join(table)
+
+
+def derived_text(r: QueryResult, marker: str = "D1") -> str:
+    """The answer for rows reshaped from the earlier answer (Phase T3, agent/refine.py). It says where the rows came
+    from and what was done to them; the count of the earlier rows and every value of the transform are in the
+    result's params (`of_rows_label`, `transform_label`), and every computed figure is a cell, so it all verifies."""
+    src, what = r.source_rows, r.transform
+    if not r.rows:
+        return f"None of the earlier answer's {src} rows match: {what} [{marker}]."
+    if len(r.rows) == 1 and len(r.columns) == 1:
+        return f"{r.columns[0]}: {fmt(r.rows[0][0])} — from the earlier answer's {src} rows, {what} [{marker}]."
+    n = len(r.rows)
+    shown = int(settings().get("answer.template_rows", 25))
+    head = f"From the earlier answer's {src} rows, {what}: {n} row{'' if n == 1 else 's'} [{marker}]:"
+    tail = f"\n\nOnly the first rows are shown here; there are {n} in total." if n > shown else ""
+    return head + "\n\n" + _markdown_table(r, shown) + tail
+
+
 def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated: bool = False,
                  marker: str = "D1", describe: bool = True) -> Optional[str]:
     """The answer text for one data result, or None when it should be left to the model.
@@ -137,6 +159,8 @@ def try_template(r: QueryResult, tool: Optional[dict[str, Any]], allow_generated
     "Col: v · Col: v", more rows as a table under a sentence saying what the query looked for
     (agent/explain.py). The caller adds the filter values to the result's params (filter_params,
     explain.described_params), or a value with digits in it would not verify."""
+    if r.transform and not r.error:
+        return derived_text(r, marker)
     if r.error or not r.rows or not r.columns:
         return None
     if r.tool == "generated" and not allow_generated:
