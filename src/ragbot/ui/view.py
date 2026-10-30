@@ -578,3 +578,27 @@ def dangling_question(history: Sequence[dict]) -> Optional[str]:
     if history and history[-1].get("role") == "user":
         return str(history[-1].get("text") or "")
     return None
+
+
+def unit_line_html(factory: str, unit_id: str = "", company: str = "") -> str:
+    """'Your factory: TAL · Unit 1 · TARASIMA APPARELS LTD.' under the greeting (Phase U3), from the sign-in's identity."""
+    parts = [f"Your factory: {factory}"] + ([f"Unit {unit_id}"] if unit_id else []) + ([company] if company else [])
+    return f'<div class="ka-unit-line">{esc(" · ".join(parts))}</div>'
+
+
+def ago(then_iso: str, now: datetime) -> str:
+    """'just now', '25 minutes ago', '3 hours ago', 'yesterday', '12 Oct 2026'."""
+    try:
+        then = datetime.fromisoformat(str(then_iso))
+    except ValueError:
+        return ""
+    secs = (now - then).total_seconds()
+    if secs < 120:
+        return "just now"
+    if secs < 3600:
+        return f"{int(secs // 60)} minutes ago"
+    if secs < 86400 and then.date() == now.date():
+        return f"{int(secs // 3600)} hour{'s' if secs >= 7200 else ''} ago"
+    if (now.date() - then.date()).days == 1:
+        return "yesterday"
+    return f"{then.day} {then:%b %Y}"

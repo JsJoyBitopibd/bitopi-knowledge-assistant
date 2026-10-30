@@ -140,3 +140,23 @@ def set_cookie_js(token: str, hours: float) -> str:
 
 def clear_cookie_js() -> str:
     return f"<script>document.cookie = '{COOKIE}=; Max-Age=0; Path=/; SameSite=Strict';</script>"
+
+
+# Phase U1: under auth.provider: none everyone is the one shared user "open", so conversations are kept per browser:
+# a random id in this cookie, 400 days, never a secret and never access — only whose Recent list this browser sees.
+BROWSER_COOKIE = "ka_browser"
+
+
+def valid_browser_id(value: Optional[str]) -> Optional[str]:
+    v = (value or "").strip().lower()
+    return v if len(v) == 32 and all(c in "0123456789abcdef" for c in v) else None
+
+
+def new_browser_id() -> str:
+    return secrets.token_hex(16)
+
+
+def set_browser_cookie_js(browser_id: str, days: int = 400) -> str:
+    bid = valid_browser_id(browser_id) or ""
+    return (f"<script>document.cookie = '{BROWSER_COOKIE}={bid}; Max-Age={int(days) * 86400}; Path=/; "
+            "SameSite=Strict';</script>")

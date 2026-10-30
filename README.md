@@ -64,7 +64,11 @@ in every SQL statement (never by the prompt). Setup:
    `auth.session_hours` (12); Sign out ends it on every browser. Every attempt is logged to `logs/auth.csv`
    without the password. To try it without the ERP: `python scripts/mock_erp_verify.py` with
    `ERP_VERIFY_ALLOW_HTTP=true` (test accounts in `config/erp_mock_users.example.yaml`).
-   For development only, `auth.provider: local` with users added by `python scripts/add_local_user.py`.
+   With a known identity, "my" and "our" in a question are read as the person's own employee code and factory
+   (Phase U2, `src/ragbot/agent/personal.py`; a factory only when their scope allows it). Conversations are kept
+   per user on the server (Phase U1, `ui.conversations` in settings, `docs/DATA_ACCESS.md` §7).
+   For development only, `auth.provider: local` with users added by `python scripts/add_local_user.py`; such an
+   account may carry an `identity:` block (`employee_code`, `company_id`, `unit_id`, `department`) to try "my".
    No sign-in at all: `auth.provider: none` — every visitor is one shared user, `open`, whose scope is the
    groups in `auth.open_groups` (they must exist in `config/scopes.yaml`, or the app stops). Anyone who can
    reach port 8501 then gets that scope, so use it only where the network limits who reaches the app.

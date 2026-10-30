@@ -21,6 +21,7 @@ import streamlit as st  # noqa: E402
 from ragbot.agent.events import Final, Replace, Stage, Token  # noqa: E402
 from ragbot.agent.orchestrator import answer_stream, log_feedback, log_stopped  # noqa: E402
 from ragbot.agent.state import ConversationState  # noqa: E402
+from ragbot import conversations  # noqa: E402
 from ragbot.auth import session as auth_session  # noqa: E402
 from ragbot.auth.filters import scope_where  # noqa: E402
 from ragbot.auth.providers import (end_session, open_user, restore_session, session_hours, sign_in,  # noqa: E402
@@ -252,12 +253,86 @@ def _file_current() -> None:
         del st.session_state.convos[10:]
 
 
+# ── Phase U1: conversations kept per user on the server (ragbot/conversations.py) ─────────────────────────────
+def _conv_owner() -> str:
+    """Whom this browser's conversations are stored under: the signed-in account, or under open access this
+    browser's random id (cookie ka_browser) — '' when keeping them is switched off."""
+    s = settings()
+    if not s.get("ui.conversations.enabled", True):
+        return ""
+    if sign_in_required():
+        return me.name
+    if str(s.get("ui.conversations.open_access", "browser")).lower() != "browser":
+        return ""
+    bid = st.session_state.get("browser_id")
+    if not bid:
+        try:
+            bid = auth_session.valid_browser_id(st.context.cookies.get(auth_session.BROWSER_COOKIE))
+        except Exception:
+            bid = None
+        if not bid:
+            bid = auth_session.new_browser_id()
+            st.session_state.browser_script = (st.session_state.get("browser_script") or "") \
+                + auth_session.set_browser_cookie_js(bid)
+        st.session_state.browser_id = bid
+    return f"open:{bid}"
+
+
+def _persist() -> None:
+    """Write the turns added since the last write (one write per answered question). A failure is logged, never
+    shown: the answer on screen matters more than its copy."""
+    owner, hist = st.session_state.get("conv_owner") or "", st.session_state.history
+    done = int(st.session_state.get("saved_upto") or 0)
+    if not owner or len(hist) <= done:
+        return
+    try:
+        conversations.save(st.session_state.cid, owner, scope.key(), view.conversation_title(hist), hist,
+                           from_idx=done)
+        st.session_state.saved_upto = len(hist)
+        st.query_params["c"] = st.session_state.cid            # a reload resumes this conversation
+    except Exception:
+        with open(log_dir() / "errors.log", "a", encoding="utf-8") as fh:
+            fh.write(f"\n=== {datetime.now().isoformat()} conversations.save\n{traceback.format_exc()}")
+
+
+def open_saved(cid: str) -> None:
+    """Open one of this user's saved conversations (Recent), in place of the current one, which is already saved."""
+    loaded = conversations.load(cid, st.session_state.get("conv_owner") or "")
+    if loaded is None:
+        return
+    st.session_state.history, st.session_state.cid = loaded, cid
+    st.session_state.saved_upto, st.session_state.src_turn = len(loaded), None
+    st.query_params["c"] = cid
+
+
+def rename_current() -> None:
+    title = (st.session_state.get("rename_box") or "").strip()
+    if title and conversations.rename(st.session_state.cid, st.session_state.get("conv_owner") or "", title):
+        st.session_state.titles = {**st.session_state.get("titles", {}), st.session_state.cid: title}
+
+
+def delete_current() -> None:
+    """Two clicks: the first arms it, the second deletes and starts an empty conversation."""
+    if not st.session_state.get("confirm_delete"):
+        st.session_state.confirm_delete = True
+        return
+    conversations.delete(st.session_state.cid, st.session_state.get("conv_owner") or "")
+    st.session_state.confirm_delete = False
+    st.session_state.history, st.session_state.saved_upto = [], 0
+    st.session_state.cid, st.session_state.src_turn = uuid.uuid4().hex[:8], None
+    st.query_params.clear()
+
+
 def new_chat() -> None:
-    """New chat files the current conversation under Recent (this browser session only) and starts empty."""
-    _file_current()
+    """New chat starts empty. With conversations kept on the server the current one is already saved and listed
+    under Recent; otherwise it is filed under Recent for this browser session only."""
+    if not st.session_state.get("conv_owner"):
+        _file_current()
     st.session_state.history = []
     st.session_state.cid = uuid.uuid4().hex[:8]
     st.session_state.src_turn = None
+    st.session_state.saved_upto = 0
+    st.query_params.clear()
 
 
 def open_convo(j: int) -> None:
@@ -291,6 +366,24 @@ run, all_signals = _signals()
 factories = view.factories_offered(me.scope, {x.factory for x in all_signals if x.kind == "ops"},
                                    s.get("scope.factory_codes", []) or [])
 
+# ── Phase U1: whose conversations these are, resume after a reload, and the retention purge ──────────────────
+@st.cache_resource(show_spinner=False)
+def _purge_once() -> int:
+    """Old and deleted conversations are removed once per app process (and by scripts/purge_conversations.py)."""
+    try:
+        return conversations.purge(int(s.get("ui.conversations.retention_days", 90)))
+    except Exception:
+        return 0
+
+
+st.session_state.conv_owner = _conv_owner()
+if st.session_state.conv_owner:
+    _purge_once()
+    wanted = st.query_params.get("c")
+    if wanted and not st.session_state.history and not st.session_state.get("resumed"):
+        st.session_state.resumed = True                       # once per browser session: then New chat means new
+        open_saved(wanted)
+
 # ── sidebar ───────────────────────────────────────────────────────────────────────────────────────────────────
 user = me.name
 with st.sidebar:
@@ -308,13 +401,27 @@ with st.sidebar:
     allowed = tuple(sorted((k, tuple(v)) for k, v in scope_where(scope).items()))
     cats = st.multiselect("Document categories", _categories(ver, allowed), placeholder="All categories")
     ui.label("Recent")
-    if st.session_state.history:
-        st.html(view.recent_current_html(view.conversation_title(st.session_state.history)))
-    for j, c in enumerate(st.session_state.convos):
-        st.button(c["title"], key=f"recent_{c['cid']}", type="tertiary", on_click=open_convo, args=(j,),
-                  width="stretch", help=c["title"])
-    if not st.session_state.history and not st.session_state.convos:
-        st.html('<div class="ka-empty-note">Conversations from this session appear here.</div>')
+    if st.session_state.conv_owner:
+        # Phase U1: the user's own conversations from the server, newest first; the open one is highlighted
+        saved = conversations.recent(st.session_state.conv_owner, int(s.get("ui.conversations.recent", 20)))
+        here = next((c["title"] for c in saved if c["id"] == st.session_state.cid), "")
+        if st.session_state.history:
+            st.html(view.recent_current_html(here or view.conversation_title(st.session_state.history)))
+        for c in saved:
+            if c["id"] != st.session_state.cid:
+                st.button(c["title"], key=f"recent_{c['id']}", type="tertiary", on_click=open_saved, args=(c["id"],),
+                          width="stretch", help=c["title"])
+        if not st.session_state.history and not saved:
+            st.html('<div class="ka-empty-note">Your conversations appear here and are kept for '
+                    f'{int(s.get("ui.conversations.retention_days", 90))} days.</div>')
+    else:
+        if st.session_state.history:
+            st.html(view.recent_current_html(view.conversation_title(st.session_state.history)))
+        for j, c in enumerate(st.session_state.convos):
+            st.button(c["title"], key=f"recent_{c['cid']}", type="tertiary", on_click=open_convo, args=(j,),
+                      width="stretch", help=c["title"])
+        if not st.session_state.history and not st.session_state.convos:
+            st.html('<div class="ka-empty-note">Conversations from this session appear here.</div>')
     signals = [x for x in all_signals if scope.allows_factory(x.factory)]
     fresh = view.freshness(run, [x for x in signals if x.kind == "data"], ingest_state, datetime.now(),
                            int(s.get("brief.stale_after_minutes", 180)))
@@ -449,6 +556,25 @@ def _status_text() -> str:
 
 
 # ── home briefing (screen 1) ──────────────────────────────────────────────────────────────────────────────────
+def _home_suggestions() -> list[str]:
+    """Phase U3 (ui/suggest.py): the user's own recent questions, examples for their factory, then the defaults."""
+    from ragbot.agent.capabilities import examples
+    from ragbot.data.tools import load_fixed_tools, match_fixed_tool
+    from ragbot.ui.suggest import home_suggestions
+    owner = st.session_state.get("conv_owner") or ""
+    try:
+        own = conversations.recent_questions(owner, 6) if owner else []
+    except Exception:
+        own = []
+    mine = me.identity.home_factory if me.identity.home_factory and scope.allows_factory(me.identity.home_factory) \
+        else None
+    tools = load_fixed_tools()
+    return home_suggestions(own_recent=own, examples=examples(scope, limit=8), factory=mine,
+                            fallback=s.get("ui.suggestions", []) or [],
+                            still_matches=lambda q: match_fixed_tool(q, tools) is not None,
+                            limit=int(s.get("ui.suggestion_count", 6)))
+
+
 def home() -> None:
     """Phase L (docs/AGENTS_DESIGN.md §4): the viewer's signals from the last watcher run (scripts/watch.py),
     filtered to their factories. Python only — no model call, no database query. Each item asks its question,
@@ -466,6 +592,23 @@ def home() -> None:
                     if facts else "Ask about export orders, PCDs, PPM meetings, SOPs and IT policies. "
                                   "Every answer shows its source.")
         st.html(view.greeting_html(f"{hello}{', ' + first if first else ''}", subtitle))
+        # Phase U3: the signed-in person's own factory (never a narrowing of what they see: the pills stay on All)
+        mine = me.identity.home_factory
+        if mine and scope.allows_factory(mine):
+            company = ""
+            try:
+                from ragbot.data.entities import load_entities
+                c = load_entities().company(me.identity.company_id) if me.identity.company_id else None
+                company = c.name if c is not None else ""
+            except Exception:
+                company = ""
+            st.html(view.unit_line_html(mine, me.identity.unit_id, company))
+        # Phase U1/U3: carry on where the user left off
+        last = conversations.recent(st.session_state.conv_owner, 1) if st.session_state.conv_owner else []
+        if last:
+            st.button(f"Continue: {last[0]['title']} · {view.ago(last[0]['updated'], datetime.now())}",
+                      key="continue_last", type="tertiary", icon=":material/history:", on_click=open_saved,
+                      args=(last[0]["id"],))
         if run is not None and signals:
             limit = int(s.get("brief.max_items", 5))
             # Phase M: Stage-2 levels, read from their own tables (signals.latest() reads the
@@ -493,7 +636,7 @@ def home() -> None:
             if scope.is_admin and run.get("errors"):
                 note += " Watch rules that failed: " + " | ".join(run["errors"])
             st.html(f'<div class="ka-note">{view.esc(note)}</div>')
-        ui.suggestion_pills("Try asking", s.get("ui.suggestions", []) or [], ask)
+        ui.suggestion_pills("Try asking", _home_suggestions(), ask)
         ui.composer(_PLACEHOLDER, scope_label, _take_typed)
 
 
@@ -513,7 +656,8 @@ def stream_answer(q: str, hist: list[dict], where: dict | None, refresh: bool, o
     # Phase T: the earlier answers' rows and queries travel with the question, so a follow-up can reshape them
     state = ConversationState.from_history(st.session_state.history[:-1], st.session_state.cid,
                                            int(settings().get("answer.prior_turns", 3)))
-    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh, scope=scope, state=state):
+    for ev in answer_stream(q, history=hist, where=where, user=user, refresh=refresh, scope=scope, state=state,
+                            me=me.identity):
         if isinstance(ev, Stage):
             # the sources appear as soon as the search is done; the model's answer arrives in one burst (I3)
             label = ev.label + (f" Reading: {'; '.join(ev.sources)}" if ev.sources else "")
@@ -620,15 +764,26 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
 def conversation_head(head) -> None:
     """Title, scope line and Export; filled last, so Export already holds the answer given in this run."""
     hist_all = st.session_state.history
-    title = view.conversation_title(hist_all)
+    owner = st.session_state.get("conv_owner") or ""
+    saved = next((c["title"] for c in conversations.recent(owner, 50) if c["id"] == cid), "") if owner else ""
+    title = saved or view.conversation_title(hist_all)
     with head:
-        left, right = st.columns([6, 1], vertical_alignment="center")
+        left, right = st.columns([5, 2], vertical_alignment="center")
         left.html(view.header_html(title, f"Scope: {scope_label} · Live data + Documents"))
         now = datetime.now()
-        right.download_button("Export", data=view.export_markdown(hist_all, title, f"Scope: {scope_label}", now),
-                              file_name=f"conversation_{now:%Y%m%d_%H%M}.md", mime="text/markdown",
-                              key=f"export_{cid}", disabled=not hist_all, width="stretch",
-                              icon=":material/download:")
+        with right.container(horizontal=True, horizontal_alignment="right", key="convo_actions"):
+            if owner and saved:
+                # Phase U1: the conversation is kept on the server — it can be renamed or deleted here
+                with st.popover("Rename", icon=":material/edit:", type="tertiary"):
+                    st.text_input("Title", value=title, key="rename_box", max_chars=200)
+                    st.button("Save", key=f"rename_{cid}", on_click=rename_current, type="primary")
+                armed = st.session_state.get("confirm_delete")
+                st.button("Delete?" if armed else "Delete", key=f"delete_{cid}", on_click=delete_current,
+                          type="secondary" if armed else "tertiary", icon=":material/delete:",
+                          help="Click again to delete this conversation" if armed else "Delete this conversation")
+            st.download_button("Export", data=view.export_markdown(hist_all, title, f"Scope: {scope_label}", now),
+                               file_name=f"conversation_{now:%Y%m%d_%H%M}.md", mime="text/markdown",
+                               key=f"export_{cid}", disabled=not hist_all, icon=":material/download:")
 
 
 def conversation(q: str | None, refresh: bool) -> None:
@@ -669,6 +824,7 @@ def conversation(q: str | None, refresh: bool) -> None:
                 ui.replay_progress(t.get("refs") or [], t.get("seconds"), t.get("kind") or "", _understood(t))
                 answer_body(t, i, latest=(i == len(hist_all) - 1 and not q), shown=shown)
         if not q:
+            _persist()                    # a stopped question recorded at the top of this run
             conversation_head(head)
             return
         st.session_state.history.append({"role": "user", "text": q})
@@ -692,6 +848,7 @@ def conversation(q: str | None, refresh: bool) -> None:
                 st.session_state.history.append({"role": "assistant", "text": msg, "q": q, "refs": [], "results": [],
                                                  "error_kind": "other", "route": "error", "request_id": "",
                                                  "seconds": None, "not_found": True, "scope": scope.key()})
+                _persist()
                 conversation_head(head)
                 st.stop()
             i = len(st.session_state.history)   # index this assistant turn will have in history
@@ -713,6 +870,7 @@ def conversation(q: str | None, refresh: bool) -> None:
             answer_body(turn, i, latest=True, shown=i, a=a)
     with rail.container():
         ui.sources_rail(turn["refs"], f"{cid}_{i}", fresh, _pdf)
+    _persist()                        # Phase U1: the new turns go to the server once they are shown
     conversation_head(head)
 
 

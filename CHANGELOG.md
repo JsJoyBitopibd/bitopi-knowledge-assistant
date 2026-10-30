@@ -9,6 +9,20 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Your conversations are kept** (Phase U1). A reload, a closed tab or another day no longer loses a conversation: it
+  is saved on the assistant's server under your account (or, without sign-in, this browser), listed under Recent and
+  reopened with its tables and sources; it can be renamed or deleted, and it is removed after 90 days untouched.
+  Rows from a restricted database (the people data, once restricted) are never saved: the conversation keeps the text
+  and reads the rows again, live, when you press Refresh data.
+- **"My" and "our" mean you** (Phase U2). Signed in with your BIS / BiMob account, "How many of our orders are shipping
+  next week?" is read as your factory's orders and "my attendance this month" as yours — the line above the answer
+  shows how it was read. It never opens a factory or database you cannot already see; without a known identity the
+  assistant asks for your employee code.
+- **A home page for you** (Phase U3): "Your factory: TAL · Unit 1 · …" under the greeting, a button to continue your
+  last conversation, and suggestions from your own recent questions and your factory before the general ones.
+- **On a phone** (Phase U4) the suggestion buttons wrap, wide tables keep their first column in view, and the sources
+  fit on one line each.
+- The golden set now holds 16 scripted conversations (Phase T9) that check how follow-ups are handled.
 - **Answers are easier to read and to follow** (Phase T8). A long table opens with one line on what is in it — "Across
   these 141 rows: 20 styles; PCD from 22 Aug 2026 to 24 Oct 2026; total OrderQty 460247" — worked out by the program
   from the rows. Column headings read as words ("Ship date", "Export order ID"), dates show as "12 Oct 2026" and still

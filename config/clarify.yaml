@@ -21,3 +21,13 @@
   ask: "For which factory — TAL, RHL, BGL, KTL or CKDL? (Or say \"all factories\".)"
   slot: factory
   choices: factories
+
+- name: my_employee_unknown
+  # Phase U2: "my attendance", "my salary" when the sign-in did not say who the person is in the HR records (open
+  # access, LDAP, a local account without an identity:) — ask for the code instead of answering for nobody or everyone.
+  # With a known identity agent/personal.py has already put the code in place, so this rule does not fire.
+  # "my"/"myself" only: "show me attendance of TAL" is not about the asker
+  match: '(?i)\b(?:my|myself)\b.*\b(?:attendance|present|absent|salary|pay|payslip|overtime|leave|leaves|in[\s-]?time|out[\s-]?time|punch|punches|shift)\b|\b(?:attendance|salary|payslip|overtime|leave)\b.*\b(?:my|myself)\b'
+  unless: '(?i)\bemployee\s*(?:id|code|no\.?)?\s*[:#]?\s*[A-Za-z]{0,4}-?\d{2,}'
+  ask: "Which employee code is yours? (For example E0456.) This sign-in does not say who you are in the HR records."
+  slot: employee

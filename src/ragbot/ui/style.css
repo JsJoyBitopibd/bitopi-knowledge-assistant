@@ -287,7 +287,30 @@ th[aria-sort] .ka-sort { color: var(--ink); }
   .ka-user-bubble { max-width: 300px; }          /* design screen 03 (mobile chat) */
   .ka-greeting h1 { font-size: 28px; }
   .ka-kpi-value { font-size: 36px; }
+  /* Phase U4, design screen 03 (390 px): chips wrap into rows with thumb-sized targets */
+  .st-key-try [data-testid="stHorizontalBlock"], [class*="st-key-fu_"] { flex-wrap: wrap; gap: 8px; }
+  [class*="st-key-fu_"] button, .st-key-try button { min-height: 40px; }
+  /* the sources as one-line cards under the answer: what and when; the detail stays behind Show query on a desktop */
+  .ka-rail-title { margin-top: 14px; }
+  [class*="st-key-src_"] .ka-dl, [class*="st-key-src_"] .ka-quote, [class*="st-key-src_"] .ka-src-engine,
+  [class*="st-key-src_"] [data-testid="stExpander"], .ka-fresh-card, .ka-disclaimer { display: none; }
+  [class*="st-key-src_"] .ka-src-head { margin: 0; }
+  [class*="st-key-src_"] .ka-src-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* a wide table scrolls sideways with its first column kept in view */
+  .ka-table-wrap { max-height: 60vh; }
+  .ka-sortable th:first-child, .ka-sortable td:first-child { position: sticky; left: 0; background: #fff; z-index: 2; }
+  .ka-sortable th:first-child { z-index: 3; background: var(--page); }
+  .ka-sortable td { padding: 8px 10px; }
+  /* a pill-shaped composer; the header keeps its icons and drops the words */
+  .st-key-composer [data-testid="stChatInput"] { border-radius: 22px; border-bottom: 1px solid var(--line-strong); }
+  .ka-composer-meta { display: none; }
+  .st-key-convo_actions button p { display: none; }
+  [data-testid="stChatMessage"] { gap: 10px; }
+  [class*="st-key-attn_"] [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
 }
+
+/* Phase U3: the signed-in person's own factory, under the greeting */
+.ka-unit-line { margin: -6px 0 14px; font-size: 14px; color: var(--ink-2); }
 
 /* ── Stage-2 quality risk (Phase M) ──────────────────────────────────────────────────────────────────────
    Sits under the KPI row, beside the health score rather than inside it: the score is one check per watch

@@ -292,3 +292,22 @@ Every connection still opens with `autocommit=False`, and the connector issues a
 `ROLLBACK` in a `finally` block before closing, whether the query succeeded or failed
 (`src/ragbot/data/connectors.py`) — belt and braces alongside the guard and the read-only login
 (section 1; until 2026-10-04 the build ran as `sa`, which had no server-side write restriction of its own).
+
+## 7. What the assistant keeps of a conversation (Phase U1)
+
+Conversations are kept on the server so a user finds them again after a reload: `data/index/conversations.db`
+(SQLite, beside the index, git-ignored), one row per conversation and one per message, written once per answered
+question by `src/ragbot/conversations.py`. What is stored: the question, the answer's text, its references and the
+rows its answer showed (at most `data.max_rows` per result, at most 512 KB per answer, else the rows are left out).
+
+- **Per user.** Every read names the user; another user's conversation id returns nothing. Under `auth.provider:
+  none` the "user" is the browser (a random id in the cookie `ka_browser`), so people sharing one browser share one
+  list; `ui.conversations.open_access: off` stops keeping them in that case. Administrators get no read of other
+  users' conversations here; the audit panel keeps `logs/chat.csv`.
+- **Never the rows of a restricted database.** An answer from a catalog with `restricted_to:` is stored without its
+  rows and row keys and with its tables taken out of the text; on resume, Refresh data reads them again live under
+  the user's scope of that day. If the catalogs cannot be read, no rows are stored at all.
+- **Retention.** `ui.conversations.retention_days` (90): conversations untouched that long, and the ones a user
+  deleted, are removed when the app starts and by `scripts/purge_conversations.py`.
+- **Not encrypted at rest.** The file has the protection of the server's disk, like the index and the logs.
+- **Nothing is written to any production database** (non-negotiable 7): this is the assistant's own file.

@@ -118,6 +118,11 @@ answer:
 
 ui:
   title: "Bitopi Knowledge Assistant · pilot"
+  conversations:                 # Phase U1: kept per user on the server (data/index/conversations.db)
+    enabled: true
+    retention_days: 90           # untouched for this long → deleted (and deleted ones at once), on app start
+    recent: 20                   # how many the sidebar lists
+    open_access: browser         # auth.provider none: keep them per browser (cookie ka_browser) | off
   suggestions:
     - "Show me the QC summary today"
     - "Which lines are above the DHU target today?"

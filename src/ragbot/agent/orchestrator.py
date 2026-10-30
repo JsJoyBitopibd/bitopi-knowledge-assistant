@@ -19,7 +19,7 @@ from typing import Any, Iterator, Optional
 
 from .. import trace
 from . import not_found
-from ..auth.models import Scope
+from ..auth.models import Identity, Scope
 from ..config import log_dir, prompt, settings
 from ..data.errors import friendly_llm
 from ..llm import get_chat
@@ -62,10 +62,10 @@ def _answer_key(question: str, where: Optional[dict[str, Any]], scope: Scope) ->
 
 def answer(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
            user: str = "", refresh: bool = False, *, scope: Scope,
-           state: Optional[ConversationState] = None) -> Answer:
+           state: Optional[ConversationState] = None, me: Optional[Identity] = None) -> Answer:
     """Blocking entry point: the verified Answer from answer_stream()."""
     final: Optional[Answer] = None
-    for ev in answer_stream(question, history, where, user, refresh, scope=scope, state=state):
+    for ev in answer_stream(question, history, where, user, refresh, scope=scope, state=state, me=me):
         if isinstance(ev, Final):
             final = ev.answer
     assert final is not None, "answer_stream() must end with a Final event"
@@ -74,7 +74,8 @@ def answer(question: str, history: Optional[list[dict]] = None, where: Optional[
 
 def answer_stream(question: str, history: Optional[list[dict]] = None, where: Optional[dict[str, Any]] = None,
                   user: str = "", refresh: bool = False, *, scope: Scope,
-                  state: Optional[ConversationState] = None) -> Iterator[Event]:
+                  state: Optional[ConversationState] = None,
+                  me: Optional[Identity] = None) -> Iterator[Event]:
     """Streaming entry point. Always ends with exactly one Final. A provider failure (quota, timeout,
     auth) becomes a soft answer the UI can show instead of a traceback; the raw cause stays in
     warnings and the call log. refresh=True reads the database live (skips the SQL result cache).
@@ -92,7 +93,7 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
         question, note = corrected
         history, state = [], None
     try:
-        for ev in trace.run_steps(ctx, _answer_stream(question, history, where, user, refresh, scope, state)):
+        for ev in trace.run_steps(ctx, _answer_stream(question, history, where, user, refresh, scope, state, me)):
             if isinstance(ev, Token):
                 drafting = True
             elif isinstance(ev, Replace):
@@ -114,7 +115,8 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
 
 def _answer_stream(question: str, history: Optional[list[dict]], where: Optional[dict[str, Any]],
                    user: str, refresh: bool, scope: Scope,
-                   state: Optional[ConversationState] = None) -> Iterator[Event]:
+                   state: Optional[ConversationState] = None,
+                   me: Optional[Identity] = None) -> Iterator[Event]:
     from ..index_version import refresh_if_changed
     refresh_if_changed()   # pick up a background ingest without a restart (cheap: one stat)
     s = settings()
@@ -162,18 +164,20 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             refined = _requery(plan, prior, reason, question, state, nf, usage, scope, user, refresh)
         if refined is not None:
             yield Final(_log(refined, user, scope)); return
-    q = question
+    # Phase U2: "my attendance", "our orders" with the signed-in person's own records in place (agent/personal.py)
+    from .personal import personalize
+    q = personalize(question, me, scope)
     # Phase T5: a follow-up is rewritten with the conversation, and its SQL is written knowing the previous turn; a
     # new question is answered on its own — no rewrite call, no earlier turns in the answer prompt (agent/continuation)
     from .continuation import classify
     from .state import SqlContext
-    kind = "clarified" if clarified else (classify(question, state, history) if history else "new")
+    kind = "clarified" if clarified else (classify(q, state, history) if history else "new")
     context: Optional[SqlContext] = None
     if clarified:
         q, history = clarified, []                 # the completed question stands on its own
     elif kind == "follow_up":
         with trace.span("rewrite"):
-            q = standalone_question(question, history, user, force=True)
+            q = standalone_question(q, history, user, force=True)
         context = SqlContext.from_state(state, max_rows=int(s.get("data.max_rows", 200)))
     else:
         history = []

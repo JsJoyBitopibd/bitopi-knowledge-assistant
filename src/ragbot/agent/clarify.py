@@ -75,6 +75,14 @@ def merge_reply(pending: Optional[dict[str, Any]], reply: str) -> Optional[str]:
             sub = re.sub(r"\b(?:the|my|this|that|our|an?)\s+(?:export\s+)?(?:order|eo)\b", f"export order {eo}",
                          question, count=1, flags=re.I)
             merged = sub if sub != question else _insert_before_period(question, f"for export order {eo}")
+    elif slot == "employee":
+        # Phase U2: "E0456", "my code is E0456" -> the question about that employee
+        m = re.search(r"\b([A-Za-z]{0,4}-?\d{2,})\b", r)
+        if m:
+            code = m.group(1).upper()
+            body = re.sub(r"\b(?:my|myself)\s*", "", question, count=1, flags=re.I).strip()
+            end = body[-1] if body and body[-1] in "?.!" else ""
+            merged = f"{body[:-1] if end else body} of employee {code}{end}"
     elif slot == "period":
         from ..data.tools import PERIOD
         if re.fullmatch(rf"(?:for\s+|in\s+|of\s+)?(?:{PERIOD})", r, re.I):
