@@ -2,15 +2,22 @@
 # model call: when `match` fires and `unless` does not, the assistant asks `ask` instead of guessing.
 # Keep these narrow — a question that generated SQL could reasonably answer ("which orders have a PCD
 # next week?") must not trigger one. Loaded by src/ragbot/data/tools.py:needs_clarification().
+#
+# Phase T6: `slot` says what the reply fills (factory | order | period) and `choices` what is offered as reply
+# chips (`factories` = the factories the user may see, or a list). The reply is merged into the question by
+# src/ragbot/agent/clarify.py with no model call; a reply that does not answer it is treated as a new question.
 
 - name: which_order
   # "status of the order", "PCD for my order", "ship date of this EO" — a single order, but which one?
   match: '(?i)\b(?:status|pcd|ship\s*date|buyer|style|quantity|qty)\s+(?:of|for)\s+(?:the|my|this|that|our|an?)\s+(?:export\s+)?(?:order|eo)\b(?!s)'
   unless: '(?i)\b[A-Z]{2,4}-\d{2,4}-\d{2,5}|\bPO\b\W*\S*\d|\bfile\s*ref'
   ask: "Which export order do you mean? Please give its ID (for example TAL-25-1493-215) or the buyer PO number."
+  slot: order
 
 - name: which_factory_ppm
   # "how many PPM meetings this week?" without a factory: the count differs per unit
   match: '(?i)\bhow many\b.*\bppm\b.*\b(?:today|this week|next week|next \d+ days)\b'
   unless: '(?i)\b(?:TAL|RHL|BGL|KTL|CKDL|all\s+(?:factories|units))\b'
   ask: "For which factory — TAL, RHL, BGL, KTL or CKDL? (Or say \"all factories\".)"
+  slot: factory
+  choices: factories

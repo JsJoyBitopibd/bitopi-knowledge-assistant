@@ -71,7 +71,8 @@ class ConversationState(BaseModel):
             state.last_not_found = bool(last.get("not_found"))
             clar = last.get("clarify")
             if last.get("route") == "clarify" and isinstance(clar, dict):
-                state.pending_clarification = {**clar, "question": state.last_question}
+                # the question as it was checked (a rewritten follow-up), so the reply completes the right one
+                state.pending_clarification = {**clar, "question": state.last_rewritten or state.last_question}
         return state
 
     @property

@@ -291,12 +291,18 @@ def _load_fixed_tools(path: Path, _mtime: int) -> list[dict[str, Any]]:
 
 def needs_clarification(question: str) -> Optional[str]:
     """The clarifying question from config/clarify.yaml whose `match` fires (and `unless` does not), or None."""
+    rule = clarification_rule(question)
+    return rule["ask"] if rule else None
+
+
+def clarification_rule(question: str) -> Optional[dict[str, Any]]:
+    """The whole config/clarify.yaml rule that fires — its `ask`, and since Phase T6 its `slot` and `choices`."""
     path = settings().path("fixed_tools").parent / "clarify.yaml"
     if not path.exists():
         return None
     for rule in _load_fixed_tools(path, path.stat().st_mtime_ns):
         if re.search(rule["match"], question) and not (rule.get("unless") and re.search(rule["unless"], question)):
-            return rule["ask"]
+            return rule
     return None
 
 

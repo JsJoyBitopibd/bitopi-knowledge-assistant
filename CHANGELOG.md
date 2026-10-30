@@ -9,6 +9,11 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **Answering the assistant's own question just works** (Phase T6). When it asks "For which factory?" or "Which
+  export order?", the factories you may see appear as buttons, and the reply — a click, "TAL", "for BGL", "all
+  factories" or an order ID — completes the original question: "how many PPM meetings this week?" + "TAL" becomes
+  "how many PPM meetings at TAL this week?", answered with no AI call. Anything else you type is taken as a new
+  question.
 - **The assistant tells a follow-up from a new question** (Phase T5). "b+ blood group" asked after a DHU answer used
   to be merged into "Which lines are above the DHU target this week for b+ blood group"; a long follow-up without
   "it" or "that" was never connected to the previous answer at all. Now the program decides, without an AI call,

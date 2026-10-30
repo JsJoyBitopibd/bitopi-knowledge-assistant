@@ -125,11 +125,17 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             yield Final(_log(a, user, scope)); return
 
     yield Stage("understanding", "Understanding the question…")
+    # Phase T6: the reply to a clarifying question ("TAL", "TAL-25-1493-215") completes the question that was asked,
+    # with no model call; anything else is a message of its own and the pending question is dropped
+    clarified = None
+    if state is not None and state.pending_clarification:
+        from .clarify import merge_reply
+        clarified = merge_reply(state.pending_clarification, question)
     # Phase T3: a follow-up that only reshapes the previous answer's rows ("only TAL", "line wise", "sort by date",
     # "top 5", "how many?") is answered from those rows in Python — no rewrite, no routing, no query, no model.
     # Phase T4: what the rows cannot answer (a page, another period, a column they lack, a cut list) runs the earlier
     # query again, changed — a fixed tool with new parameters or one "modify this statement" call.
-    follow = _refine_plan(question, state)
+    follow = _refine_plan(question, state) if clarified is None else None
     if follow is not None:
         plan, prior, reason = follow
         if reason is None:
@@ -145,9 +151,11 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # new question is answered on its own — no rewrite call, no earlier turns in the answer prompt (agent/continuation)
     from .continuation import classify
     from .state import SqlContext
-    kind = classify(question, state, history) if history else "new"
+    kind = "clarified" if clarified else (classify(question, state, history) if history else "new")
     context: Optional[SqlContext] = None
-    if kind == "follow_up":
+    if clarified:
+        q, history = clarified, []                 # the completed question stands on its own
+    elif kind == "follow_up":
         with trace.span("rewrite"):
             q = standalone_question(question, history, user, force=True)
         context = SqlContext.from_state(state, max_rows=int(s.get("data.max_rows", 200)))
@@ -156,7 +164,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     with trace.span("route"):
         r = _route(q, user)
     out = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
-    if state is not None and state.last is not None:
+    if state is not None and state.last_request_id:
         out.warnings.append(f"conversation: {kind}" + (" (with the previous query)" if context else ""))
     # only a follow-up carries the previous turn; a question that stands alone calls the data path as it always has
     data_kw = {"context": context.render(), "context_key": state.key()} if context is not None and state else {}
@@ -175,7 +183,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         from ..data.tools import needs_clarification
         ask = needs_clarification(q)
         if ask:   # a missing order id / factory: ask instead of guessing (config/clarify.yaml)
-            out.text, out.route = ask, "clarify"
+            from ..data.tools import clarification_rule
+            from .clarify import choices
+            rule = clarification_rule(q) or {}
+            out.text, out.route, out.kind = ask, "clarify", "clarify"
+            # T6: what the reply fills and the chips offered for it (factories: only those this user may see)
+            out.clarify = {"slot": rule.get("slot", ""), "choices": choices(rule, scope)}
             yield Final(_log(out, user, scope)); return
     if r in ("data", "both"):
         from ..data import empty_retry
