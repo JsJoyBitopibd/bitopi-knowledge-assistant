@@ -39,6 +39,7 @@ class ConversationState(BaseModel):
     last_route: str = ""
     last_request_id: str = ""
     last_not_found: bool = False
+    last_error: bool = False                 # the last answer was a provider or database failure message
     pending_clarification: Optional[dict[str, Any]] = None   # set when the last turn asked a question (T6)
 
     @classmethod
@@ -69,6 +70,7 @@ class ConversationState(BaseModel):
             state.last_route = str(last.get("route") or "")
             state.last_request_id = str(last.get("request_id") or "")
             state.last_not_found = bool(last.get("not_found"))
+            state.last_error = bool(last.get("error_kind"))
             clar = last.get("clarify")
             if last.get("route") == "clarify" and isinstance(clar, dict):
                 # the question as it was checked (a rewritten follow-up), so the reply completes the right one

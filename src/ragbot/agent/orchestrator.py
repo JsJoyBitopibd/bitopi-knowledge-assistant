@@ -84,6 +84,13 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
     None for a self-contained question (scripts, the eval harness)."""
     drafting = False
     _, ctx = trace.start()
+    # Phase T7: "you showed me BGL, not TAL" re-asks the previous question with the record the user meant; the
+    # answer opens with one line saying so. The corrected question stands on its own (no history, no earlier rows).
+    note, asked_q = "", question
+    corrected = _correction(question, state)
+    if corrected is not None:
+        question, note = corrected
+        history, state = [], None
     try:
         for ev in trace.run_steps(ctx, _answer_stream(question, history, where, user, refresh, scope, state)):
             if isinstance(ev, Token):
@@ -92,6 +99,10 @@ def answer_stream(question: str, history: Optional[list[dict]] = None, where: Op
                 drafting = False
             elif isinstance(ev, Final):
                 _refine_chips(ev.answer)
+                if note:
+                    ev.answer.text = f"{note}\n\n{ev.answer.text}"
+                    ev.answer.question = asked_q
+                    ev.answer.warnings.append(f"corrected: re-asked as {question!r}")
             yield ev
     except LLMError as e:
         if drafting:
@@ -135,6 +146,11 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     # "top 5", "how many?") is answered from those rows in Python — no rewrite, no routing, no query, no model.
     # Phase T4: what the rows cannot answer (a page, another period, a column they lack, a cut list) runs the earlier
     # query again, changed — a fixed tool with new parameters or one "modify this statement" call.
+    # Phase T7: a message about the conversation itself — "you haven't replied?", "say that again", "what can you tell
+    # me about Inventory?", "hi" — is answered here, before anything is rewritten or searched
+    meta_reply = _meta_answer(question, state, scope, user, usage) if clarified is None else None
+    if meta_reply is not None:
+        yield Final(_log(meta_reply, user, scope)); return
     follow = _refine_plan(question, state) if clarified is None else None
     if follow is not None:
         plan, prior, reason = follow
@@ -173,7 +189,9 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         out.text = prompt("refusal").strip()
         yield Final(_log(out, user, scope)); return
     if r == "chitchat":
-        out.text = prompt("chitchat").strip()
+        out.text, how = _social(question, scope, user, usage)     # T7: a short reply about what this user can ask
+        out.kind = "social"
+        out.warnings.append(how)
         yield Final(_log(out, user, scope)); return
 
     chunks: list[Chunk] = []
@@ -302,6 +320,80 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if key is not None and r == "documents" and not out.not_found and not out.error_kind:
         _ANSWERS.put(key, out.model_copy(deep=True), ttl)
     yield Final(_log(out, user, scope))
+
+
+def _correction(question: str, state: Optional[ConversationState]) -> Optional[tuple[str, str]]:
+    """(the previous question with the record the user meant, the line that says so) for "you showed me BGL, not
+    TAL" (agent/meta.py); None for any other message."""
+    from . import meta
+    mt = meta.classify(question, state)
+    if mt is None or mt.kind != "wrong_entity" or state is None:
+        return None
+    previous = state.last_rewritten or state.last_question
+    swapped = meta.swap(previous, mt.asked, mt.shown)
+    if swapped is None:
+        return None
+    shown = mt.shown or next(iter(_factories(previous)), "the other one")
+    note = prompt("meta_corrected").strip().replace("{asked}", mt.asked).replace("{shown}", shown)
+    return swapped, note
+
+
+def _factories(text: str) -> list[str]:
+    try:
+        from ..data.entities import question_entities
+        return list(question_entities(text).factories)
+    except Exception:
+        return []
+
+
+def _meta_answer(question: str, state: Optional[ConversationState], scope: Scope, user: str,
+                 usage: Usage) -> Optional[Answer]:
+    """A reply to a message about the conversation itself (agent/meta.py), or None for anything else."""
+    from . import capabilities, meta
+    mt = meta.classify(question, state)
+    if mt is None or mt.kind == "wrong_entity":
+        return None                                 # a correction is handled around the whole answer (answer_stream)
+    out = Answer(text="", question=question, rewritten_question=question, route="meta", kind="meta", usage=usage)
+    if mt.kind in ("no_reply", "repeat") and state is not None:
+        if state.last_error or not state.last_request_id:
+            out.text = prompt("meta_no_reply_error").strip()
+            out.follow_ups = [state.last_question] if state.last_question else []
+        else:
+            out.text = prompt("meta_repeat").strip()
+            out.repeat_of = state.last_request_id     # the app shows that answer again below this line
+        return out
+    if mt.kind == "capability":
+        out.text, out.follow_ups = capabilities.describe(mt.topic, scope)
+        out.warnings.append(f"capability: {mt.topic or 'all'} (no model call)")
+        return out
+    if mt.kind == "greeting":
+        out.text, how = _social(question, scope, user, usage)
+        out.kind = "social"
+        out.warnings.append(how)
+        return out
+    return None
+
+
+def _social(question: str, scope: Scope, user: str, usage: Usage) -> tuple[str, str]:
+    """(a short, warm reply naming what this user can ask, how it was made). The small model writes it from the
+    capability sheet; `meta.social_ok` stands in for the citation check — a reply that states a number, names a
+    table or reads like SQL is replaced by the fixed paragraph (prompts/chitchat.txt), as is any provider error."""
+    from . import capabilities, meta
+    from ..llm import get_small_chat
+    system = prompt("chitchat_system").replace("{sheet}", capabilities.sheet(scope))
+    try:
+        reply = get_small_chat().chat([{"role": "user", "content": question}], system=system,
+                                      max_tokens=int(settings().get("llm.max_tokens_social", 1024)),
+                                      temperature=0, purpose="social", user=user)
+    except Exception:                               # quota, timeout, no key: never a broken greeting
+        return prompt("chitchat").strip(), "social: fallback (provider)"
+    usage.input_tokens += reply.input_tokens
+    usage.output_tokens += reply.output_tokens
+    usage.model, usage.calls = reply.model, usage.calls + 1
+    text = reply.text.strip()
+    if (reply.stop_reason or "").lower() not in ("length", "max_tokens") and meta.social_ok(text, capabilities.names()):
+        return text, "social: model"
+    return prompt("chitchat").strip(), "social: fallback (checked)"
 
 
 def _refine_plan(question: str, state: Optional[ConversationState]) -> Optional[tuple[Any, QueryResult, Optional[str]]]:

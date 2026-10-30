@@ -9,6 +9,12 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **The assistant understands messages about the conversation** (Phase T7). "You showed me the BGL, not TAL" now
+  re-asks the previous question for TAL and says so; "you haven't replied?" or "say that again" shows the last answer
+  again instead of starting a database search; "what can you tell me about Inventory?" or "which database access do
+  you have?" is answered from the assistant's own configuration, with example questions to click, and never mentions a
+  database you cannot read; "hi" gets a short, friendly reply about what you can ask, checked so that it never states
+  a figure or names a table.
 - **Answering the assistant's own question just works** (Phase T6). When it asks "For which factory?" or "Which
   export order?", the factories you may see appear as buttons, and the reply — a click, "TAL", "for BGL", "all
   factories" or an order ID — completes the original question: "how many PPM meetings this week?" + "TAL" becomes

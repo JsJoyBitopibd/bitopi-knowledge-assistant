@@ -648,11 +648,19 @@ def conversation(q: str | None, refresh: bool) -> None:
                     "not_found": a.not_found, "error_kind": a.error_kind, "scope": scope.key(), "route": a.route,
                     "rewritten": a.rewritten_question, "kind": a.kind, "refine_suggestions": a.refine_suggestions,
                     "clarify": a.clarify, "repeat_of": a.repeat_of, "prior_request_id": a.prior_request_id}
+            prev = next((t for t in reversed(st.session_state.history)
+                         if a.repeat_of and t.get("request_id") == a.repeat_of), None)
+            if prev is not None:
+                # Phase T7: "you haven't replied?" / "say that again" — the earlier answer, its sources and tables,
+                # shown again as this turn (its own widget keys); its query is not run again
+                turn.update(text=f"{a.text}\n\n{prev['text']}", refs=prev.get("refs") or [],
+                            results=prev.get("results") or [], not_found=prev.get("not_found", False),
+                            refine_suggestions=prev.get("refine_suggestions") or [])
             st.session_state.history.append(turn)
             st.session_state.src_turn = None
             answer_body(turn, i, latest=True, shown=i, a=a)
     with rail.container():
-        ui.sources_rail(a.references, f"{cid}_{i}", fresh, _pdf)
+        ui.sources_rail(turn["refs"], f"{cid}_{i}", fresh, _pdf)
     conversation_head(head)
 
 

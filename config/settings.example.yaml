@@ -92,6 +92,7 @@ llm:
   temperature: 0
   max_tokens_answer: 2048      # Gemini counts thinking tokens against this budget
   max_tokens_rewrite: 256
+  max_tokens_social: 1024     # Phase T7 greeting reply: Gemini counts thinking tokens against this budget
   max_tokens_route: 64
   max_tokens_sql: 4096         # Gemini thinks before writing SQL; at 1536 a third of the calls hit the limit and retried (+3 s)
   max_chunks_to_llm: 8

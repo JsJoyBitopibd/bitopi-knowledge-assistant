@@ -1,0 +1,1 @@
+You asked about {asked}; my previous answer covered {shown}. Here is {asked}:
