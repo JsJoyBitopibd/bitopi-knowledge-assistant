@@ -9,6 +9,12 @@ each phase is in `docs/ROADMAP.md`.
 ## [Unreleased]
 
 ### Added
+- **The assistant tells a follow-up from a new question** (Phase T5). "b+ blood group" asked after a DHU answer used
+  to be merged into "Which lines are above the DHU target this week for b+ blood group"; a long follow-up without
+  "it" or "that" was never connected to the previous answer at all. Now the program decides, without an AI call,
+  from the words the message shares with the previous question and its table: a new question is answered on its own
+  (one AI call fewer), and a follow-up is rewritten with the conversation and its database query is written knowing
+  the previous query — its filters, period and columns, never its rows.
 - **"Next", "last week?" and "add the merchandiser" now work as follow-ups** (Phase T4). A list that stopped at 200
   rows offers "Show the next 200 rows", which reads rows 201–400 with the same query. A follow-up the table on screen
   cannot answer — another period, another grouping, a sort over the whole list, a column it does not have — runs the

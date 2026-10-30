@@ -807,9 +807,9 @@ def _pick_catalog(question: str, cats: dict[str, Catalog]) -> Catalog:
 _SQL = TTLCache(maxsize=512)
 
 
-def _sql_key(question: str, cats: dict[str, Catalog], scope: Scope, agent: str = "") -> tuple:
+def _sql_key(question: str, cats: dict[str, Catalog], scope: Scope, agent: str = "", context_key: str = "") -> tuple:
     norm = re.sub(r"\s+", " ", question.strip().lower()).rstrip("?!. ")
-    return norm, tuple(sorted(cats)), catalog_stamp(), scope.key(), date.today().isoformat(), agent
+    return norm, tuple(sorted(cats)), catalog_stamp(), scope.key(), date.today().isoformat(), agent, context_key
 
 
 def _named_catalog(name: str, cats: dict[str, Catalog]) -> Optional[str]:
@@ -872,7 +872,7 @@ def _run_guarded(sql: str, cat: Catalog, *, scope: Scope, user: str, refresh: bo
 
 
 def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", refresh: bool = False, *,
-                     scope: Scope, qvec: Optional[list[float]] = None, agent: str = "") -> QueryResult:
+                     scope: Scope, qvec: Optional[list[float]] = None, agent: str = "", context: str = "", context_key: str = "") -> QueryResult:
     """One SQL-generation call sees the catalogs picked for the question (data/db_router.py) and must
     name the database it chose (`DATABASE: <name>`) before the SQL, so the guard's view allow-list
     matches the right catalog. A question answered before today replays its cached SQL instead (J2).
@@ -881,7 +881,7 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
     s = settings()
     considered = list(cats)
     ttl = int(s.get("data.sql_cache_ttl_seconds", 86400))
-    key = _sql_key(question, cats, scope, agent) if ttl > 0 else None
+    key = _sql_key(question, cats, scope, agent, context_key if context else "") if ttl > 0 else None
     cached = _SQL.get(key) if key is not None and not refresh else None
     chat = get_chat()
     catalogs_text = "\n\n".join(
@@ -938,6 +938,7 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
               .replace("{entities}", "Records the question names (filter on these columns):\n" + entities_text)
               .replace("{modifiers}", "Sort and limit the user asked for (apply exactly; map the words to a column "
                                       "of the chosen table):\n" + _modifier_lines(question, int(s["data.max_rows"])))
+              .replace("{context}", prompt("sql_context").strip().replace("{context}", context) if context else "(none)")
               .replace("{today}", date.today().isoformat()))
     messages = [{"role": "user", "content": question}]
     fallback = _pick_catalog(question, cats)
@@ -1162,7 +1163,8 @@ def _with_agent_catalog(question: str, picked: dict[str, Catalog], cats: dict[st
     return dict(keep + list(best.items()))
 
 
-def answer_from_data(question: str, user: str = "", refresh: bool = False, *, scope: Scope) -> list[QueryResult]:
+def answer_from_data(question: str, user: str = "", refresh: bool = False, *, scope: Scope, context: str = "",
+                     context_key: str = "") -> list[QueryResult]:
     """Try fixed tools across all catalogs; else pick the catalogs the question is about (db_router)
     and generate SQL, letting the model name the database among them. refresh=True skips the SQL
     result and question->SQL caches and reads live. Every statement is limited to the user's scope
@@ -1213,6 +1215,8 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
                 agent = None
             if agent is not None:
                 picked = _with_agent_catalog(question, picked, cats, agent, qvec)
-        r = generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec, agent=agent.name if agent else "")
+        follow = {"context": context, "context_key": context_key} if context else {}   # Phase T5: follow-ups only
+        r = generate_and_run(question, picked, user, refresh, scope=scope, qvec=qvec, agent=agent.name if agent else "",
+                             **follow)
         r = apply_limit(r, question) if r.tool == "generated" else r    # the model's own TOP kept, or cut here
         return [r, *r.lookups]       # the DISTINCT lookups a repair ran are sources too: [D2]… (data/empty_retry.py)

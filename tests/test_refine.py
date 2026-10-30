@@ -236,7 +236,7 @@ def test_orchestrator_answers_a_refine_without_any_model_call(wired):
 
 def test_a_follow_up_the_rows_cannot_answer_goes_on_as_usual(monkeypatch, wired):
     monkeypatch.setattr(orch, "_route", lambda q, user: "refuse")         # the usual path, stopped early
-    monkeypatch.setattr(orch, "standalone_question", lambda q, h, u="": q)
+    monkeypatch.setattr(orch, "standalone_question", lambda q, h, u="", **k: q)
     import ragbot.data.requery as rq
     monkeypatch.setattr(rq, "requery", lambda *a, **k: None)              # T4 finds no safe way to re-run it
     a = list(orch.answer_stream("style wise", history=[{"role": "user", "text": "x"}], scope=Scope.unrestricted(),

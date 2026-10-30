@@ -1,0 +1,3 @@
+The question continues an earlier turn of this conversation. Keep that turn's database, filters and period unless
+the question changes them, and change only what it asks for. (Its rows are not shown here.)
+{context}

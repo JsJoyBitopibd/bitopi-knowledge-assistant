@@ -26,9 +26,10 @@ def _needs_rewrite(latest: str) -> bool:
     return len(re.findall(r"\w+", latest)) < 6
 
 
-def standalone_question(latest: str, history: list[dict], user: str = "") -> str:
-    """history: [{"role": "user"|"assistant", "text": str}, ...] oldest first."""
-    if not history or not _needs_rewrite(latest):
+def standalone_question(latest: str, history: list[dict], user: str = "", force: bool = False) -> str:
+    """history: [{"role": "user"|"assistant", "text": str}, ...] oldest first. force: rewrite even without a
+    pronoun or a short message — agent/continuation.py already decided the message continues the conversation."""
+    if not history or not (force or _needs_rewrite(latest)):
         return latest
     n = int(settings()["answer.history_turns"])
     recent = history[-2 * n:]

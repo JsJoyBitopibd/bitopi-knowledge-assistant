@@ -90,3 +90,42 @@ class ConversationState(BaseModel):
     def key(self) -> str:
         """Joins cache keys that depend on this conversation (a modified statement, a follow-up's SQL context)."""
         return f"{self.conversation_id}:{self.last.request_id if self.last else ''}"
+
+
+class SqlContext(BaseModel):
+    """What the SQL model is told about the previous turn when the new question continues it (Phase T5): the
+    question, the statement and its shape — never a row (CLAUDE.md non-negotiable 4: rows go only to the answer
+    call, at most 50). Rendered into prompts/sql_generate.txt's {context} block, cut hard at `max_chars`."""
+    question: str
+    database: str = ""
+    tool: str = ""
+    sql: str = ""
+    columns: list[str] = Field(default_factory=list)
+    row_count: int = 0
+    capped: bool = False
+    params: dict[str, str] = Field(default_factory=dict)
+
+    @classmethod
+    def from_state(cls, state: Optional["ConversationState"], max_sql_chars: int = 1200,
+                   max_rows: int = 200) -> Optional["SqlContext"]:
+        if state is None or state.last is None:
+            return None
+        r = state.last_result()
+        if r is None:
+            return None
+        from .templated import fmt
+        bound = {k: fmt(v) for k, v in r.params.items() if not str(k).endswith("_label") and v not in (None, "")}
+        return cls(question=state.last.question, database=r.database, tool=r.tool.split(":")[0],
+                   sql=(r.sql or "")[:max_sql_chars], columns=list(r.columns[:30]), row_count=len(r.rows),
+                   capped=len(r.rows) >= max_rows, params=dict(list(bound.items())[:12]))
+
+    def render(self, max_chars: int = 2400) -> str:
+        lines = [f"- Question: {self.question}",
+                 f"- Database: {self.database}" + (f" (built-in query {self.tool})" if self.tool != "generated" else ""),
+                 f"- Columns it returned: {', '.join(self.columns)}",
+                 f"- Rows: {self.row_count}" + (" (it stopped at the row limit)" if self.capped else "")]
+        if self.params:
+            lines.append("- Its values: " + ", ".join(f"{k} = {v}" for k, v in self.params.items()))
+        if self.sql:
+            lines.append(f"- Its SQL: {' '.join(self.sql.split())}")
+        return "\n".join(lines)[:max_chars]

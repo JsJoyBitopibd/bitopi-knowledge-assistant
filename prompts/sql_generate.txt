@@ -35,4 +35,6 @@ Choosing what to query:
 
 {modifiers}
 
+{context}
+
 Today is {today}.

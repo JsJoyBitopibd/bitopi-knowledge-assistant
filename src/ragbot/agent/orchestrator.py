@@ -141,14 +141,25 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         if refined is not None:
             yield Final(_log(refined, user, scope)); return
     q = question
-    if history:
+    # Phase T5: a follow-up is rewritten with the conversation, and its SQL is written knowing the previous turn; a
+    # new question is answered on its own — no rewrite call, no earlier turns in the answer prompt (agent/continuation)
+    from .continuation import classify
+    from .state import SqlContext
+    kind = classify(question, state, history) if history else "new"
+    context: Optional[SqlContext] = None
+    if kind == "follow_up":
         with trace.span("rewrite"):
-            q = standalone_question(question, history, user)
+            q = standalone_question(question, history, user, force=True)
+        context = SqlContext.from_state(state, max_rows=int(s.get("data.max_rows", 200)))
+    else:
+        history = []
     with trace.span("route"):
         r = _route(q, user)
     out = Answer(text="", question=question, rewritten_question=q, route=r, usage=usage)
-    if state is not None and state.turns:
-        out.warnings.append(f"state: {len(state.turns)} prior data turn(s)")
+    if state is not None and state.last is not None:
+        out.warnings.append(f"conversation: {kind}" + (" (with the previous query)" if context else ""))
+    # only a follow-up carries the previous turn; a question that stands alone calls the data path as it always has
+    data_kw = {"context": context.render(), "context_key": state.key()} if context is not None and state else {}
 
     if r == "refuse":
         out.text = prompt("refusal").strip()
@@ -176,7 +187,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         yield Stage("searching+querying", "Searching documents and querying the database…")
         docs_f = trace.submit(_POOL, retrieve, q, where=where, scope=scope)
         with empty_retry.allowed(False):
-            data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope)
+            data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope, **data_kw)
         chunks = docs_f.result()[:top]
         results = list(data_f.result())
     elif r == "documents":
@@ -185,7 +196,7 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     elif r == "data":
         yield Stage("querying", "Querying the database…")
         with empty_retry.allowed(True):
-            results = list(answer_from_data(q, user, refresh, scope=scope))
+            results = list(answer_from_data(q, user, refresh, scope=scope, **data_kw))
     if r in ("data", "both"):
         out.agent = next((x.agent for x in results if x.agent), "")   # domain agent (Phase K), for the log
         # which catalogs the SQL model was shown, kept on the answer so a not-found row in chat.csv says it too
