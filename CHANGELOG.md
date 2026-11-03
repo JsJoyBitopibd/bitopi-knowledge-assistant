@@ -8,6 +8,21 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-11-03 — Phase W: ask for the missing key, then answer
+
+Gate against the v1.18.0 files: no metric dropped more than 5 points (cases 51–100 hit 94 → 91 %, correct 94 → 92 %;
+the one case that moved, 100, fails on the released v1.18.0 code too: an HR view that times out); the six new
+ask-then-reply conversations pass with no model call. Leak suite 65 cases, 0 leaks. 1,694 tests.
+
+### Added
+- **When a question needs a buyer, a file or a system to show its data, the assistant asks** (Phase W). "yarn count?",
+  "GSM test results" or "bowing test of each roll" with no buyer, file or day named get one short question with
+  the buyers or files that have data as buttons; the answer ("FR-26-2118", "Decor (Target USA)", "All tests of the
+  last 90 days") completes the question and the data comes back, with no AI call. "Goods Receipt yesterday" asks
+  whether fabric received in the PPC quality system or goods receipts into the stores is meant.
+- **A bowing or shrinkage summary offers its own top files** as the next questions ("Bowing test details for file
+  FR-26-2382 on 29 Oct 2026"), so a click drills into the rolls.
+
 ## [1.18.0] — 2026-11-03 — Phase V: the PPC fabric & trims quality data, and an honest not-found
 
 Gate: the golden set in three slices on 3 Nov after the quota reset — cases 1–100 against `20261030T1528` hit 85 → 96 %,
