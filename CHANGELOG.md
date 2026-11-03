@@ -8,6 +8,13 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.16.0] — 2026-11-03 — Phase U: saved conversations, "my" questions, a personal home, the phone
+
+Conversations kept per user on the assistant's server, "my" and "our" read from the signed-in identity, a home page
+that starts from the user's own work, and a layout that fits a phone. The identity parts take effect only once the
+owner sets `auth.provider: erp`; until then the app is open as before and conversations are kept per browser. Gate:
+shared with v1.15.0 (the Phase U changes do not touch an eval answer); 1,528 tests pass.
+
 ### Added
 - **Your conversations are kept** (Phase U1). A reload, a closed tab or another day no longer loses a conversation: it
   is saved on the assistant's server under your account (or, without sign-in, this browser), listed under Recent and
@@ -22,6 +29,18 @@ each phase is in `docs/ROADMAP.md`.
   last conversation, and suggestions from your own recent questions and your factory before the general ones.
 - **On a phone** (Phase U4) the suggestion buttons wrap, wide tables keep their first column in view, and the sources
   fit on one line each.
+
+## [1.15.0] — 2026-11-03 — Phase T: data follow-ups and conversation; Phases O and N2/N3b, switched off
+
+Follow-ups reshape, sort, filter, page and re-run the previous answer's data instead of starting over; the assistant
+tells a follow-up from a new question, completes its own clarifying question, and understands messages about the
+conversation; the ERP sign-in is tested and keeps the person's identity. Drafts (Phase O) and the recommendation
+preview (N2, N3b) ship switched off. Gate: the full golden set on 30 Oct (`eval/results/20261030T1528.json`) against
+the two v1.14.0 halves, no drop above 5 points once the 11 VistaQ "today" cases are set aside; those were empty on a
+Friday and were re-run on Tuesday 3 Nov (`20261103T1000.json`): 68–73, 75, 77, 78, 82 and 86 correct, 88 empty on
+v1.14.0 as well. Leak suite 61 cases, 0 leaks; s42 re-run on 3 Nov, 0 leaks (`eval/scope/scope_20261103T1005.json`).
+
+### Added
 - The golden set now holds 16 scripted conversations (Phase T9) that check how follow-ups are handled.
 - **Answers are easier to read and to follow** (Phase T8). A long table opens with one line on what is in it — "Across
   these 141 rows: 20 styles; PCD from 22 Aug 2026 to 24 Oct 2026; total OrderQty 460247" — worked out by the program
@@ -55,11 +74,6 @@ each phase is in `docs/ROADMAP.md`.
   call that changes the earlier query and goes through the same safety checks as any AI-written query. The AI sees
   the earlier question and query, never the rows. A built-in list that reached its 200-row limit now says "at least
   200 … orders" instead of "200 orders".
-
-### Fixed
-- **The row limit was not enforced on one form of SQL Server paging.** A query written as `OFFSET … FETCH NEXT n ROWS`
-  passed the safety check with any `n`. The database connection still read at most 200 rows, so no extra data was
-  exposed, but the check now holds that form to the same limit, and only the assistant's own paging may use OFFSET.
 - **Follow-ups work on the table you are looking at, instantly** (Phase T3). After a data answer, "only TAL", "line
   wise", "sort by ship date, top 10", "how many?", "total quantity", "their names" or "hide DHU" used to be sent off
   as new questions and often came back as the same table. Now they reshape the rows already on screen, in well under
@@ -110,6 +124,11 @@ each phase is in `docs/ROADMAP.md`.
   staff: recommendations reach them only after the risk levels pass their backtest and real rates exist.
   `scripts/recommend_preview.py` shows the same preview on the server. A draft Quality playbook is in place for
   the QC department to complete and approve.
+
+### Fixed
+- **The row limit was not enforced on one form of SQL Server paging.** A query written as `OFFSET … FETCH NEXT n ROWS`
+  passed the safety check with any `n`. The database connection still read at most 200 rows, so no extra data was
+  exposed, but the check now holds that form to the same limit, and only the assistant's own paging may use OFFSET.
 
 ## [1.14.0] — 2026-10-15 — Phase S4, Stage-3 groundwork, schema samples, the v1.13.0 follow-ups
 
