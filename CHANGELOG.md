@@ -8,6 +8,20 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.17.0] — 2026-11-03 — Phase N2: recommendations ranked and explained (off, administrators only)
+
+### Added
+- **The recommendation preview can rank a file's options and explain them** (Phase N2). For an open red or
+  amber Quality file, the program puts the ready options in order, cheapest computed cost first and any option
+  whose cost depends on a person's choice last, and the AI explains that order: why the file is at risk, what
+  each action is, what the playbook page says about it, and what it costs or what someone must choose. Every
+  fact carries its source mark and every number is checked against the sources, as in every answer; a reply
+  that is cut off, or that does not give one numbered item per option, is refused, and after one retry only
+  the program's list is shown. The AI never changes the order or computes a cost. Nothing changes for staff:
+  the preview stays switched off (`agents.recommendations.enabled`) and is for administrators only, and no
+  real playbook or cost rate exists yet, so no file has an option to explain. Checked on the tests' own
+  playbook and rates: five of five explanations verified.
+
 ## [1.16.1] — 2026-11-03 — finished files settle again (Phase M)
 
 ### Fixed

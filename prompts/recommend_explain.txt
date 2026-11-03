@@ -1,0 +1,1 @@
+Start with one sentence on why the file is at risk, from [D1]. Then, for each option in [D2] in its order: what the action is and what the playbook page says about it, then its cost and the rates it used, or what a person must choose. Cite every fact.

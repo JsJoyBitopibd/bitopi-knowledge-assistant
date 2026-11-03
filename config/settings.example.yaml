@@ -95,6 +95,7 @@ llm:
   max_tokens_social: 1024     # Phase T7 greeting reply: Gemini counts thinking tokens against this budget
   max_tokens_route: 64
   max_tokens_sql: 4096         # Gemini thinks before writing SQL; at 1536 a third of the calls hit the limit and retried (+3 s)
+  max_tokens_recommend: 4096   # Phase N2 explanation: at 2048 four of five live replies were cut off by the thinking budget
   max_chunks_to_llm: 8
   # Phase N4: which tier runs which task (the call's `purpose`). A task named here runs on that tier;
   # one that is not runs on main — the safe end, never the cheap one. Changing a task's tier is config.

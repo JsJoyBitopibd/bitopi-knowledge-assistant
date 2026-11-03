@@ -651,6 +651,12 @@ ahead, by factory and by lead time. Its minimum evidence (28 dates, 60 settled f
   `[D#]` rows and `[P#]` playbook pages; the citation and number checks apply unchanged. *Built
   2026-10-16 as an administrators-only preview, off by default* (`domain_agents/recommend.py`, the owner's
   option A): the candidates and their costs in Python, no model ranking yet — nothing is ready to rank.
+  *Ranking and explanation built 2026-11-03 (v1.17.0, still off and admin-only).* One change to the plan above:
+  the **program** ranks (a computed cost first, cheapest first; a person's choice last) and the model only
+  explains that order, because a ranking is a judgement over numbers and AGENTS_DESIGN §2 keeps those in
+  software. The text passes `citations.verify` unchanged, plus two checks it cannot make: no reply cut off by
+  the length limit, one numbered item per option. Verified live 5 of 5 on the tests' playbook; the gate's eval
+  cases wait for a real playbook (N1b).
 - **N3 decisions.** Approve / reject under each recommendation → `decision` table (user, time,
   recommendation); the outcome is recorded as in M3. *Built ahead of the gate, data-free only (N3a,
   2026-10-15):* `recommendation` and `decision` tables, append-only, with every refusal in code and no

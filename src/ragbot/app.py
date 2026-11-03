@@ -482,7 +482,23 @@ with st.sidebar:
             st.caption("Actions from the departments' playbooks for open red and amber Quality files. A preview: "
                        "the risk levels have not passed their backtest yet, and a cost is shown only when the "
                        "playbook is approved and every rate it uses has an owner and a date.")
-            for k, o in enumerate(_rec.options(scope, limit=20)):
+            _opts = _rec.options(scope, limit=20)
+            # N2: the program ranks a file's ready options; the executive-tier model explains that order, verified
+            for _pid in dict.fromkeys(o.prediction_id for o in _rec.rank(_opts)):
+                _first = next(o for o in _opts if o.prediction_id == _pid)
+                if st.button(f"Rank and explain the options for {_first.factory} {_first.subject}",
+                             key=f"rec-explain-{_pid}"):
+                    from ragbot.agent.citations import render_references as _render_refs
+                    with st.spinner("Ranking and explaining…"):
+                        _ex = _rec.explain(_pid, scope, opts=_opts, user=user)
+                    st.markdown("**Order (the program's):** " + "; ".join(
+                        f"{i}. {o.action_title}" for i, o in enumerate(_ex.ranked, start=1)))
+                    if _ex.ok:
+                        st.markdown(_ex.text)
+                        st.markdown(_render_refs(_ex.references))
+                    if _ex.problems:
+                        st.caption("Not explained: " + "; ".join(_ex.problems))
+            for k, o in enumerate(_opts):
                 st.markdown(f"**{o.level}** · {o.factory} {o.subject} — {o.action_title} "
                             f"*({o.playbook}, {o.playbook_status})*")
                 if o.cost:
