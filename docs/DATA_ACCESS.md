@@ -195,6 +195,25 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
     FROM rag.vw_ExportOrderPCD WHERE EONo = @eo
 ```
 
+Phase V and W keys on a tool (the PPC tools at the top of the file use them all):
+
+- Parameters: `type: value, entity: <entity>, bind: code` binds the recorded value's code (H&M -> `C/09/7`) and keeps
+  its name for the `{name}_label`; `type: file` reads one file reference (FR-26-2493); a `date_window` with
+  `default: latest` is the newest day the tool's view holds (`freshness: <column>` names which date column), shown as
+  "on 29 Oct 2026, the latest day on record" through `{window}{window_note}`.
+- `slot:` — ask instead of answering too broadly: `fills: [buyer, file]` (any of these named = nothing to ask),
+  `unless_named: [window]` (a period in the question = nothing to ask either), `ask:` the question, `choices:` a list,
+  or `{sql: <SELECT over the tool's view, first column = the value>, map: <entity>}` (run with the tool's parameters
+  under the user's scope; codes named through the value index; at most 7), `all: {label, period}` a last chip that
+  answers over a wider period. Raised as `ClarificationNeeded` from `answer_from_data`; the reply is merged into the
+  question by `agent/clarify.py` with no model call.
+- `follow_ups_from_rows: {column, template, limit}` — one follow-up question per distinct value of `column` in the
+  answer's rows (a summary's largest first), e.g. "Bowing test details for file {FileRefID} {window}"; each must
+  reach a fixed tool.
+
+`config/clarify.yaml` rules may also swap a phrase instead of adding one: `replace:` (a regex) and `replace_with:`
+({chip: phrase}) — "Goods Receipt yesterday" + "Fabric received in PPC" -> "fabric received in PPC yesterday".
+
 ## 4. The guard (`src/ragbot/data/guard.py`) — every generated statement must pass
 
 - Exactly one statement; it must be `SELECT` or `WITH … SELECT`.

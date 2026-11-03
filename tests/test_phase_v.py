@@ -275,8 +275,8 @@ def test_the_capability_reply_names_the_ppc_area_and_its_data_horizon(monkeypatc
 @pytest.mark.parametrize("q,chip", [
     ("Show me yesterdays bowing test report", "Show me bowing test report on 29 Oct 2026"),
     ("Show me the bowing test report for 31 Dec 2030", "Show me the bowing test report on 29 Oct 2026"),
-    ("bowing tests today?", "bowing tests on 29 Oct 2026?"),
-    ("bowing tests", "bowing tests on 29 Oct 2026"),
+    ("bowing tests today?", "Bowing tests on 29 Oct 2026?"),
+    ("bowing tests", "Bowing tests on 29 Oct 2026"),
 ])
 def test_the_newest_day_chip_reads_naturally(q, chip):
     assert not_found._on_day(q, DAY) == chip

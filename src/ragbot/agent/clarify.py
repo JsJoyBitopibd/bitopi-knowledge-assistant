@@ -54,7 +54,10 @@ def merge_reply(pending: Optional[dict[str, Any]], reply: str) -> Optional[str]:
     if not pending or not pending.get("question"):
         return None
     r = re.sub(r"\s+", " ", reply or "").strip().strip("?.!").strip()
-    if not r or len(r.split()) > 6:
+    # a click on a chip is always a reply, whatever its length ("All tests of the last 90 days"); typed text of more
+    # than a few words is a message of its own
+    chip = r.casefold() in {str(c).casefold() for c in pending.get("choices") or []}
+    if not r or (len(r.split()) > 6 and not chip):
         return None
     question, slot = str(pending["question"]), pending.get("slot")
     merged: Optional[str] = None
@@ -87,7 +90,75 @@ def merge_reply(pending: Optional[dict[str, Any]], reply: str) -> Optional[str]:
         from ..data.tools import PERIOD
         if re.fullmatch(rf"(?:for\s+|in\s+|of\s+)?(?:{PERIOD})", r, re.I):
             merged = _insert_before_period(question, r)
+    elif slot in ("buyer", "file", "buyer_or_file"):
+        merged = _merge_key(pending, question, r)
+    elif slot == "source":
+        merged = _merge_source(pending, question, r)
     if merged is None:
         return None
     from ..data.tools import needs_clarification
     return merged if needs_clarification(merged) is None else None
+
+
+_FILE = re.compile(r"\bFR-\d{2}-\d{1,6}\b", re.I)
+
+
+def _pick(choices: list[str], reply: str) -> Optional[str]:
+    """The chip the reply names: the same text, or the start of exactly one chip ("Decor" for "Decor (Target USA)"
+    when no other chip starts so)."""
+    low = reply.casefold().removeprefix("for ").strip()
+    same = [c for c in choices if c.casefold() == low]
+    if same:
+        return same[0]
+    starts = [c for c in choices if c.casefold().startswith(low)]
+    return starts[0] if len(starts) == 1 else None
+
+
+def _merge_key(pending: dict[str, Any], question: str, r: str) -> Optional[str]:
+    """Phase W: a buyer or a file for a fixed tool that asked (data/tools.py ClarificationNeeded). "FR-26-2118" ->
+    "… for file FR-26-2118"; a chip or a recorded buyer name -> "… for Decor (Target USA)", which the tool's value
+    parameter binds as the buyer's code; the "all" chip -> the question over the tool's own wider period."""
+    slot = pending.get("slot")
+    choices = [str(c) for c in pending.get("choices") or []]
+    all_label = str(pending.get("all") or "")
+    if all_label and (r.casefold() == all_label.casefold() or _ALL.match(r) or r.casefold() in ("everything", "any")):
+        period = str(pending.get("all_period") or "")
+        return _insert_before_period(question, period) if period else None
+    if slot in ("file", "buyer_or_file"):
+        m = _FILE.search(r)
+        if m:
+            return _insert_before_period(question, f"for file {m.group(0).upper()}")
+    if slot in ("buyer", "buyer_or_file"):
+        listed = _pick([c for c in choices if c != all_label], r)
+        if listed:
+            return _insert_before_period(question, f"for {listed}")
+        try:
+            from ..auth.models import Scope as _Scope
+            from ..data.values import resolve
+            hit, _ = resolve(r, _Scope.unrestricted(), str(pending.get("entity") or "ppc_buyer"))
+        except Exception:
+            hit = None
+        if hit is not None:
+            return _insert_before_period(question, f"for {hit.value}")
+    return None
+
+
+def _merge_source(pending: dict[str, Any], question: str, r: str) -> Optional[str]:
+    """Phase W: which system a word like "goods receipt" means. The clarify.yaml rule that asked names the phrase to
+    swap (`replace:`) and what each chip swaps it for (`replace_with:`): "Goods Receipt yesterday" + "Fabric received
+    in PPC" -> "fabric received in PPC yesterday". A reply that is one distinctive word of a chip ("ppc", "store")
+    picks it too."""
+    from ..data.tools import clarification_rule_named
+    rule = clarification_rule_named(str(pending.get("rule") or ""))
+    phrases = (rule or {}).get("replace_with") or {}
+    if not rule or not rule.get("replace") or not isinstance(phrases, dict):
+        return None
+    key = _pick([str(k) for k in phrases], r)
+    if key is None:
+        words = set(re.findall(r"[a-z]{3,}", r.casefold()))
+        hits = [k for k in phrases if words & set(re.findall(r"[a-z]{3,}", str(k).casefold())) - {"the", "and"}]
+        key = hits[0] if len(hits) == 1 else None
+    if key is None:
+        return None
+    swapped = re.sub(str(rule["replace"]), str(phrases[key]), question, count=1)
+    return swapped if swapped != question else None

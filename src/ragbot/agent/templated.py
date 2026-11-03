@@ -61,7 +61,32 @@ def follow_ups(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "", 
         q = _fill(template, r)
         if q and q.strip().lower() != asked.strip().lower() and q not in out:
             out.append(q)
-    return out[:limit]
+    return from_rows(r, tool, asked) + out[:limit]
+
+
+def from_rows(r: QueryResult, tool: Optional[dict[str, Any]], asked: str = "") -> list[str]:
+    """Phase W: `follow_ups_from_rows: {column, template, limit}` — one question per distinct value of `column` in the
+    rows, in row order (a summary's largest first): "Bowing test details for file FR-26-2382 on 29 Oct 2026". The
+    user drills into what the summary shows; each chip reaches the tool's detail tool, so a click needs no model.
+    The template is filled with that value and the result's parameters."""
+    spec = (tool or {}).get("follow_ups_from_rows")
+    if not isinstance(spec, dict) or not r.rows or spec.get("column") not in r.columns:
+        return []
+    col = str(spec["column"])
+    i = r.columns.index(col)
+    values: list[str] = []
+    for row in r.rows:
+        v = str(row[i]).strip() if row[i] is not None else ""
+        if v and v not in values:
+            values.append(v)
+        if len(values) >= int(spec.get("limit", 3)):
+            break
+    out: list[str] = []
+    for v in values:
+        q = _fill(str(spec.get("template") or ""), r, **{col: v})
+        if q and q.strip().lower() != asked.strip().lower() and q not in out:
+            out.append(q)
+    return out
 
 
 def is_blank_result(columns: list[str], rows: list[list[Any]]) -> bool:

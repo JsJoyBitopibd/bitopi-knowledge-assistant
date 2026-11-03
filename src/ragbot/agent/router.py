@@ -26,6 +26,8 @@ _DATA_STRONG = re.compile(r"\b(EO\s*\d{2}-\d{4}|[A-Z]{2,4}-\d{2}-\d{2,5}(-\d+)?|
                           r"bowing\s+(?:tests?|reports?|results?)|shrinkage\s+(?:tests?|reports?|results?)|"
                           r"shade\s+(?:band|group|records?|tests?)|yarn\s+counts?|yern|gsm\s+tests?|head\s*cutting|"
                           r"metal\s+detect\w*|nickel\s+tests?|fabric\s+receipts?|fabric\s+received|goods\s+received|"
+                          # Phase W: a goods receipt is a record (PPC or the store); which one is asked if unclear
+                          r"goods\s+receipts?|grns?|"
                           r"trims?\s+inspections?|4[\s-]?point|visual\s+inspections?|lab\s+tests?|twisting\s+tests?)\b",
                           re.I)
 # Policy/IT nouns that appear in count-phrased questions the PDFs answer ("how many Kaspersky licences

@@ -31,3 +31,19 @@
   unless: '(?i)\bemployee\s*(?:id|code|no\.?)?\s*[:#]?\s*[A-Za-z]{0,4}-?\d{2,}'
   ask: "Which employee code is yours? (For example E0456.) This sign-in does not say who you are in the HR records."
   slot: employee
+
+- name: which_receipt_system
+  # Phase W (asked live on 3 Nov 2026: "Goods Receipt yesterday"): fabric received for inspection in the PPC quality
+  # system, or goods receipts (GRN) into the stores? Asked only when nothing in the question says which — an item
+  # code, a GRN id, a store, "fabric", "ppc" or "inventory" decides it. The reply swaps the phrase (`replace:`) for the
+  # chip's own words (`replace_with:`), so the merged question reaches the right tool or database and this rule does
+  # not fire again on it.
+  match: '(?i)\b(?:goods\s+receipts?|goods\s+received|grns?)\b'
+  unless: '(?i)\b(?:fabrics?|stores?|ppc|inventory|items?|supplier|po|purchase)\b|\b\d{6,8}\b|\b[A-Z]{2,4}[-/]\w'
+  ask: "Do you mean fabric received for inspection in the PPC quality system, or goods receipts (GRN) into the stores?"
+  slot: source
+  choices: [Fabric received in PPC, Store goods receipts]
+  replace: '(?i)\b(?:goods\s+receipts?|goods\s+received|grns?)\b'
+  replace_with:
+    Fabric received in PPC: fabric received in PPC
+    Store goods receipts: store goods receipts

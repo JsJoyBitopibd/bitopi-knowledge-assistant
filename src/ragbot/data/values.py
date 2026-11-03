@@ -290,3 +290,18 @@ def as_of(path: Optional[Path] = None) -> Optional[datetime]:
     stamps = [aggregates.available(s["name"], path) for s in aggregates.load_specs() if s.get("entity")]
     stamps = [s for s in stamps if s]
     return max(stamps) if stamps else None
+
+
+def names_for(entity: str, codes: Iterable[str], scope: Scope, entries: Optional[list[ValueEntry]] = None) -> dict[str, str]:
+    """Phase W: {code: recorded name} for the codes of `entity` this user may see — the chips a clarifying question
+    offers ("Decor (Target USA)" for C/19/2168). Codes the index does not hold are left out. Fails closed: {}."""
+    denied = _denied(scope, ())
+    if denied is None:
+        return {}
+    wanted = {str(c).strip() for c in codes}
+    try:
+        entries = load_index() if entries is None else entries
+    except Exception:
+        return {}
+    return {e.code: e.value for e in entries
+            if e.entity == entity and e.code in wanted and _visible(e, scope, denied)}

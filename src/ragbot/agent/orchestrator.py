@@ -211,10 +211,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             out.text, out.route, out.kind = ask, "clarify", "clarify"
             # T6: what the reply fills and the chips offered for it (factories: only those this user may see)
             out.clarify = {"slot": rule.get("slot", ""), "choices": choices(rule, scope)}
+            if rule.get("replace"):
+                out.clarify["rule"] = rule.get("name", "")   # Phase W: the reply swaps a phrase (agent/clarify.py)
             yield Final(_log(out, user, scope)); return
     if r in ("data", "both"):
         from ..data import empty_retry
-        from ..data.tools import answer_from_data  # lazy: DB drivers optional at import time
+        from ..data.tools import ClarificationNeeded, answer_from_data  # lazy: DB drivers optional at import time
     if r == "both":
         # Independent sources: search the documents while the database query (and its SQL-generation
         # call) runs, instead of one after the other. A worker's exception re-raises in .result().
@@ -224,14 +226,27 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         with empty_retry.allowed(False):
             data_f = trace.submit(_POOL, answer_from_data, q, user, refresh, scope=scope, **data_kw)
         chunks = docs_f.result()[:top]
-        results = list(data_f.result())
+        try:
+            results = list(data_f.result())
+        except ClarificationNeeded as e:
+            # Phase W: half of a "both" question needs a key the question lacks — the documents answer alone
+            results = []
+            out.warnings.append(f"data: would ask for {e.slot or 'a key'}; the documents answered alone")
     elif r == "documents":
         yield Stage("searching", "Searching documents…")
         chunks = retrieve(q, where=where, scope=scope)[:top]
     elif r == "data":
         yield Stage("querying", "Querying the database…")
-        with empty_retry.allowed(True):
-            results = list(answer_from_data(q, user, refresh, scope=scope, **data_kw))
+        try:
+            with empty_retry.allowed(True):
+                results = list(answer_from_data(q, user, refresh, scope=scope, **data_kw))
+        except ClarificationNeeded as e:
+            # Phase W: the data is there but the question needs a buyer, a file or a lot to show it — ask once, with
+            # the values that have data as chips; the reply completes the question (agent/clarify.py merge_reply)
+            out.text, out.route, out.kind, out.agent = e.ask, "clarify", "clarify", e.agent
+            out.clarify = e.clarify()
+            out.warnings.append(f"clarify: {e.tool} needs {e.slot}")
+            yield Final(_log(out, user, scope)); return
     if r in ("data", "both"):
         out.agent = next((x.agent for x in results if x.agent), "")   # domain agent (Phase K), for the log
         # which catalogs the SQL model was shown, kept on the answer so a not-found row in chat.csv says it too

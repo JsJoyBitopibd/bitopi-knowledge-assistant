@@ -88,6 +88,19 @@
       AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
     ORDER BY BowingTestDate DESC, BowingPct DESC
   companion: *ppc_buyer_names
+  # Phase W: every roll of a year is no answer — with no file, buyer or period named, ask which file
+  slot:
+    name: buyer_or_file
+    fills: [buyer, file]
+    unless_named: [window]
+    ask: 'Which file do you mean? Pick one of the latest files below, or type a file number such as FR-26-2382 or a buyer.'
+    choices:
+      sql: |
+        SELECT TOP (7) FileRefID
+        FROM rag.vw_FabricRoll
+        WHERE BowingTestDate >= @from AND BowingTestDate < @to AND FileRefID LIKE 'FR-%'
+        GROUP BY FileRefID
+        ORDER BY MAX(BowingTestDate) DESC, COUNT(*) DESC
 
 - name: fabric_bowing_summary
   agent: fabric_quality
@@ -97,6 +110,8 @@
     - 'Bowing test details {window}'
     - 'Shrinkage test summary {window}'
     - '4-point inspections {window}'
+  # Phase W: the files the summary shows, largest first, as questions about their rolls
+  follow_ups_from_rows: { column: FileRefID, template: 'Bowing test details for file {FileRefID} {window}', limit: 3 }
   description: Bowing tests per buyer and file for a day or period from the PPC quality system — rolls tested, average and highest bowing %.
   answer_list: 'Bowing tests per buyer and file {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:bowing|skew)\b)'
@@ -138,6 +153,18 @@
       AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
     ORDER BY ShrinkageTestDate DESC, FileRefID, LotNumber
   companion: *ppc_buyer_names
+  slot:
+    name: buyer_or_file
+    fills: [buyer, file]
+    unless_named: [window]
+    ask: 'Which file do you mean? Pick one of the latest files below, or type a file number such as FR-26-2440 or a buyer.'
+    choices:
+      sql: |
+        SELECT TOP (7) FileRefID
+        FROM rag.vw_FabricRoll
+        WHERE ShrinkageTestDate >= @from AND ShrinkageTestDate < @to AND FileRefID LIKE 'FR-%'
+        GROUP BY FileRefID
+        ORDER BY MAX(ShrinkageTestDate) DESC, COUNT(*) DESC
 
 - name: fabric_shrinkage_summary
   agent: fabric_quality
@@ -146,6 +173,7 @@
   follow_ups:
     - 'Shrinkage test details {window}'
     - 'Bowing test summary {window}'
+  follow_ups_from_rows: { column: FileRefID, template: 'Shrinkage test details for file {FileRefID} {window}', limit: 3 }
   description: Wash shrinkage tests per buyer and file for a day or period from the PPC quality system — rolls tested, average and range of length and width shrinkage %.
   answer_list: 'Shrinkage tests per buyer and file {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
   match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bshrinkage\b)'
@@ -284,6 +312,22 @@
       AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
     ORDER BY TestDate DESC, FileRefID
   companion: *ppc_buyer_names
+  # Phase W (asked live on 3 Nov 2026: "yarn count?"): no buyer, file or period named — ask, with the buyers tested
+  slot:
+    name: buyer_or_file
+    entity: ppc_buyer
+    fills: [buyer, file]
+    unless_named: [window]
+    ask: 'For which buyer or file? Pick a buyer below, type a file number such as FR-26-2118, or choose all recent tests.'
+    choices:
+      map: ppc_buyer
+      sql: |
+        SELECT TOP (7) BuyerID
+        FROM rag.vw_FabricYarnCount
+        WHERE TestDate >= @from AND TestDate < @to
+        GROUP BY BuyerID
+        ORDER BY COUNT(*) DESC, BuyerID
+    all: { label: 'All tests of the last 90 days', period: 'last 90 days' }
 
 - name: fabric_gsm_tests
   agent: fabric_quality
@@ -308,6 +352,21 @@
       AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
     ORDER BY TestDate DESC, FileRefID
   companion: *ppc_buyer_names
+  slot:
+    name: buyer_or_file
+    entity: ppc_buyer
+    fills: [buyer, file]
+    unless_named: [window]
+    ask: 'For which buyer or file? Pick a buyer below, type a file number such as FR-26-2493, or choose all recent tests.'
+    choices:
+      map: ppc_buyer
+      sql: |
+        SELECT TOP (7) BuyerID
+        FROM rag.vw_FabricGSMTest
+        WHERE TestDate >= @from AND TestDate < @to
+        GROUP BY BuyerID
+        ORDER BY COUNT(*) DESC, BuyerID
+    all: { label: 'All tests of the last 90 days', period: 'last 90 days' }
 
 - name: fabric_lab_tests_failed
   agent: fabric_quality

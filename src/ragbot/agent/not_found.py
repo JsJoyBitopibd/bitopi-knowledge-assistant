@@ -188,6 +188,7 @@ def _on_day(question: str, day) -> str:
     q = re.sub(r"\s{2,}", " ", q).strip()
     end = q[-1] if q and q[-1] in "?.!" else ""
     body = q[:-1].rstrip() if end else q
+    body = body[:1].upper() + body[1:]            # a chip is a question: "Fabric received in PPC on …"
     return f"{body} on {_show(day)}{end}"
 
 

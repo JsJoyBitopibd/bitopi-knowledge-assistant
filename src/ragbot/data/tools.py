@@ -301,6 +301,14 @@ def needs_clarification(question: str) -> Optional[str]:
     return rule["ask"] if rule else None
 
 
+def clarification_rule_named(name: str) -> Optional[dict[str, Any]]:
+    """Phase W: the config/clarify.yaml rule called `name` (a reply is merged by the rule that asked), or None."""
+    path = settings().path("fixed_tools").parent / "clarify.yaml"
+    if not name or not path.exists():
+        return None
+    return next((r for r in _load_fixed_tools(path, path.stat().st_mtime_ns) if r.get("name") == name), None)
+
+
 def clarification_rule(question: str) -> Optional[dict[str, Any]]:
     """The whole config/clarify.yaml rule that fires — its `ask`, and since Phase T6 its `slot` and `choices`."""
     path = settings().path("fixed_tools").parent / "clarify.yaml"
@@ -462,6 +470,9 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]],
             groups = groups if isinstance(groups, list) else [groups]
             # m.re.groups, not m.lastindex: with nested groups ("(FR-(\d{2}-\d+))") lastindex is the outer one
             raw = next((m.group(g) for g in groups if g <= m.re.groups and m.group(g)), None)
+            if raw is not None and tool.get("slot"):
+                # Phase W: what the question itself named (not a default), so a `slot:` knows whether to ask
+                params.setdefault("_named", []).append(name)
             if raw is None:
                 raw = spec.get("default")      # e.g. window: { default: 'last 30 days' } for an optional phrase
             if raw is None:
@@ -571,6 +582,77 @@ def _apply_filter(tool: dict[str, Any], params: dict[str, Any], columns: list[st
                 idx = [cols.index(c) for c in picked]
                 cols, out = picked, [[r[i] for i in idx] for r in out]
     return cols, out
+
+
+# ---------------------------------------------------------------- Phase W: ask for what is missing
+class ClarificationNeeded(Exception):
+    """A fixed tool matched the question but needs a key it does not name (a buyer or a file, the system meant by
+    "goods receipt"): the orchestrator asks `ask` once, offering `choices` as chips, and the reply is merged into the
+    question (agent/clarify.py). Raised from answer_from_data only — match_fixed_tool keeps returning (tool, params)
+    for its many callers (routing, rewriting, capability examples, the catalog check)."""
+
+    def __init__(self, tool: dict[str, Any], slot: dict[str, Any], choices: list[str]):
+        super().__init__(str(slot.get("ask") or ""))
+        self.tool = str(tool.get("name") or "")
+        self.agent = str(tool.get("agent") or "")
+        self.slot = str(slot.get("name") or "")
+        self.ask = str(slot.get("ask") or "")
+        self.choices = choices
+        all_spec = slot.get("all") if isinstance(slot.get("all"), dict) else {}
+        self.all_label = str(all_spec.get("label") or "")
+        self.all_period = str(all_spec.get("period") or "")
+        self.entity = str(slot.get("entity") or "")
+
+    def clarify(self) -> dict[str, Any]:
+        """The `Answer.clarify` dict: what the reply fills, the chips, and the tool that asked."""
+        out: dict[str, Any] = {"slot": self.slot, "choices": self.choices, "tool": self.tool}
+        if self.entity:
+            out["entity"] = self.entity
+        if self.all_label:
+            out["all"], out["all_period"] = self.all_label, self.all_period
+        return out
+
+
+def missing_slot(tool: dict[str, Any], params: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The tool's `slot:` when the question fills none of its parameters (`fills:`) and names none of the parameters
+    that make asking unnecessary (`unless_named:`, e.g. a period: "yarn count last week" lists that week). Pure."""
+    spec = tool.get("slot")
+    if not isinstance(spec, dict) or not spec.get("ask"):
+        return None
+    if any(params.get(p) not in (None, "") for p in spec.get("fills") or []):
+        return None
+    named = params.get("_named") or []
+    if any(n in named for n in spec.get("unless_named") or []):
+        return None
+    return spec
+
+
+def slot_choices(tool: dict[str, Any], spec: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog],
+                 user: str, scope: Scope) -> list[str]:
+    """The chips for a slot (at most 8, the "all" choice last): `choices: [..]` as written, or `choices: {sql, map}` —
+    the tool's own view read with the tool's parameters (so under the user's scope, logged like any statement),
+    its first column mapped from codes to recorded names through the value index (`map: <entity>`); a code with no
+    recorded name is left out, so every chip is something the reply can be merged from."""
+    ch = spec.get("choices")
+    out: list[str] = []
+    if isinstance(ch, list):
+        out = [str(x) for x in ch]
+    elif isinstance(ch, dict) and ch.get("sql"):
+        sub = {k: v for k, v in tool.items() if k not in ("companion", "slot")}
+        sub.update(name=f"{tool['name']}:choices", sql=str(ch["sql"]))
+        r = run_fixed_tool(sub, dict(params), cats, user, scope=scope)
+        codes = [str(row[0]).strip() for row in r.rows if row and row[0] not in (None, "")]
+        if ch.get("map"):
+            from .values import names_for
+            names = names_for(str(ch["map"]), codes, scope)
+            out = [names[c] for c in codes if c in names]
+        else:
+            out = codes
+    out = list(dict.fromkeys(out))[:7]
+    all_spec = spec.get("all") if isinstance(spec.get("all"), dict) else {}
+    if all_spec.get("label"):
+        out.append(str(all_spec["label"]))
+    return out
 
 
 def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str, Catalog], user: str = "",
@@ -1289,6 +1371,11 @@ def answer_from_data(question: str, user: str = "", refresh: bool = False, *, sc
         if hit:
             tool, params = hit
             if tool["database"] in cats:
+                need = missing_slot(tool, params)
+                if need is not None:
+                    # Phase W: the tool needs a buyer or a file the question does not name — ask, with the values
+                    # that have data as chips, instead of a list too broad to read
+                    raise ClarificationNeeded(tool, need, slot_choices(tool, need, params, cats, user, scope))
                 result = apply_limit(run_fixed_tool(tool, params, cats, user, refresh, scope=scope), question)
                 a = pick_agent(question, tool)
                 result.agent = a.name if a is not None and agent_readable(a, cats, known) else ""

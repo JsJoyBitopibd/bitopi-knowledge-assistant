@@ -348,6 +348,13 @@ an answer come from BitopiSplint as a second source `[D2]`. A question without a
 ("the newest record on this server is from 29 Oct 2026"), read by `src/ragbot/data/freshness.py` from the view's
 `freshness_columns:` and cached for an hour. After a restore nothing needs changing: the next read finds the new day.
 
+**When a key is missing, the assistant asks (Phase W).** "yarn count?" or "bowing test of each roll" names no buyer,
+file or period: the assistant asks "For which buyer or file?" with the buyers or files that have data as chips, and
+the reply ("FR-26-2118", "Decor (Target USA)", "All tests of the last 90 days") completes the question with no model
+call. "Goods Receipt yesterday" asks whether fabric received in PPC or store goods receipts is meant. A bowing or
+shrinkage summary offers its own top files as the next questions. Configured per tool (`slot:`,
+`follow_ups_from_rows:`; `docs/DATA_ACCESS.md` §3) and in `config/clarify.yaml`, which is baked into the image (rebuild).
+
 ### Recommendations preview (Stage 3)
 
 Off by default. `agents.recommendations.enabled: true` in `config/settings.yaml` shows a "Recommendations —
