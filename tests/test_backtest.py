@@ -69,7 +69,7 @@ class Store:
                 id=len(self.rows) + 1, run_id=rid, dimension="quality", subject=subject, factory=factory,
                 level=level, window_days=7, days=7, totals={"Checked": 4000.0}, measures=[], caveat="",
                 database="VistaQ_Default_RHL", views=[], as_of=_iso(when + timedelta(seconds=3)),
-                outcome_at=None, outcome_level=None, outcome_totals={}, outcome_measures=[], revised=0))
+                outcome_at=None, outcome_level=None, outcome_totals={}, outcome_measures=[], revised=0, outcome_day=None))
         for name, counts in (settle or {}).items():
             factory, subject = name.split(":") if ":" in name else ("TAL", name)
             p = max((q for q in self.rows if (q["factory"], q["subject"]) == (factory, subject)

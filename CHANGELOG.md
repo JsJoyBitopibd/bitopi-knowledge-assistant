@@ -8,6 +8,18 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.16.1] — 2026-11-03 — finished files settle again (Phase M)
+
+### Fixed
+- **Quality risk levels were never checked against how most files finished** (Phase M, the M✓ backtest). A
+  file counted as "still running" for 30 days after its last plan, but its final quality was read from the last
+  7 days, so by the time it counted as finished there was nothing left to measure: in three weeks 97 files got
+  stuck that way and only 1 could be used to judge the levels. A file now counts as finished 3 days after VistaQ
+  stops planning it, its final quality is read over its own last week of inspections, and the outcome records the
+  day it really finished. If VistaQ stops writing plans, nothing settles, as it already did for inspections. On
+  a copy of the store, 98 finished files became usable at once. The home page's quality-risk block also stops
+  listing files that finished days ago. The evidence the backtest needs before it states anything is unchanged.
+
 ## [1.16.0] — 2026-11-03 — Phase U: saved conversations, "my" questions, a personal home, the phone
 
 Conversations kept per user on the assistant's server, "my" and "our" read from the signed-in identity, a home page

@@ -62,7 +62,7 @@ _RUN_SQL = ("SELECT id, started, finished, dimension, predictions, errors FROM r
             "WHERE dimension = ? ORDER BY started, id")
 _ROW_SQL = ("SELECT id, run_id, dimension, subject, factory, level, window_days, days, totals, measures, "
             "caveat, database, views, as_of, outcome_at, outcome_level, outcome_totals, outcome_measures, "
-            "revised FROM prediction WHERE dimension = ? ORDER BY id")
+            "revised, {outcome_day} FROM prediction WHERE dimension = ? ORDER BY id")
 
 
 def _json(raw: Optional[str], default: Any) -> Any:
@@ -84,7 +84,14 @@ def _row_dict(r: tuple) -> dict[str, Any]:
                 window_days=int(r[6] or 7), days=int(r[7] or 0), totals=_json(r[8], {}),
                 measures=_json(r[9], []), caveat=r[10] or "", database=r[11] or "", views=_json(r[12], []),
                 as_of=r[13], outcome_at=r[14], outcome_level=r[15], outcome_totals=_json(r[16], {}),
-                outcome_measures=_json(r[17], []), revised=int(r[18] or 0))
+                outcome_measures=_json(r[17], []), revised=int(r[18] or 0),
+                outcome_day=(r[19] or None) if len(r) > 19 else None)
+
+
+def end_day(p: dict[str, Any]) -> date:
+    """The day a settled file finished: its last inspection day when the outcome recorded it (from
+    2026-11-03), else the day the outcome was written — the same thing for a file settled promptly."""
+    return _day(p.get("outcome_day") or p["outcome_at"])
 
 
 def load(path: Optional[Path] = None, dimension: str = "quality",
@@ -100,7 +107,9 @@ def load(path: Optional[Path] = None, dimension: str = "quality",
     con = signals._connect(path, readonly=True)
     try:
         runs = [_run_dict(r) for r in con.execute(_RUN_SQL, (dimension,)).fetchall()]
-        rows = [_row_dict(r) for r in con.execute(_ROW_SQL, (dimension,)).fetchall()]
+        cols = {r[1] for r in con.execute("PRAGMA table_info(prediction)")}
+        sql = _ROW_SQL.format(outcome_day="outcome_day" if "outcome_day" in cols else "NULL")
+        rows = [_row_dict(r) for r in con.execute(sql, (dimension,)).fetchall()]
     except sqlite3.OperationalError as e:
         if "no such table" in str(e):
             return [], []                  # a store from before Phase M: nothing to backtest yet
@@ -125,7 +134,7 @@ def cut(runs: list[dict[str, Any]], rows: list[dict[str, Any]],
             continue
         if p.get("outcome_at") and _day(p["outcome_at"]) > until:
             p = {**p, "outcome_at": None, "outcome_level": None, "outcome_totals": {},
-                 "outcome_measures": [], "revised": 0}
+                 "outcome_measures": [], "revised": 0, "outcome_day": None}
         out.append(p)
     return keep, out
 
@@ -337,7 +346,7 @@ def _file(p: dict[str, Any], daily: list[dict[str, Any]], rule: Optional[dict[st
     Days ahead are counted from the date of the run that stored the level - the key the daily series uses -
     not from the row's `as_of`, which a run started just before midnight can stamp with the next day."""
     over, why, value, amber, recomputed = dhu_outcome(p, rule)
-    end = _day(p["outcome_at"])
+    end = end_day(p)
     joined = sorted(((end - run_day.get(q["run_id"], _day(q["as_of"]))).days, str(q["level"]),
                      int(q.get("window_days") or 7)) for q in daily)
     ahead = [(d, lvl, w) for d, lvl, w in joined if d >= 1]
@@ -704,7 +713,9 @@ def render_markdown(result: Result, v: Verdict, generated: datetime) -> str:
           "Such a file is neither a hit nor a miss and is in no share's denominator.",
           "- Recomputed: an outcome stored without measures is judged on DHU recomputed from its totals "
           "(100 × Defects / Checked) against the rule's amber, and counted above.",
-          "- Days ahead = outcome date − date of the run that stored the level. A level fewer than "
+          "- Days ahead = outcome date − date of the run that stored the level. The outcome date is the file's "
+          "last inspection day when the outcome recorded it (settled from 3 Nov 2026), else the day the outcome "
+          "was written. A level fewer than "
           f"{w} days ahead shares days with the outcome window, so it partly describes the outcome; one exactly "
           f"{w} days ahead does not.",
           "- 95% interval: Wilson score interval on over / judged.",

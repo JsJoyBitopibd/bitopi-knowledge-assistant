@@ -18,7 +18,9 @@ as a judgement would be the dishonest part of this feature.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -168,6 +170,7 @@ class Assessment:
     measures: list[Measured] = field(default_factory=list)
     caveat: str = ""               # travels with a provisional red so a later reader cannot lose it
     days: int = 0
+    last_day: str = ""             # the newest inspection day in the window (YYYY-MM-DD); "" when unknown
 
     @property
     def provisional(self) -> bool:
@@ -248,16 +251,25 @@ def evaluate(rs: RuleSet, subject: str, factory: str, rows: list[dict[str, Any]]
 # path scripts/refresh_aggregates.py uses), so the cap cannot bite again; `max_subjects` is a loud stop,
 # not a quiet trim.
 SUBJECT_SQL = """
-SELECT Factory, FileNo, COUNT(DISTINCT InspectionDate) AS Days,
+SELECT Factory, FileNo, COUNT(DISTINCT InspectionDate) AS Days, MAX(InspectionDate) AS LastDay,
        SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
        SUM(Rectified) AS Rectified, SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
 FROM rag.vw_PlanQualityDay
 WHERE InspectionDate >= DATEADD(day, -{days}, {as_of}) AND FileNo IS NOT NULL
 GROUP BY Factory, FileNo
 """
-# A subject still running: VistaQ holds a plan for it dated after its last inspection day. Measured
-# against the newest day VistaQ ITSELF holds, never the wall clock — a feed outage would otherwise look
-# like every file finishing at once.
+# A subject still running: VistaQ holds a plan for it on one of the last `PLAN_GRACE_DAYS` days before the
+# newest inspection day VistaQ ITSELF holds — never the wall clock, or a feed outage would look like every
+# file finishing at once.
+#
+# Until 2026-11-03 this read "any plan in the last 30 days", so a file stayed "running" for a month after
+# its last plan, while its outcome is read from a 7-day window: by the time it left the set, nothing was left
+# in the window to settle it against, and it never settled. The backtest of 3 Nov found 97 files stuck that
+# way and 1 usable settled file in 21 days. Measured that day (read-only, 382 files): VistaQ holds no plan
+# dated after today, and 98% of the gaps between a running file's plan days are 1 or 2 days (the Friday);
+# 3 days covers a Friday plus a holiday. A file that pauses longer settles, is predicted again when it
+# resumes, and the backtest leaves it out as "predicted again after its outcome".
+PLAN_GRACE_DAYS = 3
 RUNNING_SQL = """
 SELECT Factory, FileNo, MAX(PlanDate) AS LastPlan
 FROM rag.vw_PlanDay
@@ -265,6 +277,39 @@ WHERE PlanHours > 0 AND FileNo IS NOT NULL AND PlanDate >= DATEADD(day, -{days},
 GROUP BY Factory, FileNo
 """
 NEWEST_DAY_SQL = "SELECT MAX(InspectionDate) AS NewestDay FROM rag.vw_LineDayQuality"
+NEWEST_PLAN_SQL = "SELECT MAX(PlanDate) AS NewestPlan FROM rag.vw_PlanDay WHERE PlanHours > 0"
+# A finished subject's outcome: its own last `window_days` of inspections, ending on ITS last inspection day,
+# whatever today is. The trailing window of the run would hold none of it once the file stopped a week ago.
+FINAL_SQL = """
+SELECT Factory, FileNo, MAX(LastDay) AS LastDay, COUNT(DISTINCT InspectionDate) AS Days,
+       SUM(Checked) AS Checked, SUM(Passed) AS Passed, SUM(DefectivePcs) AS DefectivePcs,
+       SUM(Rectified) AS Rectified, SUM(Rejected) AS Rejected, SUM(Defects) AS Defects
+FROM (SELECT Factory, FileNo, InspectionDate, Checked, Passed, DefectivePcs, Rectified, Rejected, Defects,
+             MAX(InspectionDate) OVER (PARTITION BY Factory, FileNo) AS LastDay
+      FROM rag.vw_PlanQualityDay WHERE FileNo IN ({files})) AS q
+WHERE InspectionDate >= DATEADD(day, -{days}, LastDay)
+GROUP BY Factory, FileNo
+"""
+# File numbers go into FINAL_SQL as literals. They come from the store, which took them from VistaQ, but a
+# literal is only ever built from a value this pattern accepts; anything else is skipped, never escaped.
+_SAFE_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}")
+_FINAL_BATCH = 200
+
+
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?")
+
+
+def _sql_day(day: Any) -> str:
+    """A day (`YYYY-MM-DD`, optionally with a time, or a date) as a T-SQL date literal. Raises ValueError
+    for anything else — the whole value is checked, so nothing after a valid date is ever dropped quietly."""
+    text = day.isoformat() if isinstance(day, date) else str(day)
+    if not _DAY.fullmatch(text):
+        raise ValueError(f"not a day: {text[:40]!r}")
+    return f"CAST('{date.fromisoformat(text[:10]).isoformat()}' AS date)"
+
+
+def _day_text(v: Any) -> str:
+    return str(v)[:10] if v is not None else ""
 
 
 def _read(sql: str, cat: Any, *, timeout: int, tool: str) -> tuple[list[str], list[list[Any]], list[str]]:
@@ -309,14 +354,19 @@ def collect(rs: RuleSet, cat: Any, *, as_of: str = "CAST(GETDATE() AS date)", ti
             continue        # without a factory the row could not be scoped on read; without a subject it is nothing
         a = evaluate(rs, subject, factory, [d], days=rs.window_days)
         a.days = int(d.get("Days") or 0)
+        a.last_day = _day_text(d.get("LastDay"))
         out.append(a)
     return out, errors, {"database": cat.database, "views": views, "sql": sql}
 
 
-def still_running(cat: Any, *, days: int = 30, as_of: str = "CAST(GETDATE() AS date)",
-                  timeout: int = 180) -> set[tuple[str, str]]:
-    """(factory, subject) pairs VistaQ still plans to run. A subject not in this set has finished."""
-    cols, rows, _ = _read(RUNNING_SQL.format(days=days, as_of=as_of), cat, timeout=timeout,
+def still_running(cat: Any, *, newest: Optional[str] = None, days: int = PLAN_GRACE_DAYS,
+                  as_of: str = "CAST(GETDATE() AS date)", timeout: int = 180) -> set[tuple[str, str]]:
+    """(factory, subject) pairs VistaQ still plans to run. A subject not in this set has finished.
+
+    Planned = a plan on one of the last `days` days before `newest` (VistaQ's own newest inspection day);
+    without `newest`, before `as_of`."""
+    anchor = _sql_day(newest) if newest else as_of
+    cols, rows, _ = _read(RUNNING_SQL.format(days=int(days), as_of=anchor), cat, timeout=timeout,
                           tool="risk:running")
     out = set()
     for r in rows:
@@ -334,12 +384,69 @@ def newest_day(cat: Any, *, timeout: int = 60) -> Optional[str]:
     return str(rows[0][0])[:10]
 
 
+def newest_plan_day(cat: Any, *, timeout: int = 60) -> Optional[str]:
+    """The newest day VistaQ holds a plan for. Paired with `plan_feed_stalled()`: "running" is read from the
+    plans, so plans that stop being written would make every file look finished."""
+    cols, rows, _ = _read(NEWEST_PLAN_SQL, cat, timeout=timeout, tool="risk:newest_plan")
+    if not rows or rows[0][0] is None:
+        return None
+    return str(rows[0][0])[:10]
+
+
+def plan_feed_stalled(newest: Optional[str], newest_plan: Optional[str],
+                      grace_days: int = PLAN_GRACE_DAYS) -> Optional[str]:
+    """Why settling must wait, or None. The plans are the evidence that a file is still running; when the
+    newest plan is older than the grace before the newest inspection day, that evidence is missing for every
+    file at once — an outage of the plans, not every file finishing on the same day."""
+    if not newest:
+        return None                       # settle() already does nothing without a newest inspection day
+    if not newest_plan:
+        return "VistaQ holds no plans: not settling, the plans are how a finished file is told apart"
+    gap = (date.fromisoformat(newest[:10]) - date.fromisoformat(newest_plan[:10])).days
+    if gap > grace_days:
+        return (f"VistaQ's newest plan ({newest_plan[:10]}) is {gap} days older than its newest inspection "
+                f"day ({newest[:10]}): not settling until the plans are current again")
+    return None
+
+
+def final_windows(rs: RuleSet, cat: Any, subjects: set[tuple[str, str]], *,
+                  timeout: int = 180) -> dict[tuple[str, str], Assessment]:
+    """Each finished subject scored over its OWN last `window_days` of inspections, ending on its last
+    inspection day. Subjects with no inspection at all are absent; a file number the safe pattern refuses
+    is skipped (it waits, it is never quoted)."""
+    files = sorted({s for _f, s in subjects if _SAFE_FILE.fullmatch(s)})
+    out: dict[tuple[str, str], Assessment] = {}
+    for i in range(0, len(files), _FINAL_BATCH):
+        part = ", ".join(f"'{f}'" for f in files[i:i + _FINAL_BATCH])
+        sql = FINAL_SQL.format(files=part, days=int(rs.window_days))
+        cols, rows, _ = _read(sql, cat, timeout=timeout, tool=f"risk:{rs.dimension}:final")
+        for r in rows:
+            d = dict(zip(cols, r))
+            key = (str(d.get("Factory") or "").strip(), str(d.get("FileNo") or "").strip())
+            if key not in subjects:
+                continue                  # the same file number at another factory: not the one that finished
+            a = evaluate(rs, key[1], key[0], [d], days=rs.window_days)
+            a.days = int(d.get("Days") or 0)
+            a.last_day = _day_text(d.get("LastDay"))
+            out[key] = a
+    return out
+
+
+def finished(dimension: str, running: set[tuple[str, str]], path: Optional[Any] = None) -> set[tuple[str, str]]:
+    """The open subjects the plans no longer carry: the ones `final_windows()` has to read."""
+    from .signals import open_predictions
+    return {(p["factory"], p["subject"]) for p in open_predictions(dimension, path=path)
+            if (p["factory"], p["subject"]) not in running}
+
+
 def settle(dimension: str, assessments: list[Assessment], running: set[tuple[str, str]],
-           newest: Optional[str], path: Optional[Any] = None) -> int:
+           newest: Optional[str], path: Optional[Any] = None, *,
+           finals: Optional[dict[tuple[str, str], Assessment]] = None) -> int:
     """Record what actually happened for every subject that has finished running. Returns how many settled.
 
-    Takes the assessments the run has already read: a subject's final window is the window that was just
-    scored, so re-reading it per subject would be the same query a hundred times over.
+    A finished subject is settled against `finals` — its own last window, ending on its last inspection
+    day (`final_windows()`) — and the outcome carries that day. Without an entry there, the window this run
+    scored is used when the subject is still in it (the behaviour before 2026-11-03).
 
     A subject settles only when the plans no longer carry it AND the feed itself has moved on. `newest` is
     the newest inspection day VistaQ holds, never the wall clock — a stopped feed would otherwise make
@@ -351,15 +458,17 @@ def settle(dimension: str, assessments: list[Assessment], running: set[tuple[str
     if not newest:
         return 0
     final = {(a.factory, a.subject): a for a in assessments}
+    finals = finals or {}
     done = 0
     for p in open_predictions(dimension, path=path):
         key = (p["factory"], p["subject"])
         if key in running:
             continue                      # still planned: not finished
-        a = final.get(key)
+        a = finals.get(key) or final.get(key)
         if a is None:
-            continue                      # nothing left in the window to settle against; try again tomorrow
-        if write_outcome(p["id"], a.level, a.totals, [asdict(m) for m in a.measures], path=path):
+            continue                      # no inspection to settle against; try again tomorrow
+        if write_outcome(p["id"], a.level, a.totals, [asdict(m) for m in a.measures], path=path,
+                         outcome_day=a.last_day or None):
             done += 1
     return done
 

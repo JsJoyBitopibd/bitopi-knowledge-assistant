@@ -67,10 +67,15 @@ CREATE INDEX IF NOT EXISTS ix_prediction_open ON prediction(dimension, outcome_a
 
 
 def _migrate(con: sqlite3.Connection) -> None:
-    """Columns added after a store was first created (kind: 2026-10-06)."""
+    """Columns added after a store was first created (kind: 2026-10-06; outcome_day: 2026-11-03)."""
     cols = {r[1] for r in con.execute("PRAGMA table_info(signal)")}
     if "kind" not in cols:
         con.execute("ALTER TABLE signal ADD COLUMN kind TEXT NOT NULL DEFAULT 'ops'")
+    # The day a subject actually finished (its last inspection), not the moment its outcome was written.
+    # A backtest counts days ahead from it; outcome_at stays the write time, which says which run settled it.
+    cols = {r[1] for r in con.execute("PRAGMA table_info(prediction)")}
+    if cols and "outcome_day" not in cols:
+        con.execute("ALTER TABLE prediction ADD COLUMN outcome_day TEXT")
 
 
 def _connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
@@ -299,8 +304,11 @@ def open_predictions(dimension: str = "quality", path: Optional[Path] = None) ->
 
 
 def write_outcome(prediction_id: int, level: str, totals: dict[str, Any], measures: list[dict[str, Any]],
-                  path: Optional[Path] = None) -> bool:
+                  path: Optional[Path] = None, outcome_day: Optional[str] = None) -> bool:
     """Record what actually happened for one prediction. Returns True when it was written.
+
+    `outcome_day` is the day the subject actually finished (its last inspection, `YYYY-MM-DD`); without it
+    a backtest falls back to the day the outcome was written.
 
     An outcome already recorded is not overwritten blindly: if it is written again with different numbers
     the row's `revised` counter goes up, so a backtest can exclude subjects that were settled early and
@@ -310,7 +318,9 @@ def write_outcome(prediction_id: int, level: str, totals: dict[str, Any], measur
     con = _connect(path)
     try:
         con.executescript(_SCHEMA)
+        _migrate(con)
         now = datetime.now().isoformat(timespec="seconds")
+        day = outcome_day[:10] if outcome_day else None
         with con:
             row = con.execute("SELECT outcome_at, outcome_level, outcome_totals FROM prediction WHERE id = ?",
                               (prediction_id,)).fetchone()
@@ -319,13 +329,13 @@ def write_outcome(prediction_id: int, level: str, totals: dict[str, Any], measur
             if row[0] is not None:
                 changed = row[1] != level or row[2] != json.dumps(totals)
                 con.execute("UPDATE prediction SET outcome_at = ?, outcome_level = ?, outcome_totals = ?, "
-                            "outcome_measures = ?, revised = revised + ? WHERE id = ?",
-                            (now, level, json.dumps(totals), json.dumps(measures), 1 if changed else 0,
+                            "outcome_measures = ?, outcome_day = ?, revised = revised + ? WHERE id = ?",
+                            (now, level, json.dumps(totals), json.dumps(measures), day, 1 if changed else 0,
                              prediction_id))
                 return True
             con.execute("UPDATE prediction SET outcome_at = ?, outcome_level = ?, outcome_totals = ?, "
-                        "outcome_measures = ? WHERE id = ?",
-                        (now, level, json.dumps(totals), json.dumps(measures), prediction_id))
+                        "outcome_measures = ?, outcome_day = ? WHERE id = ?",
+                        (now, level, json.dumps(totals), json.dumps(measures), day, prediction_id))
         return True
     finally:
         con.close()

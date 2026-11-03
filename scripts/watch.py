@@ -57,11 +57,25 @@ def risk_once(timeout: int, dry_run: bool = False, only: set[str] | None = None)
         try:
             assessments, errors, source = risk.collect(rs, cat, timeout=timeout)
             newest = risk.newest_day(cat, timeout=timeout)
-            running = risk.still_running(cat, timeout=timeout)
+            running = risk.still_running(cat, newest=newest, timeout=timeout)
+            stalled = risk.plan_feed_stalled(newest, risk.newest_plan_day(cat, timeout=timeout))
         except Exception as e:                      # one dimension failing must not stop the others
             print(f"  FAILED {dimension}: {e.__class__.__name__}: {e}")
             failed += 1
             continue
+        if stalled:
+            errors = [*errors, stalled]             # the day's levels are not counted, and nothing settles
+
+        # A finished subject is settled against its own last window, which a trailing window no longer
+        # holds once the file stopped more than a week ago (the 97 files the 3 Nov backtest found stuck).
+        # A failure here is not a run error: the levels are complete, only some outcomes wait a day.
+        finals: dict = {}
+        finals_problem = ""
+        if not stalled and newest:
+            try:
+                finals = risk.final_windows(rs, cat, risk.finished(dimension, running), timeout=max(timeout, 180))
+            except Exception as e:                  # the trailing window still settles what it holds
+                finals_problem = f"final windows not read: {e.__class__.__name__}: {e}"
 
         running_now = risk.predictable(assessments, running)
         levels = {lv: sum(a.level == lv for a in running_now) for lv in ("red", "amber", "green", "info")}
@@ -69,8 +83,10 @@ def risk_once(timeout: int, dry_run: bool = False, only: set[str] | None = None)
                  f"({', '.join(f'{n} {lv}' for lv, n in levels.items() if n)})")
         if dry_run:
             print(f"{datetime.now():%Y-%m-%d %H:%M} [dry run] {dimension}: {shape}; "
-                  f"{len(running)} still planned; VistaQ's newest day {newest}; errors={errors}")
-            for e in errors:
+                  f"{len(running)} still planned; {len(risk.finished(dimension, running))} open subject(s) "
+                  f"finished, {len(finals)} with a final window to settle against; "
+                  f"VistaQ's newest day {newest}; errors={errors}")
+            for e in errors + ([finals_problem] if finals_problem else []):
                 print(f"  PROBLEM {e}")
             continue
 
@@ -85,7 +101,10 @@ def risk_once(timeout: int, dry_run: bool = False, only: set[str] | None = None)
             print(f"  PROBLEM {e}")
             failed += 1
 
-        done = risk.settle(dimension, assessments, running, newest)
+        if finals_problem:
+            print(f"  PROBLEM {finals_problem}")
+            failed += 1
+        done = 0 if stalled else risk.settle(dimension, assessments, running, newest, finals=finals)
         print(f"  settled {done} finished subject(s); {len(open_predictions(dimension))} still open"
               + (f"; VistaQ's newest day is {newest}" if newest else "; VistaQ holds no inspections"))
     return failed

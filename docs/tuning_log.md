@@ -238,6 +238,34 @@ them), 160 files open, 4 of them settled that way on 14 Oct and running again on
 can be met on 10 November 2026 at the earliest, if one run is stored every day; the file counts take longer,
 because a file has to run a week or more and then finish before it counts.
 
+**Second run, 2026-11-03 10:43** (`logs/backtest_quality_20261103.md`): INSUFFICIENT EVIDENCE — 21 dates of 28,
+**1 usable settled file** of 60, 0 files judged a week ahead at any level, and **98 files "open but no longer
+predicted (stuck)"**. That was a defect, not a slow month. "Still running" read *any plan in the last 30 days*,
+while an outcome was read from the run's trailing 7-day window: a finished file stayed "running" for a month
+after its last plan (FR-25-1508: last inspection 8 Oct, last plan 12 Oct, "running" until 11 Nov), and once it
+left the set nothing was left in the window to settle it against, so it never settled (checked read-only that
+morning: 96 of the 97 stuck files had plans that had ended).
+
+**The settlement fix, 2026-11-03** (v1.16.1, `domain_agents/risk.py`, `scripts/watch.py`, `tests/test_risk_finished.py`).
+The method changes; the minimum evidence above does not.
+- *Running* = a plan on one of the last **3 days** before VistaQ's newest inspection day (`PLAN_GRACE_DAYS`).
+  Measured that day over 382 files: VistaQ holds no plan dated after today, and 98% of the gaps between a file's
+  plan days are 1 or 2 days (the Friday); 3 covers a Friday plus a holiday. A file paused longer settles, is
+  predicted again when it resumes, and is left out as "predicted again after its outcome", as before.
+- *The outcome* of a finished file = its **own last 7 days of inspections, ending on its last inspection day**
+  (`final_windows()`), not the run's trailing window; DHU is recomputed from the sums as before.
+- *The outcome date* = that last inspection day, stored as `prediction.outcome_day`; `outcome_at` stays the time
+  it was written (it still decides which run settled a row). Days ahead count from `outcome_day`, so a level
+  stored after the file had finished is "not ahead", as it should be. Rows settled before the fix have no
+  `outcome_day` and are dated by `outcome_at`, as before.
+- *A plan outage* (VistaQ's newest plan more than 3 days older than its newest inspection) is a run error and
+  nothing settles, the same protection the inspection feed already had.
+The fix was designed from the stuck counts and the plan dates, before any hit rate was looked at. A dry
+settlement on a copy of the store that morning settled the 159 finished files: **98 usable**, 1 stuck, 1 paused;
+judged a week or more ahead: red 10, amber 8, green 5 (15 each needed); 21 dates (28 needed, 10 Nov). No share is
+recorded here: below the minimum the tool states no fact, and neither does this log. The live store settles on
+the next nightly run.
+
 **The starting picture, 2026-10-14** (`scripts/watch.py --risk-only`, 7-day window): 158 files scored,
 151 of them still running and therefore predicted — 52 critical, 55 watch, 32 on target, 12 too few
 checked. 2,058,760 pieces checked in the window, 24% of them in files at the critical level.
