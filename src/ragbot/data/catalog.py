@@ -65,6 +65,8 @@ class View:
     definition: str | None = None  # T-SQL SELECT; excluded from render(); wrapped as CTE at execution
     scope_column: str | None = None  # column with the factory short name; per-user row scope filters on it
     column_kinds: dict[str, str] = field(default_factory=dict)   # lower-case column -> KINDS (Phase Q)
+    # Phase V: the date columns a "newest record on this server" sentence may be read from; the first is the default
+    freshness_columns: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -410,8 +412,13 @@ def _load_catalogs(folder: Path, _stamp: tuple) -> dict[str, Catalog]:
                     raise RuntimeError(f"{f.name} view {v['name']}: column_kinds names {col!r}, not one of its columns")
                 if kind not in KINDS:
                     raise RuntimeError(f"{f.name} view {v['name']}: column_kinds {col}: {kind!r} is not one of {KINDS}")
+            fresh = [str(c) for c in (v.get("freshness_columns") or [])]
+            for col in fresh:
+                if col not in v.get("columns", {}):
+                    raise RuntimeError(f"{f.name} view {v['name']}: freshness_columns names {col!r}, not one of its columns")
             views.append(View(v["name"], v.get("grain", ""), v.get("description", ""), v.get("key_columns", []),
-                              v.get("columns", {}), definition=defn, scope_column=scope, column_kinds=kinds))
+                              v.get("columns", {}), definition=defn, scope_column=scope, column_kinds=kinds,
+                              freshness_columns=fresh))
         hints = []
         for h in d.get("hints") or []:
             if len(str(h.get("target", "")).split(".")) != 3 or not h.get("column") or not h.get("tables"):

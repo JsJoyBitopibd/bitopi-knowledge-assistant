@@ -333,6 +333,21 @@ python scripts\discover_schema.py SQLSERVER_CONN_PRODUCTION Production --json --
 python scripts\index_schema.py Production
 ```
 
+### Fabric & trims quality (PPC, Phase V)
+
+The PPC quality app writes to the **Production** database, schema `PPC`. `config/catalog/production.yaml` describes it
+with 11 virtual views (`rag.vw_FabricReceipt`, `rag.vw_FabricRoll` — bowing, shrinkage and shade per roll —
+`rag.vw_FabricVisualInspection`, `rag.vw_FabricYarnCount`, `rag.vw_FabricGSMTest`, `rag.vw_FabricLabTest`,
+`rag.vw_FabricTwistingTest`, `rag.vw_TrimsInspection`, `rag.vw_MetalDetection`, `rag.vw_NickelTest`,
+`rag.vw_LotApproval`), and the `fabric_*` / `trims_*` tools at the top of `config/fixed_tools.yaml` answer the
+common questions with no model call (agent `fabric_quality`). A buyer named in a question is bound as its code from the
+`values_ppc_buyers` copy (refresh it with `python scripts\refresh_aggregates.py values_ppc_buyers`); the buyer names in
+an answer come from BitopiSplint as a second source `[D2]`. A question without a day gets the latest day on record.
+
+**This server is a restored copy.** An empty dated answer says what was checked and the newest record the view holds
+("the newest record on this server is from 29 Oct 2026"), read by `src/ragbot/data/freshness.py` from the view's
+`freshness_columns:` and cached for an hour. After a restore nothing needs changing: the next read finds the new day.
+
 ### Recommendations preview (Stage 3)
 
 Off by default. `agents.recommendations.enabled: true` in `config/settings.yaml` shows a "Recommendations —
@@ -398,7 +413,7 @@ The DBA index on `dbo.ExportOrderBack(ExportOrderID)` (`docs/schema/rag_views_bi
 would make the live query fast too; the copy is the no-DDL workaround until then.
 
 **Value index (Phase P2).** The same refresh copies the names the data records — stores, companies, item
-categories, store groups, issue causes (`config/aggregates.yaml` specs with `entity:`) — so a question's
+categories, store groups, issue causes, the PPC buyers (`config/aggregates.yaml` specs with `entity:`) — so a question's
 spelling ("mantainance store of misami") becomes the recorded value ('Maintenance Store (Misami)') in a fixed
 tool's parameter, in the SQL prompt's "Known values" line and in the router's evidence. In Docker the
 `aggregates` service does this daily at 02:00 (`docker compose up -d aggregates`; mount `config/` into it so edited

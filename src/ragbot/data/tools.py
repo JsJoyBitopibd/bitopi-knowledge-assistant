@@ -48,9 +48,14 @@ PERIOD = (rf"(?:from\s+|between\s+)?{_DATE}\s*(?:to|till|until|and|-|–)\s*{_DA
           rf"|(?:on\s+)?{_DATE}"
           rf"|(?:on\s+|last\s+)?(?:{'|'.join(_WEEKDAYS)})"
           rf"|(?:in|for|of|during)\s+(?:{_MON})(?:\s+\d{{4}})?(?!\.?\s*\d)|(?:{_MON})\s+\d{{4}}"   # not "for october 7"
-          r"|today|toady|yesterday|this week|last week|this month|last month|last \d+ days")
+          # "yesterdays bowing test report" (typed live on 3 Nov 2026) and "today's" are the day itself
+          r"|today(?:['’]?s)?|toady|yesterday(?:['’]?s)?|this week|last week|this month|last month|last \d+ days")
 _MONTH_NUM = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
                                           "nov", "dec"), start=1)}
+# Phase V: a `date_window` param's `default: latest` — no period named, so the tool reads the newest day its view
+# holds on this server (a restored copy: "today" is usually empty). Resolved in run_fixed_tool (_resolve_latest).
+LATEST = "latest"
+LATEST_NOTE = ", the latest day on record"
 
 
 def _show(d: date) -> str:
@@ -118,6 +123,7 @@ def _window(text: str) -> tuple[date, date, str]:
     """(from, to, label) for a period phrase. The label reads after a heading and at the end of a follow-up
     question ("today", "this week", "on 6 Oct 2026", "in October 2026") and parses back to the same period."""
     t = text.strip().lower().rstrip(".")
+    t = re.sub(r"\b(today|yesterday)['’]?s\b", r"\1", t)      # "yesterday's" / "yesterdays" -> "yesterday"
     found = _explicit_window(t, date.today())
     if found:
         return found
@@ -408,8 +414,22 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]],
                     hit, cands = resolve(question, Scope.unrestricted(), spec.get("entity", "store"), deny=denied)
                 except Exception:
                     hit, cands = None, []
-                params[name] = hit.value if hit else spec.get("default", "")
+                # Phase V: `bind: code` binds the value's recorded code ('C/09/7') while the label keeps its name (H&M)
+                params[name] = ((hit.code if spec.get("bind") == "code" else hit.value) if hit
+                                else spec.get("default", ""))
                 params[f"{name}_label"] = (spec.get("label", "in {value}").format(value=hit.value) if hit
+                                           else spec.get("else_label", ""))
+                continue
+            if spec.get("type") == "file":
+                # Phase V: a file reference (FR-26-2493). `type: style` cannot read it: the entity parser takes an
+                # FR code as a file first and blanks it out of the text. Two files: not this tool's shape.
+                from .entities import question_entities
+                found = question_entities(question).files
+                raw = found[0].upper() if len(found) == 1 else (None if found else spec.get("default"))
+                if raw is None:
+                    break
+                params[name] = raw
+                params[f"{name}_label"] = (spec.get("label", "for file {value}").format(value=raw) if found
                                            else spec.get("else_label", ""))
                 continue
             if spec.get("type") in ("factory", "line", "unit", "style"):
@@ -447,6 +467,13 @@ def match_fixed_tool(question: str, tools: list[dict[str, Any]],
             if raw is None:
                 break
             if spec.get("type") == "date_window":
+                if str(spec.get("default", "")).strip().lower() == LATEST:
+                    params[f"{name}_note"] = ""   # ", the latest day on record" when the default was used
+                if str(raw).strip().lower() == LATEST:
+                    # Phase V: no period named and the tool's default is the latest day on record — resolved in
+                    # run_fixed_tool from the view's newest row, which needs the database (this function never reads it)
+                    params[name] = LATEST
+                    continue
                 try:
                     # the label ("next week", "on 6 Oct 2026") is for templated answers; not in the SQL
                     params["from"], params["to"], params[name] = _window(raw)
@@ -575,6 +602,8 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
         return QueryResult(database=cat.database, engine=cat.engine, views=_views_in(sql, cat), sql=sql,
                            params=params, tool=tool["name"], columns=[], rows=[], denied=True,
                            error=f"outside the user's scope: factory {factory}")
+    if any(v == LATEST for k, v in params.items() if not k.endswith("_note")):
+        _resolve_latest(tool, params, cat, sql, user, scope, refresh)
     local = _from_aggregate(tool, params, cat, user, scope) if tool.get("aggregate") and not refresh and not page else None
     if local is not None:
         return local
@@ -595,12 +624,68 @@ def run_fixed_tool(tool: dict[str, Any], params: dict[str, Any], cats: dict[str,
                                        scope_key=scope.key(), database=getattr(cat, "connection_database", None),
                                        ttl=tool.get("cache_ttl_seconds"))
         cols, rows = _apply_filter(tool, params, cols, rows)
-        return QueryResult(database=cat.database, engine=cat.engine, views=views, sql=sql, sql_executed=sql_exec,
-                           params=params, tool=tool["name"], columns=cols, rows=rows, key_columns=_keys_for(views, cat),
-                           as_of=as_of)
+        out = QueryResult(database=cat.database, engine=cat.engine, views=views, sql=sql, sql_executed=sql_exec,
+                          params=params, tool=tool["name"], columns=cols, rows=rows, key_columns=_keys_for(views, cat),
+                          as_of=as_of)
+        if not rows and not page:
+            _mark_horizon(out, tool, cat, user, scope)
+        return out
     except Exception as e:
         return QueryResult(database=cat.database, engine=cat.engine, views=_views_in(sql, cat), sql=sql,
                            params=params, tool=tool["name"], columns=[], rows=[], error=str(e)[:300])
+
+
+def _resolve_latest(tool: dict[str, Any], params: dict[str, Any], cat: Catalog, sql: str, user: str, scope: Scope,
+                    refresh: bool = False) -> None:
+    """Phase V: a `default: latest` window becomes the newest day the tool's view holds on this server, labelled
+    "on 29 Oct 2026" with the note " (the latest day on record)". The view is the first one the tool's SQL reads
+    that declares `freshness_columns:`; the tool's `freshness:` names which of its columns (default: the first).
+    When the day cannot be read the window is today, as the VistaQ tools default to."""
+    from .freshness import newest, view_with_freshness
+    name = next(k for k, v in params.items() if v == LATEST and not k.endswith("_note"))
+    found = view_with_freshness(sql, cat, str(tool.get("freshness") or ""))
+    d = newest(cat.database, found[0], found[1], scope=scope, user=user, refresh=refresh) if found else None
+    if d is None:
+        params["from"], params["to"], params[name] = _window("today")
+        return
+    params["from"], params["to"] = d, d + timedelta(days=1)
+    params[name] = f"on {_show(d)}"
+    params[f"{name}_note"] = LATEST_NOTE
+
+
+def _mark_horizon(r: QueryResult, tool: dict[str, Any], cat: Catalog, user: str, scope: Scope) -> None:
+    """Phase V3: a fixed tool's dated window came back empty — when the view's newest record is older than the
+    window, keep that day on the result, so the reply says how far the data on this server goes."""
+    start = r.params.get("from")
+    if not isinstance(start, date):
+        return
+    from .freshness import newest, view_with_freshness
+    found = view_with_freshness(r.sql, cat, str(tool.get("freshness") or ""))
+    if not found:
+        return
+    d = newest(cat.database, found[0], found[1], scope=scope, user=user)
+    if d is not None and d < start:
+        r.horizon = d
+
+
+def _mark_window(qr: QueryResult, cats: dict[str, Catalog], scope: Scope, user: str) -> None:
+    """Phase V3: a model-written statement over one curated view, filtered on a date range of a column the view
+    declares in `freshness_columns:`, came back empty. Record the period (so the reply can say "I checked … on
+    2 Nov 2026"), mark it checked (the PDFs hold no production rows: no document search) and, when the view's
+    newest record is older than the period, that day."""
+    cat = cats.get(qr.database)
+    if cat is None or qr.error or not qr.sql:
+        return
+    from .freshness import date_window, newest
+    dw = date_window(qr.sql, cat.dialect)
+    v = cat.view(dw.table) if dw is not None else None
+    if v is None or not any(c.lower() == dw.column.lower() for c in v.freshness_columns):
+        return
+    qr.window = dw.label
+    qr.checked = True
+    d = newest(cat.database, v.name, dw.column, scope=scope, user=user)
+    if d is not None and d < dw.start:
+        qr.horizon = d
 
 
 # ---------------------------------------------------------------- generated SQL
@@ -1023,6 +1108,8 @@ def generate_and_run(question: str, cats: dict[str, Catalog], user: str = "", re
                                    scope=scope, user=user, refresh=refresh, started=t_start, considered=considered,
                                    agent=agent, extra_used=attempt)
                 blank = is_blank_result(qr.columns, qr.rows)
+            if blank:
+                _mark_window(qr, cats, scope, user)   # Phase V3: "I checked … on 2 Nov 2026"; the data's newest day
             if key is not None:
                 if replay and blank:
                     _SQL.pop(key)                     # a day-long entry that now returns nothing is forgotten …

@@ -72,9 +72,39 @@ def empty(results: Sequence[QueryResult]) -> Optional[str]:
     if r is None:
         return None
     window = str(r.params.get("window") or "")
+    if window and r.horizon:
+        return _horizon_sentence(r.database, window, r.horizon)
     if window:
         return prompt("not_found_empty_period").strip().format(source=_label(r.database), period=_period(window))
     return prompt("not_found_empty").strip().format(source=_label(r.database))
+
+
+def _show(d) -> str:
+    return f"{d.day} {d:%b %Y}"           # CLAUDE.md: dates display as 12 Oct 2026
+
+
+def _horizon_sentence(database: str, window: str, horizon) -> str:
+    """Phase V3: "I checked <system> on 2 Nov 2026 and found no records; the newest record on this server is from
+    29 Oct 2026, so ask about that day or earlier." — the server is a restored copy (data/freshness.py)."""
+    return prompt("not_found_horizon").strip().format(source=_label(database), period=_period(window),
+                                                      day=_show(horizon))
+
+
+def empty_window(results: Sequence[QueryResult], with_filters: bool = False) -> Optional[str]:
+    """Phase V3: a model-written statement over one view, filtered on a date range, came back empty (data/tools.py
+    _mark_window). With the view's newest record older than the period, say how far the data goes; otherwise say
+    what period was checked — unless the statement also filtered on names or codes, whose own sentence
+    (empty_filter) says more; `with_filters=True` is the fallback after that one."""
+    from .templated import is_blank_result
+    r = next((x for x in results if not x.error and not x.denied and x.tool == "generated" and x.window
+              and is_blank_result(x.columns, x.rows)), None)
+    if r is None:
+        return None
+    if r.horizon:
+        return _horizon_sentence(r.database, r.window, r.horizon)
+    if r.filters and not with_filters:
+        return None
+    return prompt("not_found_empty_period").strip().format(source=_label(r.database), period=_period(r.window))
 
 
 def empty_filter(results: Sequence[QueryResult]) -> Optional[str]:
@@ -126,10 +156,14 @@ def _denied_for(scope) -> Optional[frozenset[str]]:
         return None
 
 
-def general(question: str, scope=None) -> str:
-    from ..domain_agents import pick_agent
+def general(question: str, scope=None, agent_name: str = "") -> str:
+    """The agent's `where:` sentence, else prompts/not_found_general.txt. `agent_name` (Phase V): the agent the
+    data step already chose for this question (Answer.agent) — re-picking by keywords alone ties more often
+    (no router evidence here) and would fall back to the generic sentence."""
+    from ..domain_agents import load_agents, pick_agent
     try:
-        agent = pick_agent(question)
+        agent = load_agents().get(agent_name) if agent_name else None
+        agent = agent or pick_agent(question)
     except Exception:          # a broken agents folder must not break a not-found reply
         agent = None
     # Phase S: never describe a database this user may not read. The HR agent's sentence opens "People data I
@@ -143,6 +177,18 @@ def general(question: str, scope=None) -> str:
 
 def unverified() -> str:
     return prompt("not_found_unverified").strip()
+
+
+def _on_day(question: str, day) -> str:
+    """The question with its period phrase taken out and "on 29 Oct 2026" put at the end — "Show me yesterdays
+    bowing test report" -> "Show me bowing test report on 29 Oct 2026" — which reaches the same fixed tool."""
+    from ..data.tools import PERIOD
+    # the period with the word that introduced it: "report for 31 Dec 2030" -> "report", not "report for"
+    q = re.sub(rf"(?:\b(?:for|on|in|of|during|from)\s+)?\b(?:{PERIOD})\b", " ", question, count=1, flags=re.I)
+    q = re.sub(r"\s{2,}", " ", q).strip()
+    end = q[-1] if q and q[-1] in "?.!" else ""
+    body = q[:-1].rstrip() if end else q
+    return f"{body} on {_show(day)}{end}"
 
 
 def _wider(question: str, window: str) -> list[str]:
@@ -167,7 +213,13 @@ def suggestions(question: str, results: Sequence[QueryResult] = (), limit: int =
     denied = _denied_for(scope)
     out: list[str] = []
     for r in results:
-        if not r.error and not r.rows and r.tool != "generated" and r.params.get("window"):
+        # Phase V3: the period asked is past the newest record on this server — offer the same question for that day
+        if r.horizon and not r.error and denied is not None and r.database not in denied:
+            out.append(_on_day(question, r.horizon))
+            break
+    for r in results:
+        # a wider period is no help when the data on this server ends before the period asked (Phase V3)
+        if not r.error and not r.rows and r.tool != "generated" and r.params.get("window") and not r.horizon:
             out += _wider(question, str(r.params["window"]))
             break
     for r in results:

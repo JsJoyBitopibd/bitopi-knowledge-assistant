@@ -246,6 +246,10 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
         failed = [x for x in results if x.error and not x.denied]
         tool_ran = _tool_answered(results)
         checked = any(x.checked for x in results)
+        # Phase V3: the SQL model looked at the tables and wrote a constant "not found" (the guard refuses a
+        # statement that reads no table). On 3 Nov 2026 two bowing-test questions then spent ~10 s reranking IT
+        # policy PDFs and ended in a model-written guess about where the data lives.
+        gave_up = any(x.error and "reads no view or table" in x.error for x in results)
         results = [x for x in results if not x.error]
         if r == "data" and denied and not _has_rows(results):
             # The question names a factory outside the user's scope: say so now. A document search and a
@@ -259,11 +263,15 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             # happened and offer Refresh data. `error_kind` stays empty on purpose — the UI renders an
             # error_kind turn as a warning box without the action row, which would take Refresh and the chips
             # away (app.py answer_body).
-            out.text = nf + " " + (not_found.failed(failed) or not_found.general(q, scope))
+            out.text = nf + " " + (not_found.failed(failed) or not_found.general(q, scope, out.agent))
             out.not_found = True
             out.follow_ups = not_found.suggestions(q, results, scope=scope)
             yield Final(_log(out, user, scope)); return
-        if r == "data" and not _has_rows(results) and not chunks and not tool_ran and not checked:
+        # A domain agent's question the SQL model gave up on is not rescued by the PDFs (they hold no test or
+        # production rows) unless it names a document: the agent's own sentence says where the data is.
+        domain_gave_up = gave_up and bool(out.agent) and not _DOC_HINT.search(q)
+        if r == "data" and not _has_rows(results) and not chunks and not tool_ran and not checked \
+                and not domain_gave_up:
             # data route found nothing usable: fall back to documents once (a PDF may hold it). Not when a fixed
             # tool or a pasted statement ran: the question is a data question by construction (it matched a tool's
             # pattern), and the PDFs hold no stock balances — the search cost 54 s on this VM for "item 9999999"
@@ -274,7 +282,9 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
     if not chunks and not _has_rows(results):
         # one plain sentence after the fixed line (agent/not_found.py): what was checked, or where else to look
         out.text = nf + " " + (prompt("scope_denied").strip() if denied
-                               else not_found.empty(results) or not_found.empty_filter(results) or not_found.general(q, scope))
+                               else not_found.empty(results) or not_found.empty_window(results)
+                               or not_found.empty_filter(results) or not_found.empty_window(results, with_filters=True)
+                               or not_found.general(q, scope, out.agent))
         out.not_found = True
         if not denied:
             out.follow_ups = not_found.suggestions(q, results, scope=scope)
@@ -291,9 +301,12 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
                              scope=scope):
             yield Final(_log(out, user, scope)); return
 
+    # Phase V3: when the model answers "System doesn't have the data.", the sentence after it is ours, not the
+    # model's — on 3 Nov 2026 it invented "maintained by the quality department" for data the PPC system holds.
+    fallback = prompt("not_found_general").strip() if r == "documents" else not_found.general(q, scope, out.agent)
     yield _writing(chunks, results)
     with trace.span("answer"):
-        yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage)
+        yield from _attempt_stream(out, question, q, history, chunks, results, user, s, nf, usage, fallback=fallback)
 
     # A "data" question that the rows could not answer may still be answerable from the documents —
     # the router mistakes policy questions phrased as counts ("how many licences does the Group
@@ -309,7 +322,8 @@ def _answer_stream(question: str, history: Optional[list[dict]], where: Optional
             retry.warnings = out.warnings
             yield _writing(doc_chunks, [])
             with trace.span("answer"):
-                yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage)
+                yield from _attempt_stream(retry, question, q, history, doc_chunks, [], user, s, nf, usage,
+                                           fallback=fallback)
             if not retry.not_found:
                 yield Final(_log(retry, user, scope)); return
             out = retry
@@ -637,10 +651,13 @@ def _suggest(results: list[QueryResult], question: str) -> list[str]:
 
 
 def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chunks: list[Chunk],
-                    results: list[QueryResult], user: str, s: Any, nf: str, usage: Usage) -> Iterator[Event]:
+                    results: list[QueryResult], user: str, s: Any, nf: str, usage: Usage,
+                    fallback: str = "") -> Iterator[Event]:
     """Assemble the <sources> block, stream the model's answer as Tokens, verify it, and fill `out`
     in place. Two attempts: a draft that fails verification is voided with Replace and the second
-    attempt uses the stricter prompt. Leaves out.not_found=True with no text if both attempts fail."""
+    attempt uses the stricter prompt. Leaves out.not_found=True with no text if both attempts fail.
+    `fallback` (Phase V3): the sentence that follows "System doesn't have the data." when the model says it —
+    the model's own sentence is kept in the warnings only."""
     # the row budget per provider call is shared by every result (a companion or a lookup used to add its own 50)
     block, refs = sources_block(chunks, results, max(5, int(s["data.max_rows_to_llm"]) // max(1, len(results))))
     out.sources_text = block
@@ -683,7 +700,13 @@ def _attempt_stream(out: Answer, question: str, q: str, history: list[dict], chu
                 # docs/REFERENCE_FORMAT.md: a not-found reply carries no markers and no reference
                 # list. verify() short-circuits on not-found, so strip any stray marker the model
                 # appended rather than leaving one that resolves to nothing.
-                out.text = re.sub(r"\s{2,}", " ", _MARK.sub("", text)).strip()
+                said = re.sub(r"\s{2,}", " ", _MARK.sub("", text)).strip()
+                out.text = said
+                if fallback:
+                    rest = said[len(nf):].strip()
+                    if rest:
+                        out.warnings.append(f"not-found sentence replaced: {rest[:160]}")
+                    out.text = f"{nf} {fallback}"
                 out.references = []
             else:
                 used = set(_MARK.findall(text))

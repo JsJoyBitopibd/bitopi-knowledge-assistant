@@ -21,6 +21,448 @@
 # fixed-tool answer, filled with its parameters ({factory}, {window}, {eo}, ...); each should reach a
 # fixed tool so a click answers without a model call (tests/test_follow_ups.py checks both).
 
+# ---------------------------------------------------------------- PPC fabric & trims quality (Phase V, v1.18.0)
+# The PPC quality system in the Production database (config/catalog/production.yaml, agent fabric_quality). First in
+# the file: their patterns need PPC words (bowing, shrinkage, 4-point, ...) so they take nothing from the tools below,
+# and a receipt id such as GR-26-09820 must reach fabric_lot_status before eo_by_id reads it as an export order.
+# `window: {default: latest}` = no period named: the newest day the view holds on this server (a restored copy,
+# so "today" is usually empty) — "on 29 Oct 2026 (the latest day on record)". Buyers are bound by code from the
+# value index (entity ppc_buyer, config/aggregates.yaml values_ppc_buyers); the names come back from the ERP as [D2].
+- name: fabric_lot_status
+  agent: fabric_quality
+  database: Production
+  example: 'Status of fabric receipt GR-26-09820'
+  follow_ups:
+    - 'Fabric received in PPC {window}'
+  description: One fabric receipt (GR id) in the PPC quality system — buyer, file, PO, colour, lot, rolls received, rolls head-cut and approved for cutting, and the latest 4-point inspection result.
+  answer_list: 'Fabric receipt {gr} in the PPC quality system'
+  match: '(?i)\b(GR-\d{2}-\d{3,6})\b'
+  params:
+    gr: { from_group: 1, upper: true }
+    window: { default: 'last 30 days', from_group: 99, type: date_window }
+  sql: |
+    SELECT TOP (20)
+      r.GRID, r.BuyerID, r.FileRefID, r.ExportPONumber, r.Color, r.LotNumber, r.FabricType, r.ReceiveDate,
+      r.TotalRolls AS RollsReceived,
+      (SELECT COUNT(*) FROM rag.vw_FabricRoll f WHERE f.ReceiveID = r.ReceiveID) AS RollsHeadCut,
+      (SELECT COUNT(*) FROM rag.vw_FabricRoll f WHERE f.ReceiveID = r.ReceiveID AND f.HeadCuttingApproved = 1) AS RollsApproved,
+      (SELECT TOP (1) v.Result FROM rag.vw_FabricVisualInspection v WHERE v.ReceiveID = r.ReceiveID
+        ORDER BY v.InspectionDate DESC) AS LatestInspection,
+      r.Factory
+    FROM rag.vw_FabricReceipt r
+    WHERE r.GRID = @gr
+  companion: &ppc_buyer_names
+    database: BitopiSplint
+    agent: order
+    column: BuyerID
+    param: buyers
+    answer_list: 'Buyer names, from the ERP'
+    # each buyer code's name joined onto the PPC rows in Python (tools.merge_companion), cited [D1][D2]
+    merge: { "on": [BuyerID], add: [Buyer] }
+    sql: |
+      SELECT TOP (200) ContactID AS BuyerID, ContactName AS Buyer
+      FROM dbo.Contact_Master
+      WHERE ContactID IN (@buyers)
+
+- name: fabric_bowing_by_roll
+  agent: fabric_quality
+  database: Production
+  example: 'Bowing test of each roll of FR-26-2382'
+  follow_ups:
+    - 'Bowing test summary {window}'
+    - 'Shrinkage test summary {window}'
+  description: Bowing test results roll by roll (bow found, bowing %, test date) for a file, lot, buyer or period, from the PPC quality system, highest bowing first.
+  answer_list: 'Bowing tests roll by roll {buyer_label} {file_label} {factory_label} {window} ({n} roll(s), highest bowing first)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:bowing|skew)\b)(?=.*(?:\bFR-\d{2}-\d+|\brolls?\b|\bdetails?\b|\blots?\b|\broll[\s-]?wise\b))'
+  params: &ppc_detail_params
+    window: { from_group: 1, type: date_window, default: 'last 365 days' }
+    buyer: { type: value, entity: ppc_buyer, bind: code, default: '', label: 'for {value}', else_label: '' }
+    file: { type: file, default: '', label: 'for file {value}', else_label: '' }
+    factory: { type: factory, default: '', label: 'at {value}', else_label: '' }
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, LotNumber, Color, SupplierRollNo, RollSerial, BowingFound, BowingPct, BowingTestDate,
+      BowingRemarks, Factory
+    FROM rag.vw_FabricRoll
+    WHERE BowingTestDate >= @from AND BowingTestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY BowingTestDate DESC, BowingPct DESC
+  companion: *ppc_buyer_names
+
+- name: fabric_bowing_summary
+  agent: fabric_quality
+  database: Production
+  example: 'Show me the bowing test report'
+  follow_ups:
+    - 'Bowing test details {window}'
+    - 'Shrinkage test summary {window}'
+    - '4-point inspections {window}'
+  description: Bowing tests per buyer and file for a day or period from the PPC quality system — rolls tested, average and highest bowing %.
+  answer_list: 'Bowing tests per buyer and file {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:bowing|skew)\b)'
+  freshness: BowingTestDate
+  params: &ppc_summary_params
+    window: { from_group: 1, type: date_window, default: latest }
+    buyer: { type: value, entity: ppc_buyer, bind: code, default: '', label: 'for {value}', else_label: '' }
+    file: { type: file, default: '', label: 'for file {value}', else_label: '' }
+    factory: { type: factory, default: '', label: 'at {value}', else_label: '' }
+  sql: |
+    SELECT TOP (100)
+      BuyerID, FileRefID, COUNT(*) AS RollsTested, CAST(AVG(BowingPct) AS decimal(6,2)) AS AvgBowingPct,
+      MAX(BowingPct) AS MaxBowingPct, Factory
+    FROM rag.vw_FabricRoll
+    WHERE BowingTestDate >= @from AND BowingTestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    GROUP BY BuyerID, FileRefID, Factory
+    ORDER BY RollsTested DESC, BuyerID, FileRefID
+  companion: *ppc_buyer_names
+
+- name: fabric_shrinkage_by_roll
+  agent: fabric_quality
+  database: Production
+  example: 'Shrinkage test of each roll of FR-26-2440'
+  follow_ups:
+    - 'Shrinkage test summary {window}'
+    - 'Bowing test summary {window}'
+  description: Wash shrinkage results roll by roll (length and width before and after wash, shrinkage %) for a file, lot, buyer or period, from the PPC quality system.
+  answer_list: 'Shrinkage tests roll by roll {buyer_label} {file_label} {factory_label} {window} ({n} roll(s), newest first)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bshrinkage\b)(?=.*(?:\bFR-\d{2}-\d+|\brolls?\b|\bdetails?\b|\blots?\b|\broll[\s-]?wise\b))'
+  unless: '(?i)\b(?:elastic|twill|tape|dpr)\b'
+  params: *ppc_detail_params
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, LotNumber, Color, SupplierRollNo, RollSerial, LengthBeforeWash, LengthAfterWash,
+      WidthBeforeWash, WidthAfterWash, LengthShrinkagePct, WidthShrinkagePct, ShrinkageTestDate, Factory
+    FROM rag.vw_FabricRoll
+    WHERE ShrinkageTestDate >= @from AND ShrinkageTestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY ShrinkageTestDate DESC, FileRefID, LotNumber
+  companion: *ppc_buyer_names
+
+- name: fabric_shrinkage_summary
+  agent: fabric_quality
+  database: Production
+  example: 'Show the fabric shrinkage test summary'
+  follow_ups:
+    - 'Shrinkage test details {window}'
+    - 'Bowing test summary {window}'
+  description: Wash shrinkage tests per buyer and file for a day or period from the PPC quality system — rolls tested, average and range of length and width shrinkage %.
+  answer_list: 'Shrinkage tests per buyer and file {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bshrinkage\b)'
+  unless: '(?i)\b(?:elastic|twill|tape|dpr)\b'
+  freshness: ShrinkageTestDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (100)
+      BuyerID, FileRefID, COUNT(*) AS RollsTested,
+      CAST(AVG(LengthShrinkagePct) AS decimal(6,2)) AS AvgLengthShrinkagePct,
+      MIN(LengthShrinkagePct) AS MinLengthShrinkagePct, MAX(LengthShrinkagePct) AS MaxLengthShrinkagePct,
+      CAST(AVG(WidthShrinkagePct) AS decimal(6,2)) AS AvgWidthShrinkagePct,
+      MIN(WidthShrinkagePct) AS MinWidthShrinkagePct, MAX(WidthShrinkagePct) AS MaxWidthShrinkagePct, Factory
+    FROM rag.vw_FabricRoll
+    WHERE ShrinkageTestDate >= @from AND ShrinkageTestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    GROUP BY BuyerID, FileRefID, Factory
+    ORDER BY RollsTested DESC, BuyerID, FileRefID
+  companion: *ppc_buyer_names
+
+- name: fabric_shade_summary
+  agent: fabric_quality
+  database: Production
+  example: 'Show the shade band summary of the rolls'
+  follow_ups:
+    - 'Shrinkage test summary {window}'
+    - 'Bowing test summary {window}'
+  description: Shade grouping of head-cut rolls per buyer, file, lot and colour for a day or period from the PPC quality system — rolls, distinct shades and shading groups.
+  answer_list: 'Shade records per file, lot and colour {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:shade|shades|shading|shade\s+band)\b)'
+  # a sewing-line "shade variation" defect is VistaQ's (quality agent), not a fabric shade record
+  unless: '(?i)\b(?:shade\s+card|lab\s*dip|approved\s+shade\s+by\s+buyer|defects?|dhu|rejects?|rejected|vistaq)\b'
+  freshness: ShadeDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (100)
+      BuyerID, FileRefID, LotNumber, Color, COUNT(*) AS Rolls, COUNT(DISTINCT Shade) AS Shades,
+      COUNT(DISTINCT ShadingGroup) AS ShadingGroups, Factory
+    FROM rag.vw_FabricRoll
+    WHERE ShadeDate >= @from AND ShadeDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    GROUP BY BuyerID, FileRefID, LotNumber, Color, Factory
+    ORDER BY Rolls DESC, FileRefID, LotNumber
+  companion: *ppc_buyer_names
+
+- name: fabric_4point_failed
+  agent: fabric_quality
+  database: Production
+  example: 'Which fabric failed 4-point inspection?'
+  follow_ups:
+    - '4-point inspections {window}'
+  description: 4-point (visual) fabric inspections that failed in a day or period, from the PPC quality system — DPPHSY, rolls inspected and failed.
+  answer_list: 'Failed 4-point inspections {buyer_label} {file_label} {factory_label} {window} ({n} inspection(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bfail(?:ed|ing|s|ure)?\b)(?=.*\b(?:4[\s-]?point|four[\s-]?point|visual\s+inspections?|fabric\s+inspections?|dpphsy)\b)'
+  freshness: InspectionDate
+  # failures are rare: with no period named, the last 30 days (one day on its own is usually empty)
+  params: &ppc_failed_params
+    window: { from_group: 1, type: date_window, default: 'last 30 days' }
+    buyer: { type: value, entity: ppc_buyer, bind: code, default: '', label: 'for {value}', else_label: '' }
+    file: { type: file, default: '', label: 'for file {value}', else_label: '' }
+    factory: { type: factory, default: '', label: 'at {value}', else_label: '' }
+  sql: |
+    SELECT TOP (200)
+      InspectionID, BuyerID, FileRefID, LotNumber, Color, Result, DPPHSY, RollsInspected, RollsFailed,
+      InspectionLevelPct, InspectionDate, Factory
+    FROM rag.vw_FabricVisualInspection
+    WHERE Result = 'FAIL' AND InspectionDate >= @from AND InspectionDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY InspectionDate DESC, DPPHSY DESC
+  companion: *ppc_buyer_names
+
+- name: fabric_4point_inspections
+  agent: fabric_quality
+  database: Production
+  example: 'Show the 4-point inspection results'
+  follow_ups:
+    - 'Failed 4-point inspections {window}'
+    - 'Fabric received in PPC {window}'
+  description: 4-point (visual) fabric inspections for a day or period from the PPC quality system — result (PASS / FAIL / In Progress), DPPHSY, rolls inspected and failed.
+  answer_list: '4-point inspections {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} inspection(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:4[\s-]?point|four[\s-]?point|visual\s+inspections?|fabric\s+inspections?|dpphsy)\b)'
+  freshness: InspectionDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (200)
+      InspectionID, BuyerID, FileRefID, LotNumber, Color, Result, DPPHSY, RollsInspected, RollsFailed,
+      InspectionLevelPct, InspectionDate, Factory
+    FROM rag.vw_FabricVisualInspection
+    WHERE InspectionDate >= @from AND InspectionDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY InspectionDate DESC, Result, DPPHSY DESC
+  companion: *ppc_buyer_names
+
+- name: fabric_receipts_window
+  agent: fabric_quality
+  database: Production
+  example: 'Show the fabric received in PPC'
+  follow_ups:
+    - '4-point inspections {window}'
+    - 'Bowing test summary {window}'
+  description: Fabric received into the PPC quality system for inspection in a day or period — receipt (GR) id, buyer, file, PO, colour, lot, fabric type, rolls and quantity.
+  answer_list: 'Fabric received in the PPC quality system {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} receipt(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*(?:\bfabric\s+(?:receiv(?:ed|e|ing)|receipts?)\b|\bppc\s+(?:goods\s+)?(?:receiv\w*|receipts?)\b|\b(?:goods|fabrics?)\s+receiv(?:ed|e)\s+(?:in|into|for|at|by)\s+(?:the\s+)?ppc\b))'
+  freshness: ReceiveDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (200)
+      GRID, BuyerID, FileRefID, ExportPONumber, Color, LotNumber, FabricType, TotalRolls, TotalQuantity, UOM,
+      ReceiveDate, Factory
+    FROM rag.vw_FabricReceipt
+    WHERE ReceiveDate >= @from AND ReceiveDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY ReceiveDate DESC, GRID DESC
+  companion: *ppc_buyer_names
+
+- name: fabric_yarn_count
+  agent: fabric_quality
+  database: Production
+  example: 'Show the fabric yarn count tests'
+  follow_ups:
+    - 'Fabric received in PPC {window}'
+  description: Fabric yarn count tests (ends and picks per inch, required and actual) for a buyer, file or period from the PPC quality system, newest first.
+  answer_list: 'Yarn count tests {buyer_label} {file_label} {factory_label} {window} ({n} test(s), newest first)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:yarn\s+counts?|yern\s+counts?|epi|ppi|ends?\s+per\s+inch|picks?\s+per\s+inch)\b)'
+  params:
+    window: { from_group: 1, type: date_window, default: 'last 90 days' }
+    buyer: { type: value, entity: ppc_buyer, bind: code, default: '', label: 'for {value}', else_label: '' }
+    file: { type: file, default: '', label: 'for file {value}', else_label: '' }
+    factory: { type: factory, default: '', label: 'at {value}', else_label: '' }
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, SupplierID, Color, FabricConstruction, RequiredEPI, ActualEPI, RequiredPPI, ActualPPI,
+      TestDate, Factory
+    FROM rag.vw_FabricYarnCount
+    WHERE TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY TestDate DESC, FileRefID
+  companion: *ppc_buyer_names
+
+- name: fabric_gsm_tests
+  agent: fabric_quality
+  database: Production
+  example: 'Show the fabric GSM test results'
+  follow_ups:
+    - 'Fabric received in PPC {window}'
+  description: Fabric GSM tests for a buyer, file or period from the PPC quality system — booked GSM, rolls tested, average, lowest and highest actual GSM.
+  answer_list: 'GSM tests {buyer_label} {file_label} {factory_label} {window} ({n} test(s), newest first)'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bgsm\s+(?:tests?|reports?|results?|check)\b)'
+  params:
+    window: { from_group: 1, type: date_window, default: 'last 90 days' }
+    buyer: { type: value, entity: ppc_buyer, bind: code, default: '', label: 'for {value}', else_label: '' }
+    file: { type: file, default: '', label: 'for file {value}', else_label: '' }
+    factory: { type: factory, default: '', label: 'at {value}', else_label: '' }
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, LotNumber, Color, BookingGSM, RollsTested, AvgActualGSM, MinActualGSM, MaxActualGSM,
+      TestDate, Factory
+    FROM rag.vw_FabricGSMTest
+    WHERE TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY TestDate DESC, FileRefID
+  companion: *ppc_buyer_names
+
+- name: fabric_lab_tests_failed
+  agent: fabric_quality
+  database: Production
+  example: 'Which fabric failed the lab test?'
+  follow_ups:
+    - 'Fabric lab test results {window}'
+  description: Fabric lab tests that failed in a day or period, from the PPC quality system, per receipt and colour with remarks.
+  answer_list: 'Failed fabric lab tests {buyer_label} {file_label} {factory_label} {window} ({n} test(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bfail(?:ed|ing|s|ure)?\b)(?=.*\blab\s*(?:tests?|reports?|results?)?\b)'
+  unless: '(?i)\b(?:trims?|accessor\w*|lab\s*dip)\b'
+  freshness: TestDate
+  params: *ppc_failed_params
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, LotNumber, Color, Result, Remarks, TestDate, Factory
+    FROM rag.vw_FabricLabTest
+    WHERE Result = 'Failed' AND TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY TestDate DESC, FileRefID
+  companion: *ppc_buyer_names
+
+- name: fabric_lab_tests
+  agent: fabric_quality
+  database: Production
+  example: 'Show the fabric lab test results'
+  follow_ups:
+    - 'Failed fabric lab tests {window}'
+    - '4-point inspections {window}'
+  description: Fabric lab test results (Pass, Failed, Conditionally Pass) per receipt and colour for a day or period from the PPC quality system.
+  answer_list: 'Fabric lab tests {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} test(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:fabric\s+)?lab\s*(?:tests?|reports?|results?)\b)'
+  unless: '(?i)\b(?:trims?|accessor\w*|lab\s*dip)\b'
+  freshness: TestDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, LotNumber, Color, Result, Remarks, TestDate, Factory
+    FROM rag.vw_FabricLabTest
+    WHERE TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY TestDate DESC, Result, FileRefID
+  companion: *ppc_buyer_names
+
+- name: fabric_twisting_summary
+  agent: fabric_quality
+  database: Production
+  example: 'Show the twisting test summary of the rolls'
+  follow_ups:
+    - 'Shrinkage test summary {window}'
+  description: Twisting (spirality) tests per buyer, file and lot for a day or period from the PPC quality system — rolls tested, average and highest twisting %.
+  answer_list: 'Twisting tests per file and lot {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:twisting|spirality|torque)\b)'
+  freshness: TestDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (100)
+      BuyerID, FileRefID, LotNumber, COUNT(*) AS RollsTested, CAST(AVG(TwistingPct) AS decimal(6,2)) AS AvgTwistingPct,
+      MAX(TwistingPct) AS MaxTwistingPct, Factory
+    FROM rag.vw_FabricTwistingTest
+    WHERE TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    GROUP BY BuyerID, FileRefID, LotNumber, Factory
+    ORDER BY RollsTested DESC, FileRefID
+  companion: *ppc_buyer_names
+
+- name: trims_failed_inspections
+  agent: fabric_quality
+  database: Production
+  example: 'Which trims failed AQL inspection?'
+  follow_ups:
+    - 'Trims inspection summary {window}'
+  description: Trims and accessories inspections that failed AQL in a day or period from the PPC quality system — item, GRN, lot, AQL level, quantity received and checked.
+  answer_list: 'Trims and accessories that failed AQL {buyer_label} {file_label} {factory_label} {window} ({n} inspection(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:trims?|accessor(?:y|ies))\b)(?=.*\bfail(?:ed|ing|s|ure)?\b)'
+  unless: '(?i)\b(?:stock|balance|issue[sd]?)\b'
+  freshness: InspectionDate
+  params: *ppc_failed_params
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, ItemName, ItemCode, GRNID, LotNumber, AQLLevel, AQLResult, ReceivedQty, CheckQty, UOM,
+      InspectionDate, Factory
+    FROM rag.vw_TrimsInspection
+    WHERE AQLResult = 'Fail' AND InspectionDate >= @from AND InspectionDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY InspectionDate DESC, FileRefID
+  companion: *ppc_buyer_names
+
+- name: trims_inspection_summary
+  agent: fabric_quality
+  database: Production
+  example: 'Show the trims inspection summary'
+  follow_ups:
+    - 'Which trims failed AQL inspection {window}?'
+    - 'Metal detection tests {window}'
+  description: Trims and accessories AQL inspections per buyer and file for a day or period from the PPC quality system — inspections, passed and failed.
+  answer_list: 'Trims and accessories inspections per buyer and file {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} row(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\b(?:trims?|accessor(?:y|ies))\b)(?=.*\b(?:inspections?|inspected|aql|qc)\b)'
+  unless: '(?i)\b(?:stock|balance|issue[sd]?)\b'
+  freshness: InspectionDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (100)
+      BuyerID, FileRefID, COUNT(*) AS Inspections,
+      SUM(CASE WHEN AQLResult = 'Pass' THEN 1 ELSE 0 END) AS Passed,
+      SUM(CASE WHEN AQLResult = 'Fail' THEN 1 ELSE 0 END) AS Failed, Factory
+    FROM rag.vw_TrimsInspection
+    WHERE InspectionDate >= @from AND InspectionDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    GROUP BY BuyerID, FileRefID, Factory
+    ORDER BY Inspections DESC, BuyerID, FileRefID
+  companion: *ppc_buyer_names
+
+- name: trims_metal_detection
+  agent: fabric_quality
+  database: Production
+  example: 'Show the metal detection tests of trims'
+  follow_ups:
+    - 'Nickel tests {window}'
+    - 'Trims inspection summary {window}'
+  description: Metal detection tests of trims and accessories for a day or period from the PPC quality system — challan, GRN, item, detector sensitivity, pieces checked and failed.
+  answer_list: 'Metal detection tests {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} test(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bmetal\s+(?:detect\w*|tests?)\b)'
+  freshness: TestDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, ChallanNo, GRNID, Item, Sensitivity, CheckQty, FailQty, PassingRate, TestDate, Factory
+    FROM rag.vw_MetalDetection
+    WHERE TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY TestDate DESC, FailQty DESC
+  companion: *ppc_buyer_names
+
+- name: trims_nickel_tests
+  agent: fabric_quality
+  database: Production
+  example: 'Show the nickel test results of trims'
+  follow_ups:
+    - 'Metal detection tests {window}'
+    - 'Trims inspection summary {window}'
+  description: Nickel tests of trims for a day or period from the PPC quality system — challan, GRN, PO, supplier, items tested and failed.
+  answer_list: 'Nickel tests {buyer_label} {file_label} {factory_label} {window}{window_note} ({n} test(s))'
+  match: '(?i)^(?=(?:.*?\b({period})\b)?)(?=.*\bnickel\b)'
+  freshness: TestDate
+  params: *ppc_summary_params
+  sql: |
+    SELECT TOP (200)
+      BuyerID, FileRefID, ExportPONumber, ChallanNo, GRNID, SupplierID, ItemsTested, ItemsFailed, TestDate, Factory
+    FROM rag.vw_NickelTest
+    WHERE TestDate >= @from AND TestDate < @to
+      AND (@buyer = '' OR BuyerID = @buyer) AND (@file = '' OR FileRefID = @file) AND (@factory = '' OR Factory = @factory)
+    ORDER BY TestDate DESC, ItemsFailed DESC
+  companion: *ppc_buyer_names
+
 - name: pcd_history_by_eo
   agent: order
   database: BitopiSplint

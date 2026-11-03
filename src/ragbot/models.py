@@ -1,7 +1,7 @@
 """Shared data types. Everything that crosses a module boundary is one of these."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -74,6 +74,9 @@ class QueryResult(BaseModel):
     derived_from: str = ""       # the request_id of the answer whose rows these came from
     source_rows: int = 0         # how many rows that answer's result held
     page: int = 0                # which page of its query this is (0 = the first; Phase T4 paging)
+    # Phase V3: an empty dated result says what it checked and how far the data on this server goes (data/freshness.py)
+    window: str = ""             # the period a model-written statement filtered on: "on 2 Nov 2026" ("" = none read)
+    horizon: Optional[date] = None   # the newest record of the view read, when it is older than the period asked
 
     @property
     def row_keys(self) -> list[str]:

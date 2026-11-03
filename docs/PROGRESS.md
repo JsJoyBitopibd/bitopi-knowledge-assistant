@@ -366,6 +366,36 @@ Built on the same branch after Phase T (the owner's decisions of 2026-10-30); it
 | U4 | The phone (design screen 3), CSS only: chips wrap with 40 px targets, sources as one-line cards (details hidden), a sticky first column on wide tables (60 vh), a pill composer, icon-only header buttons | ✅ | live at 390 × 844 | Computed in the preview at 390 px: chips `flex-wrap: wrap`, first column `position: sticky; left: 0`, source details `display: none`, composer radius 22 px and sticky, table max-height 506 px (60 vh), **no horizontal page scroll** (scrollWidth − innerWidth = 0). A true collapsed "Sources (3)" disclosure is not done: a collapsed Streamlit expander makes its content inert |
 | U5 | Gate: shares T10's golden run (the U changes are inert for the eval: no identity, no saved conversations) plus the leak suite | ✅ released 2026-11-03 with T10 | — | full suite **1,528 passed** with U1–U4; T10's gate and the 3 Nov re-check; tagged `v1.16.0` |
 
+## Plan after v1.17.0 — Phase V (v1.18.0) and Phase W (v1.19.0): the PPC quality data, and asking for what is missing
+
+Asked for on 2026-11-03 after a live conversation in which "Which modules and data do you have access?", "Show me
+yesterday's bowing test report", "Bowing test", "yarn count?" and "Goods Receipt yesterday" got a menu table or
+"System doesn't have the data." with a sentence the model made up. The owner: the data exists; when a question needs a
+buyer or a style to show it, ask for it, then show it. Plan approved that day (two releases, V then W). Design:
+`docs/ROADMAP.md` "Phase V" / "Phase W". Branch `phase-v`, worktree `D:\Chatbot\bitopi-phase-v` (the main folder stays
+on `main`: the live app mounts its config).
+
+**Facts found for the owner (read-only, 3 Nov):** the PPC quality system writes to the Production database, schema `PPC`
+(121 objects; bowing is a set of columns of `PPC.HeadCutting`). **The app's SQL Server is a copy restored from backups**
+(`msdb.dbo.restorehistory`): Production restored 30 Oct (newest rows 29 Oct 2026), Inventory and BiMob 29 Oct
+(receipts to 28 Oct), SystemManager 28 Oct, BitopiSplint 5 Oct, PlanningTNA 24 Sep, HR 23 Sep, Hrms5Misami 10 Sep; only
+VistaQ is live. The 14 Oct data-quality finding "GRN last 22 Aug" was the 23 Aug restore. Whether restores become
+daily, or the app reads the live server, is the owner's call (the live switch was reverted on 7 Oct at their request).
+
+### Phase V — the PPC fabric & trims quality data, and an honest not-found (v1.18.0) 🔄
+
+| ID | Task | Status | Check before ✅ | Evidence |
+|---|---|---|---|---|
+| V1 | Production catalog covers PPC: 11 virtual views scoped on `Factory`, keywords, synonyms, table notes, join hints, `max_rendered_columns: 70`; `View.freshness_columns`; PlanningTNA's PPC test copies excluded; schema vectors rebuilt | ✅ | `check_catalog.py --live`; `index_schema.py --check` | `check_catalog.py --live` 3 Nov: all 41 views compile and return exactly their documented columns, **0 live problems** (the 2 offline problems are the playbook cost sources, unrelated). `index_schema.py Production`: 231 tables embedded in 192 s. `--check` hybrid recall@6 **20/21** — the 4 new PPC cases (bowing → `PPC.VWHeadCutting`/`HeadCutting`, yarn count → `PPC.FabricYernCount`, goods received → `PPC.GoodsReceived`, trims AQL → `PPC.TrimsAccsInspectionMaster`) all hit; the one miss ("Style master details…") missed before too |
+| V2 | `fabric_quality` agent + charter; 18 fixed tools (`fabric_*`, `trims_*`) before every other tool; buyer value index `values_ppc_buyers` (entity `ppc_buyer`, from `PPC.HeadCuttingApproval`), `bind: code`, `type: file`, `default: latest`; buyer names from the ERP as a companion `[D2]`; `quality` agent hands Production over; PPC freshness checks in `data_quality.yaml` | ✅ | every tool's example reaches it and runs live; follow-ups reach a tool; live answers | `check_catalog.py --live`: all 18 run (e.g. bowing summary 37 rows, 4-point 46, receipts 46, yarn count 35). `refresh_aggregates.py values_ppc_buyers`: 19 buyers ("WE" left out: it would match the word). Live through the worktree code, no model call, 0.1–0.6 s: "Bowing test" → 37 buyer/file rows on 29 Oct 2026, "the latest day on record", names from BitopiSplint; "bowing test report for H&M on 29 Oct 2026" → 15 rows bound to `C/09/7`; "yarn count?" → 35 tests of the last 90 days; "Status of fabric receipt GR-26-09820" → its receipt, rolls head-cut and approved, latest inspection |
+| V3 | `data/freshness.py`: the newest record of a view (scoped, cached an hour, logged `freshness`); an empty dated answer says what was checked and how far the data goes, with a chip for that day; the model's not-found sentence replaced by the agent's `where:`; no document search when the SQL model gave up on a domain question; `QueryResult.window` / `horizon` | ✅ | unit tests; the original questions live | "Show me yesterdays bowing test report" → *"I checked Production (PPM & PPC) for yesterday and found no records; the newest record on this server is from 29 Oct 2026, so ask about that day or earlier."* + chip "Show me bowing test report on 29 Oct 2026" (0.3 s, no model call; was 20.3 s and a made-up sentence). "Goods Receipt yesterday" (model-written SQL on Inventory) → *"I checked Inventory (store system) on 2 Nov 2026 … newest record on this server is from 28 Oct 2026"* + chip; the `MAX(GRNDate)` read took 2.0 s once, then cached |
+| V4 | Capability reply names the fabric & trims area and each agent's data horizon; "which modules / areas / systems … access" phrasings; PPC test phrases route to data without a model call | ✅ | unit tests; live | "WHich modules and datas you have access?" → the capability reply, first line the Fabric & trims quality agent with "Data on this server runs to 29 Oct 2026." (no SQL, no model call; was a query on `PPC.Feature`) |
+| V5 | Tests, leak suite, golden cases, gate, release | 🔄 | full suite; leak suite; the gate in three slices (1–100 vs `20261030T1528`, 101–116 vs `20261030T1509`, 117–126 new) | `tests/test_phase_v.py` (53); full suite **1,656 passed**. Leak suite **65 cases, 0 leaks**, every control met (`eval/scope/scope_20261103T1620.json`): s62 a TAL user sees 23 of 45 PPC rows, s63 RHL refused, s64/s65 controls. Golden cases 117–126 added (fixed dates; the not-found case on 31 Dec 2030 so a restore can never flip it). Gate: running |
+
+Known limits, on purpose: a user limited to some factories gets buyer codes without names (the ERP buyer table is
+raw, so the scope check refuses the companion; everyone is unrestricted today); a period-less "bowing" answer is the
+latest day on record, said in the lead; detail and "failed" lists default to the last 365 / 30 days.
+
 ## Small follow-ups noticed along the way
 
 The open follow-ups from Phases A–E are now tasks above: torchvision noise → G4, follow-up chips →

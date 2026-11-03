@@ -102,3 +102,22 @@
   value_column: IssueCause
   target: rag.vw_StockIssue.IssueCause
   indexes: [IssueCause]
+
+# Phase V (2026-11-03): the buyers of the PPC quality system, code and name, so "bowing report for H&M" binds the
+# buyer code 'C/09/7' (fixed tools `type: value, entity: ppc_buyer, bind: code`) and a Production SQL prompt gets a
+# Known-values line. Read from PPC's own roll-approval table, which records both (20 buyers, 99.9 % of receipts):
+# no cross-database read. A name of two letters ("WE") is left out: it would match the word in any question.
+# Its own entity, not `buyer`, so VistaQ's lines_running_style keeps matching the buyer names VistaQ records.
+- name: values_ppc_buyers
+  database: Production
+  entity: ppc_buyer
+  description: PPC buyers (code and name) as the roll-approval records name them.
+  views: [rag.vw_FabricReceipt]
+  sql: |
+    SELECT Buyer AS BuyerID, MAX(BuyerName) AS BuyerName FROM PPC.HeadCuttingApproval
+    WHERE Buyer IS NOT NULL AND BuyerName IS NOT NULL AND LEN(BuyerName) > 2
+    GROUP BY Buyer
+  value_column: BuyerName
+  code_column: BuyerID
+  target: rag.vw_FabricReceipt.BuyerID
+  indexes: [BuyerID]

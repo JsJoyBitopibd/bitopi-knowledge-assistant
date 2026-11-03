@@ -1,11 +1,44 @@
-# Production: Pre-Production Meeting (PPM) data. Virtual views over Production.PPM.* tables — no DDL
-# is run on the server. See docs/DATA_ACCESS.md.
+# Production: Pre-Production Meeting (PPM) data (schema PPM) and, since Phase V (v1.18.0), the PPC fabric and
+# trims quality system (schema PPC: fabric receipts, head cutting, shade, shrinkage, bowing, 4-point inspection,
+# lab / GSM / yarn-count / twisting tests, trims AQL inspection, metal detection, nickel tests, lot approval).
+# Virtual views over the real tables — no DDL is run on the server. See docs/DATA_ACCESS.md.
+#
+# Facts checked read-only on 2026-11-03 (docs/PROGRESS.md "Phase V"): PPC.GoodsReceived is the hub — every test
+# table joins to it on ReceiveID (spelt RecieveID in PPC.TwistingTest and PPC.FabricLabTest); its StyleID holds
+# the file reference (FR-26-2493) in 11,060 of 11,063 rows; BuyerID is the BitopiSplint buyer code
+# (Contact_Master.ContactID: 'C/09/7' = H&M); Company / CompanyID '06' = TAL, '04' = BGL, '09' = RHL, '02' = MGL.
+# Bowing, shrinkage and shade are columns of PPC.HeadCutting (one row per roll). This server is a copy restored
+# from backups: Production was restored on 30 Oct 2026, so its newest rows are from 29 Oct 2026.
 database: Production
-description: Pre-Production Meeting (PPM) records, reschedule history and department completion checklists.
+label: Production (PPM & PPC)
+description: 'Pre-Production Meetings (PPM: meetings, reschedules, department checklists) and the PPC fabric and
+  trims quality system: fabric received for inspection, head cutting per roll with shade, shrinkage and bowing,
+  4-point visual inspection, lab, GSM, yarn count (EPI/PPI) and twisting tests, trims and accessories AQL
+  inspection, metal detection, nickel tests and roll approval for cutting.'
 dialect: tsql
 connection_env: SQLSERVER_CONN_PRODUCTION
+connection_database: Production
+schema_rag_k: 8                  # 233 offered tables and almost no foreign keys: more candidates per question
+max_rendered_columns: 70         # PPC.HeadCutting has 61 columns; the bowing ones are 41-44 (Phase V)
 keywords: [ppm, meeting, meetings, preproduction, pre-production, cutting, technical, sample, gpq,
-           reschedule, checklist, department, factory, unit]
+           reschedule, checklist, department, factory, unit,
+           ppc, bowing, bow, skew, shrinkage, shade, shade band, shading, gsm, yarn, yarn count, yern, epi, ppi,
+           twisting, elongation, lab test, relaxation, head cutting, headcutting, blanket, blanket wash,
+           visual inspection, 4 point, four point, dpphsy, fabric inspection, fabric test, fabric tests,
+           trims inspection, accessories inspection, trims aql, metal detection, metal detector, nickel, nickel test,
+           calibration, fabric received, fabric receipt, fabric receive, lot approval, roll approval]
+# Words staff use that the keywords, tables and columns do not; appended to the question before the router and
+# the schema index score it (db_router.prepared). Bare "goods receipt" / "grn" stay Inventory's.
+synonyms:
+  bowing: [skew, bow, head cutting]
+  yarn count: [yern count, epi, ppi, construction]
+  fabric receipt: [goods received, fabric receive, ppc receive]
+  fabric received: [goods received, fabric receive]
+  4 point: [visual inspection, dpphsy]
+  four point: [visual inspection, dpphsy]
+  shade band: [shade, shading group]
+  twisting: [torque, spirality]
+  trims inspection: [trims accs inspection, aql]
 # Discovered tables never offered to the SQL model (fnmatch, case-insensitive): history/backup
 # copies, spreadsheet imports, scratch and test tables. Sensitive tables are excluded automatically.
 exclude_tables:
@@ -19,14 +52,23 @@ exclude_tables:
 - '*.temp_*'
 - '*_test'
 - '*daytest'
+- '*_dupdeleted_*'                # PPC.VisualInspection*_DupDeleted_20260726: duplicates removed on 26 Jul 2026
 # Phase S3 prep, 2026-10-15 (owner's option 1a): people tables the SQL model never read and no built-in
 # tool uses. Hidden for everyone; the 7 it does read are decided when the people-data rule is armed.
 - 'ppm.factoryattendancemode'
 rules:
   - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
   - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following Monday.
-  - Reference views only as rag.<name> (rag.vw_PPMMeeting, rag.vw_PPMMeetingReschedule, rag.vw_PPMDepartmentChecklist).
-  - If a question needs a column not listed here, return "System doesn't have the data."
+  - Reference curated views only as rag.<name>; prefer them over raw tables (PPM rag.vw_PPMMeeting, rag.vw_PPMMeetingReschedule,
+    rag.vw_PPMDepartmentChecklist; PPC rag.vw_FabricReceipt, rag.vw_FabricRoll, rag.vw_FabricVisualInspection, rag.vw_FabricYarnCount,
+    rag.vw_FabricGSMTest, rag.vw_FabricLabTest, rag.vw_FabricTwistingTest, rag.vw_TrimsInspection, rag.vw_MetalDetection,
+    rag.vw_NickelTest, rag.vw_LotApproval).
+  - Bowing, shrinkage and shade are per roll in rag.vw_FabricRoll, each with its own date (BowingTestDate, ShrinkageTestDate,
+    ShadeDate); filter on the date of the test asked about.
+  - BuyerID is a buyer code such as 'C/09/7' (H&M); use a code from the Known values line, never a buyer name, in a BuyerID filter.
+    FileRefID is the file / style reference such as 'FR-26-2493'.
+  - Raw PPC tables join to PPC.GoodsReceived on ReceiveID (RecieveID in PPC.TwistingTest and PPC.FabricLabTest);
+    PPC Company / CompanyID '06' = TAL, '04' = BGL, '09' = RHL, '02' = MGL.
 
 # `scope_column:` names the column holding the factory short name (TAL, RHL, ...). Per-user row scope
 # (PRD FR-4.4) filters on it: a user limited to some factories only sees rows of those factories, and a
@@ -167,7 +209,512 @@ views:
       FROM PPM.DepartmentCompletionChecklist c
       LEFT JOIN PPM.PPMMeetings m ON m.MeetingId = c.MeetingId
 
+  # ---------------------------------------------------------------- PPC fabric & trims quality (Phase V)
+  # Every PPC view: Factory from the receipt's or the test's company code; BuyerID is the buyer code (C/09/7 = H&M,
+  # names from BitopiSplint by the fixed tools' companion query); FileRefID is the file / style reference.
+  # `freshness_columns:` the date columns a "newest record on this server" sentence may be read from (Phase V3).
+  - name: rag.vw_FabricReceipt
+    scope_column: Factory
+    grain: one row per fabric receipt (a lot of one colour received for inspection); ReceiveID is unique.
+    description: >
+      Fabric received into the PPC quality system for inspection: receipt id, buyer, file, PO, colour, lot, GRN,
+      invoice, supplier, fabric type and composition, booked width / GSM / shrinkage, rolls and quantity received,
+      receive date and factory. Every PPC test joins to it on ReceiveID.
+    key_columns: [ReceiveID, GRID]
+    freshness_columns: [ReceiveDate]
+    columns:
+      ReceiveID: receipt key (joins every PPC test)
+      GRID: goods-received id shown in the PPC app, e.g. GR-26-09820
+      BuyerID: buyer code, e.g. C/09/7 (H&M)
+      FileRefID: file / style reference, e.g. FR-26-2493
+      ExportPONumber: buyer PO number(s) as entered
+      Color: fabric colour
+      LotNumber: supplier lot
+      GRNID: store GRN reference as entered (often NA)
+      InvoiceNo: supplier invoice
+      SupplierID: supplier code
+      FabricType: fabric type (Cotton, Polyester, Denim, Twill, ...)
+      Composition: fabric composition
+      BookingWidth: booked width
+      BookingGSM: booked GSM
+      BookingShrinkageLength: booked length shrinkage %
+      BookingShrinkageWidth: booked width shrinkage %
+      TotalRolls: rolls received
+      TotalQuantity: quantity received
+      UOM: unit of the quantity
+      Season: season
+      ReceiveDate: date received
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { ReceiveDate: date, TotalRolls: int, TotalQuantity: decimal }
+    definition: |
+      SELECT
+        g.ReceiveID, g.GRID, g.BuyerID, g.StyleID AS FileRefID, g.ExportPONumber, g.Color, g.LotNumber, g.GRNID,
+        g.InvoiceNo, g.SupplierID, g.FabricType, g.Composition, g.BookingWidth, g.BookingGSM,
+        g.BookingShrinkageLength, g.BookingShrinkageWidth, g.TotalRolls, g.TotalQuantity, g.UOM, g.Season,
+        CAST(g.ReceiveDate AS date) AS ReceiveDate,
+        CASE g.Company WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE g.Company END AS Factory
+      FROM PPC.GoodsReceived g
+
+  - name: rag.vw_FabricRoll
+    scope_column: Factory
+    grain: one row per fabric roll at head cutting; HeadCuttingID is unique.
+    description: >
+      Each roll's head-cutting record with its tests: own and actual width and length, actual GSM, shade and shading
+      group, wash shrinkage (length / width before and after wash, shrinkage %), bowing (bow found and bowing %),
+      each test's date, and whether the roll is approved for cutting — with the receipt's buyer, file, PO and lot.
+    key_columns: [HeadCuttingID]
+    freshness_columns: [HeadCuttingDate, BowingTestDate, ShrinkageTestDate, ShadeDate]
+    columns:
+      HeadCuttingID: roll record key
+      ReceiveID: the receipt (rag.vw_FabricReceipt)
+      BuyerID: buyer code, e.g. C/09/7 (H&M)
+      FileRefID: file / style reference, e.g. FR-26-2493
+      ExportPONumber: buyer PO number(s)
+      LotNumber: supplier lot
+      Color: roll colour
+      SupplierRollNo: supplier's roll number
+      RollSerial: internal roll serial within the receipt
+      BatchNumber: dye batch
+      FabricType: fabric type
+      OwnWidth: width measured at head cutting
+      OwnLength: length measured at head cutting
+      ActualWidth: actual (cuttable) width
+      ActualGSM: actual GSM
+      UOM: unit of length
+      HeadCuttingDate: head-cutting date
+      Shade: shade given to the roll
+      ShadingGroup: shading group
+      ShadeDate: date the shade was entered
+      LengthBeforeWash: shrinkage test length before wash
+      WidthBeforeWash: shrinkage test width before wash
+      LengthAfterWash: shrinkage test length after wash
+      WidthAfterWash: shrinkage test width after wash
+      LengthShrinkagePct: length shrinkage %
+      WidthShrinkagePct: width shrinkage %
+      ShrinkageTestDate: shrinkage test date
+      BowingFound: bow measured (same unit as the width)
+      BowingPct: bowing % of the width
+      BowingTestDate: bowing test date
+      BowingRemarks: bowing test remarks
+      HeadCuttingApproved: 1 when the roll is approved for cutting
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { HeadCuttingDate: date, ShadeDate: date, ShrinkageTestDate: date, BowingTestDate: date,
+                    BowingPct: decimal, BowingFound: decimal, LengthShrinkagePct: decimal, WidthShrinkagePct: decimal }
+    definition: |
+      SELECT
+        h.HeadCuttingID, h.ReceiveID, g.BuyerID, g.StyleID AS FileRefID, g.ExportPONumber, g.LotNumber,
+        h.ColorName AS Color, h.SupplierRollNo, h.InternalSerial AS RollSerial, h.BatchNumber, h.FabricType,
+        h.OwnWidth, h.OwnLength, h.ActualWidth, h.ActualGSM, h.UOM,
+        CAST(h.HeadCuttingDate AS date) AS HeadCuttingDate,
+        h.Shade, h.ShadingGroup, CAST(h.ShadeEntryDate AS date) AS ShadeDate,
+        h.LengthBeforeWash, h.WidthBeforeWash, h.LengthAfterWash, h.WidthAfterWash,
+        h.LengthShrinkageParcent AS LengthShrinkagePct, h.WidthShrinkageParcent AS WidthShrinkagePct,
+        CAST(h.ShrinkageTestDate AS date) AS ShrinkageTestDate,
+        h.BowingFound, h.BowingParcent AS BowingPct, CAST(h.BowingTestDate AS date) AS BowingTestDate,
+        h.BowingTestRemarks AS BowingRemarks, h.HeadCuttingApproved,
+        CASE h.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE h.CompanyID END AS Factory
+      FROM PPC.HeadCutting h
+      LEFT JOIN PPC.GoodsReceived g ON g.ReceiveID = h.ReceiveID
+
+  - name: rag.vw_FabricVisualInspection
+    scope_column: Factory
+    grain: one row per 4-point visual inspection of a receipt; InspectionID is unique.
+    description: >
+      4-point (visual) fabric inspections: the receipt's buyer, file, PO, lot and colour, the inspection level
+      (% of rolls inspected), the result (PASS / FAIL / In Progress), points per 100 square yards (DPPHSY), rolls
+      inspected and rolls failed, and the inspection date.
+    key_columns: [InspectionID]
+    freshness_columns: [InspectionDate]
+    columns:
+      InspectionID: inspection key
+      ReceiveID: the receipt (rag.vw_FabricReceipt)
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      ExportPONumber: buyer PO number(s)
+      LotNumber: supplier lot
+      Color: fabric colour
+      InspectionLevelPct: share of rolls to inspect, % (10, 20, 100, ...)
+      Result: PASS, FAIL or In Progress
+      DPPHSY: defect points per 100 square yards
+      FabricType: fabric type
+      RollsInspected: rolls inspected
+      RollsFailed: rolls that failed
+      InspectionDate: inspection date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { InspectionDate: date, RollsInspected: int, RollsFailed: int, DPPHSY: decimal }
+    definition: |
+      SELECT
+        m.InspectionID, m.ReceiveID, g.BuyerID, g.StyleID AS FileRefID, g.ExportPONumber, g.LotNumber, g.Color,
+        m.InspectionFor AS InspectionLevelPct, m.InspStatus AS Result, m.DPPHSY, m.FabricType,
+        ISNULL(c.RollsInspected, 0) AS RollsInspected, ISNULL(c.RollsFailed, 0) AS RollsFailed,
+        CAST(m.InspectionDate AS date) AS InspectionDate,
+        CASE g.Company WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE g.Company END AS Factory
+      FROM PPC.VisualInspectionMaster m
+      LEFT JOIN PPC.GoodsReceived g ON g.ReceiveID = m.ReceiveID
+      LEFT JOIN (
+        SELECT InspectionID, COUNT(*) AS RollsInspected,
+               SUM(CASE WHEN RollPassFail = 'FAIL' THEN 1 ELSE 0 END) AS RollsFailed
+        FROM PPC.VisualInspectionChild
+        GROUP BY InspectionID
+      ) c ON c.InspectionID = m.InspectionID
+
+  - name: rag.vw_FabricYarnCount
+    scope_column: Factory
+    grain: one row per yarn-count (EPI / PPI) test.
+    description: >
+      Fabric yarn count tests: buyer, file, supplier, invoice, colour, origin, construction and composition, the
+      required and actual ends per inch (EPI) and picks per inch (PPI), comments and the test date.
+    key_columns: [TestID]
+    freshness_columns: [TestDate]
+    columns:
+      TestID: test key
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      SupplierID: supplier code
+      InvoiceNo: supplier invoice
+      Color: fabric colour
+      CountryOfOrigin: country of origin
+      FabricConstruction: construction as written on the booking, e.g. 64*44 / 7*5.5
+      FabricComposition: composition
+      RequiredEPI: required ends per inch
+      ActualEPI: measured ends per inch
+      RequiredPPI: required picks per inch
+      ActualPPI: measured picks per inch
+      Comments: comments
+      TestDate: test date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { TestDate: date, RequiredEPI: int, ActualEPI: int, RequiredPPI: int, ActualPPI: int }
+    definition: |
+      SELECT
+        y.FYCID AS TestID, y.BuyerID, y.StyleID AS FileRefID, y.SupplierID, y.InvoiceNo, y.Color, y.CountryOfOrigin,
+        y.FabricConstruction, y.FabricComposition, y.RequiredEPI, y.ActualEPI, y.RequiredPPI, y.ActualPPI, y.Comments,
+        y.DateAdded AS TestDate,
+        CASE y.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE y.CompanyID END AS Factory
+      FROM PPC.FabricYernCount y
+
+  - name: rag.vw_FabricGSMTest
+    scope_column: Factory
+    grain: one row per GSM test of a receipt.
+    description: >
+      Fabric GSM tests: the receipt's buyer, file, lot and colour, the booked GSM, rolls tested and the average,
+      lowest and highest actual GSM measured, the deviation and status recorded, and the test date.
+    key_columns: [TestID]
+    freshness_columns: [TestDate]
+    columns:
+      TestID: test key
+      ReceiveID: the receipt
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      LotNumber: supplier lot
+      Color: fabric colour
+      BookingGSM: booked GSM
+      RollsTested: rolls measured
+      AvgActualGSM: average actual GSM
+      MinActualGSM: lowest actual GSM
+      MaxActualGSM: highest actual GSM
+      Deviation: deviation recorded on the test
+      Status: test status (Done or empty)
+      TestDate: test date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { TestDate: date, RollsTested: int }
+    definition: |
+      SELECT
+        t.TestMasterID AS TestID, t.ReceiveID, g.BuyerID, g.StyleID AS FileRefID, g.LotNumber, g.Color, g.BookingGSM,
+        ISNULL(c.RollsTested, 0) AS RollsTested, c.AvgActualGSM, c.MinActualGSM, c.MaxActualGSM,
+        t.Deviation, t.Status, t.DateAdded AS TestDate,
+        CASE t.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE t.CompanyID END AS Factory
+      FROM PPC.GSMTestMaster t
+      LEFT JOIN PPC.GoodsReceived g ON g.ReceiveID = t.ReceiveID
+      LEFT JOIN (
+        SELECT TestMasterID, COUNT(*) AS RollsTested, CAST(AVG(ActualGSM) AS decimal(8,2)) AS AvgActualGSM,
+               MIN(ActualGSM) AS MinActualGSM, MAX(ActualGSM) AS MaxActualGSM
+        FROM PPC.GSMTestChild
+        GROUP BY TestMasterID
+      ) c ON c.TestMasterID = t.TestMasterID
+
+  - name: rag.vw_FabricLabTest
+    scope_column: Factory
+    grain: one row per fabric lab test result (per receipt and colour).
+    description: Fabric lab test results (Pass, Failed, Conditionally Pass) per receipt and colour, with remarks and the date.
+    key_columns: [TestID]
+    freshness_columns: [TestDate]
+    columns:
+      TestID: test key
+      ReceiveID: the receipt
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      LotNumber: supplier lot
+      Color: colour tested
+      Result: Pass, Failed or Conditionally Pass
+      Remarks: remarks
+      TestDate: test date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { TestDate: date }
+    definition: |
+      SELECT
+        l.LabTestID AS TestID, l.RecieveID AS ReceiveID, g.BuyerID, g.StyleID AS FileRefID, g.LotNumber, l.Color,
+        l.LabResult AS Result, l.Remarks, l.DateAdded AS TestDate,
+        CASE l.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE l.CompanyID END AS Factory
+      FROM PPC.FabricLabTest l
+      LEFT JOIN PPC.GoodsReceived g ON g.ReceiveID = l.RecieveID
+
+  - name: rag.vw_FabricTwistingTest
+    scope_column: Factory
+    grain: one row per roll twisting (spirality) test.
+    description: Twisting (spirality) tests per roll — cutting width, length, twisting found and twisting % — with the receipt's buyer, file and lot.
+    key_columns: [TestID]
+    freshness_columns: [TestDate]
+    columns:
+      TestID: test key
+      ReceiveID: the receipt
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      LotNumber: supplier lot
+      Color: roll colour
+      RollNo: roll number
+      RollSerial: internal roll serial
+      CuttingWidth: cutting width
+      OwnLength: roll length
+      TwistingFound: twisting measured
+      TwistingPct: twisting %
+      Remarks: remarks
+      TestDate: test date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { TestDate: date, TwistingPct: decimal }
+    definition: |
+      SELECT
+        t.TestID, t.RecieveID AS ReceiveID, g.BuyerID, g.StyleID AS FileRefID, g.LotNumber, t.Color, t.RollNo,
+        t.InternalSerial AS RollSerial, t.CuttingWidth, t.OwnLength, t.TwistingFound, t.Twisting AS TwistingPct,
+        t.Remarks, t.DateAdded AS TestDate,
+        CASE g.Company WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE g.Company END AS Factory
+      FROM PPC.TwistingTest t
+      LEFT JOIN PPC.GoodsReceived g ON g.ReceiveID = t.RecieveID
+
+  - name: rag.vw_TrimsInspection
+    scope_column: Factory
+    grain: one row per trims / accessories receipt inspection; InspectionID is unique.
+    description: >
+      Trims and accessories inspections: GRN, buyer, file, PO, supplier, item, lot, received and checked quantity,
+      AQL level and AQL result (Pass / Fail), trim card match, receive and inspection dates.
+    key_columns: [InspectionID]
+    freshness_columns: [InspectionDate]
+    columns:
+      InspectionID: inspection key
+      GRNID: store GRN id
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      ExportPONumber: buyer PO number
+      SupplierID: supplier code
+      InvoiceNo: supplier invoice
+      ItemCode: item code
+      ItemName: item name
+      LotNumber: lot
+      ReceivedQty: quantity received
+      CheckQty: quantity checked
+      UOM: unit
+      AQLLevel: AQL level
+      AQLResult: Pass or Fail
+      TrimCardMatched: whether the trim card matched
+      InspectionFor: inspection type as entered
+      ReceiveDate: date received
+      InspectionDate: inspection date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { ReceiveDate: date, InspectionDate: date, ReceivedQty: decimal, CheckQty: decimal }
+    definition: |
+      SELECT
+        i.TrimInsID AS InspectionID, i.GRNID, i.BuyerID, i.FileRefID, i.ExportPoNo AS ExportPONumber, i.SupplierID,
+        i.InvoiceNo, i.ItemCode, i.ItemName, i.LotNo AS LotNumber, i.ReceivedQty, i.CheckQty, i.UOM,
+        i.AQL_Level AS AQLLevel, i.AQLResult, i.TrimCardMatched, i.InspectionFor,
+        CAST(i.ReceiveDate AS date) AS ReceiveDate, CAST(i.DateAdded AS date) AS InspectionDate,
+        CASE i.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE i.CompanyID END AS Factory
+      FROM PPC.TrimsAccsInspectionMaster i
+
+  - name: rag.vw_MetalDetection
+    scope_column: Factory
+    grain: one row per metal-detection test of a trims receipt.
+    description: Metal detection tests of trims and accessories — challan, GRN, buyer, file, detector and sensitivity, item, quantity checked and failed, passing rate and the test date.
+    key_columns: [TestID]
+    freshness_columns: [TestDate]
+    columns:
+      TestID: test key
+      ChallanNo: delivery challan
+      GRNID: store GRN id
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      DetectorType: detector type
+      Sensitivity: machine sensitivity, e.g. 1.0 mm ferrous card
+      Item: item tested
+      CheckQty: pieces checked
+      FailQty: pieces failed
+      PassingRate: passing rate as entered
+      TestDate: test date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { TestDate: date, CheckQty: int, FailQty: int }
+    definition: |
+      SELECT
+        m.MetalTestID AS TestID, m.ChallanNo, m.GRNID, m.BuyerID, m.FileRefID, m.DetectorType,
+        m.MachineSesitivity AS Sensitivity, m.AccessoriesItem AS Item,
+        ISNULL(c.CheckQty, 0) AS CheckQty, ISNULL(c.FailQty, 0) AS FailQty, m.PassingRate,
+        CAST(m.DateAdded AS date) AS TestDate,
+        CASE m.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE m.CompanyID END AS Factory
+      FROM PPC.MetalDetectionMaster m
+      LEFT JOIN (
+        SELECT MetalTestID, SUM(CheckQuantity) AS CheckQty, SUM(FailQty) AS FailQty
+        FROM PPC.MetalDetectionChild
+        GROUP BY MetalTestID
+      ) c ON c.MetalTestID = m.MetalTestID
+
+  - name: rag.vw_NickelTest
+    scope_column: Factory
+    grain: one row per nickel test of a trims receipt.
+    description: Nickel tests of trims — challan, GRN, buyer, file, PO, supplier, items tested and items failed, and the test date.
+    key_columns: [TestID]
+    freshness_columns: [TestDate]
+    columns:
+      TestID: test key
+      ChallanNo: delivery challan
+      GRNID: store GRN id
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      ExportPONumber: buyer PO number
+      SupplierID: supplier code
+      ItemsTested: items tested
+      ItemsFailed: items that failed
+      TestDate: test date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { TestDate: date, ItemsTested: int, ItemsFailed: int }
+    definition: |
+      SELECT
+        n.NickelTestID AS TestID, n.ChallanNo, n.GRNID, n.BuyerID, n.FileRefID, n.PONumber AS ExportPONumber,
+        n.SupplierID, ISNULL(c.ItemsTested, 0) AS ItemsTested, ISNULL(c.ItemsFailed, 0) AS ItemsFailed,
+        CAST(n.NickelTestDate AS date) AS TestDate,
+        CASE n.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE n.CompanyID END AS Factory
+      FROM PPC.NickelTestMaster n
+      LEFT JOIN (
+        SELECT NickelTestID, COUNT(*) AS ItemsTested, SUM(CASE WHEN Result = 'Fail' THEN 1 ELSE 0 END) AS ItemsFailed
+        FROM PPC.NickelTestChild
+        GROUP BY NickelTestID
+      ) c ON c.NickelTestID = n.NickelTestID
+
+  - name: rag.vw_LotApproval
+    scope_column: Factory
+    grain: one row per roll approval decision for cutting; ApprovalID is unique.
+    description: >
+      Roll approval for cutting after head cutting: buyer, file and style name, PO, lot, batch, colour, shade,
+      shrinkage, GSM, width, the decision (Approved / Rejected) and its date.
+    key_columns: [ApprovalID]
+    freshness_columns: [ApprovedDate]
+    columns:
+      ApprovalID: approval key
+      HeadCuttingID: the roll (rag.vw_FabricRoll)
+      ReceiveID: the receipt
+      BuyerID: buyer code
+      FileRefID: file / style reference
+      StyleName: style name as entered
+      ExportPONumber: buyer PO number
+      LotNumber: supplier lot
+      Batch: batch
+      Color: colour
+      Shade: shade
+      ShrinkageLength: length shrinkage %
+      ShrinkageWidth: width shrinkage %
+      GSM: GSM
+      Width: width
+      ApprovalStatus: Approved or Rejected
+      ApprovedDate: decision date
+      Factory: factory short name — TAL, BGL, RHL, MGL
+    column_kinds: { ApprovedDate: date }
+    definition: |
+      SELECT
+        a.ApprovalID, a.HeadCuttingID, a.ReceiveID, a.Buyer AS BuyerID, a.FileRefID, a.FileRefNo AS StyleName,
+        a.PONumber AS ExportPONumber, a.LotNo AS LotNumber, a.Batch, a.Color, a.Shade, a.ShrinkageLength,
+        a.ShrinkageWidth, a.GSM, a.Width, a.ApprovalStatus, CAST(a.ApprovedDate AS date) AS ApprovedDate,
+        CASE a.CompanyID WHEN '06' THEN 'TAL' WHEN '04' THEN 'BGL' WHEN '09' THEN 'RHL' WHEN '08' THEN 'KTL'
+          WHEN '11' THEN 'CKDL' WHEN '02' THEN 'MGL' ELSE a.CompanyID END AS Factory
+      FROM PPC.HeadCuttingApproval a
+
+# One line per discovered PPC table (their JSON descriptions are empty): merged into the SQL prompt and the
+# schema index, so "bowing" finds PPC.HeadCutting and "yarn count" finds PPC.FabricYernCount (Phase V).
+table_notes:
+  PPC.GoodsReceived: fabric receipts for inspection (the hub every PPC test joins on ReceiveID); BuyerID buyer code, StyleID file reference FR-..., LotNumber, Color, GRNID, ReceiveDate, Company
+  PPC.HeadCutting: one row per fabric roll at head cutting with its shade, wash shrinkage, bowing (BowingFound, BowingParcent, BowingTestDate), elongation and blanket-wash results
+  PPC.VWHeadCutting: head-cutting rolls with buyer, file, PO, lot, shade, shrinkage and bowing results (no company)
+  PPC.HeadCuttingApproval: roll approval for cutting (Approved / Rejected) with buyer and buyer name, file, PO, lot, batch, shade, shrinkage, GSM
+  PPC.HeadCuttingApprovalLog: history of roll approval changes
+  PPC.VisualInspectionMaster: 4-point fabric visual inspection per receipt (InspStatus PASS / FAIL, DPPHSY, InspectionDate)
+  PPC.VisualInspectionChild: 4-point inspection per roll (RollPassFail, DPPHSY, actual GSM and length)
+  PPC.VisualInspectionDefect: defect points per roll of a 4-point inspection (defect code, 1 to 4 point counts)
+  PPC.PPCDefectCode: fabric defect codes and names
+  PPC.FabricShrinkageSummary: shrinkage summary per receipt, colour and shrinkage group (length, width and pattern %)
+  PPC.FabricYernCount: fabric yarn count tests, ends and picks per inch (EPI / PPI) required and actual, by buyer and file
+  PPC.GSMTestMaster: fabric GSM test per receipt (status, deviation)
+  PPC.GSMTestChild: GSM measured per roll of a GSM test
+  PPC.FabricLabTest: fabric lab test result per receipt and colour (Pass / Failed / Conditionally Pass); joins on RecieveID
+  PPC.TwistingTest: roll twisting (spirality) test, twisting found and %; joins on RecieveID
+  PPC.FabricElongation: roll elongation test (before and after stretch)
+  PPC.HandRelaxationMaster: hand relaxation of a receipt (machine, standard relaxation time)
+  PPC.HandRelaxationChild: hand relaxation per roll
+  PPC.MachineRelaxationMaster: machine relaxation of a receipt
+  PPC.MachineRelaxationChild: machine relaxation per roll (width and length before and after steaming, QC pass)
+  PPC.DPR_Master: DPR (dimensional) shrinkage test of a receipt
+  PPC.DPR_RollMaster: DPR shrinkage test rolls
+  PPC.DPR_RollInspection: DPR shrinkage measurements per roll sample (relaxed, cutting, steaming shrinkage)
+  PPC.DPRPaddingMaster: DPR padding inspection of a receipt
+  PPC.TrimsAccsInspectionMaster: trims and accessories receipt inspection with AQL level and AQL result (Pass / Fail)
+  PPC.TrimsAccsInspectionSKU: trims inspection quantities per colour and size
+  PPC.TrimsAccsInspectionComments: trims inspection check-point comments
+  PPC.TrimsAccsInspectionNonCountable: trims inspection of non-countable items
+  PPC.TrimsElastic&TwillTapeMaster: elastic and twill tape shrinkage test per receipt
+  PPC.TrimsElastic&TwillTapeChild: elastic and twill tape shrinkage measurements
+  PPC.TrimsElongationMaster: trims (elastic) elongation test
+  PPC.TrimsElongationChild: trims elongation measurements
+  PPC.TrimsLabTestMaster: trims lab test result
+  PPC.TrimsValidationMaster: trims validation against the trim card (result, inspection date)
+  PPC.TrimsRejectItems: rejected trims items
+  PPC.MetalDetectionMaster: metal detection test of trims (challan, GRN, buyer, detector, sensitivity, passing rate)
+  PPC.MetalDetectionChild: metal detection per item (quantity checked and failed)
+  PPC.MetalCalibrationMaster: metal detector machine calibration
+  PPC.FerrousTestMaster: ferrous test of trims
+  PPC.NickelTestMaster: nickel test of trims (challan, GRN, buyer, PO, supplier, test date)
+  PPC.NickelTestChild: nickel test result per item (Pass / Fail)
+  PPC.MachineCalibration: inspection machine calibration (result, action taken)
+  PPC.ShadeBandReviewStatus: shade band review per receipt (shade, approved by, date)
+  PPC.ShadeBandReviewComments: shade band review comments
+  PPC.DisposalRecordMaster: disposal of retained samples
+  PPC.AdditionalLotInfoMaster: additional lot information of a receipt
+  PPC.TwoHoursInspectorRecord: two-hourly inspector records
+  PPC.Feature: the PPC application's screens and reports (menu), not quality data
+  PPC.UserFeatureAccess: which PPC app user may open which screen (not quality data)
+# Join hints for the discovered tables (only targets inside this database render).
+hints:
+  - { column: ReceiveID, target: PPC.GoodsReceived.ReceiveID, tables: [PPC.HeadCutting, PPC.VisualInspectionMaster, PPC.GSMTestMaster, PPC.FabricShrinkageSummary, PPC.ShadeBandReviewStatus, PPC.HeadCuttingApproval, PPC.HandRelaxationMaster, PPC.FabricElongation], note: the receipt the test belongs to }
+  - { column: RecieveID, target: PPC.GoodsReceived.ReceiveID, tables: [PPC.TwistingTest, PPC.FabricLabTest], note: the receipt (column name misspelt in the source) }
+  - { column: HeadCuttingID, target: PPC.HeadCutting.HeadCuttingID, tables: [PPC.GSMTestChild, PPC.MachineRelaxationChild, PPC.HeadCuttingApproval], note: the roll }
+
 examples:
+  - question: Bowing test results of H&M rolls on 29 Oct 2026
+    sql: |
+      SELECT TOP (200) FileRefID, LotNumber, Color, SupplierRollNo, BowingFound, BowingPct, BowingTestDate, Factory
+      FROM rag.vw_FabricRoll
+      WHERE BuyerID = 'C/09/7' AND BowingTestDate >= '2026-10-29' AND BowingTestDate < '2026-10-30'
+      ORDER BY BowingPct DESC
+
+  - question: How many fabric rolls failed 4-point inspection last week?
+    sql: |
+      SELECT SUM(RollsFailed) AS RollsFailed, SUM(RollsInspected) AS RollsInspected
+      FROM rag.vw_FabricVisualInspection
+      WHERE InspectionDate >= DATEADD(day, -7, @thisMon) AND InspectionDate < @thisMon
+
   - question: How many PPM meetings are scheduled at TAL next week?
     sql: |
       SELECT COUNT(*) AS Meetings

@@ -8,6 +8,23 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+### Added
+- **The PPC fabric and trims quality data can be asked about** (Phase V). Bowing, shrinkage and shade per roll,
+  4-point inspections, yarn count (EPI / PPI), GSM, lab and twisting tests, trims and accessories AQL inspections,
+  metal detection, nickel tests and fabric received for inspection now answer from the PPC quality system with no AI
+  call, per buyer and file or roll by roll, with the buyer's name from the ERP. A buyer named in the question
+  ("for H&M") becomes its code; a file number (FR-26-2493) or a receipt (GR-26-09820) narrows the answer. With no
+  day named, the answer is the latest day on record and says so.
+- **An empty answer says how far the data goes.** This server is a copy restored from backups (Production up to
+  29 Oct 2026, the store system up to 28 Oct). "Yesterday's bowing tests" now reads "I checked … for yesterday and
+  found no records; the newest record on this server is from 29 Oct 2026", with a one-click question for that day,
+  instead of a guess about where the data lives.
+- "Which modules and data do you have access to?" gets the list of areas, each with how far its data goes.
+
+### Changed
+- The sentence after "System doesn't have the data." is always the assistant's own (the area's "where to look"
+  sentence), never one the AI wrote. A data question the SQL step gave up on no longer searches the PDFs first.
+
 ## [1.17.0] — 2026-11-03 — Phase N2: recommendations ranked and explained (off, administrators only)
 
 ### Added

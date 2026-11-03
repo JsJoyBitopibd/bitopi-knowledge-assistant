@@ -267,6 +267,7 @@ views:
     description: Every movement of an item in the store ledger — each goods receipt (GRN) into a store and each issue out of it — with the document id, date, store, destination, cause, quantity in its own unit and in the base unit.
     key_columns: [DocumentID, ItemCode]
     scope_column: Factory
+    freshness_columns: [MovementDate]
     columns:
       Movement: Receipt or Issue
       CompanyID: company code
@@ -327,6 +328,7 @@ views:
     description: Goods receipts (GRN) with the store received into, the supplier code, the purchase order, the challan and each item's quantity in its own unit and in the base unit.
     key_columns: [GRNID, ItemCode]
     scope_column: Factory
+    freshness_columns: [GRNDate]          # Phase V3: "the newest record on this server is from …"
     columns:
       CompanyID: company code
       CompanyName: company name
@@ -364,6 +366,7 @@ views:
     description: Store issues with the store issued from, the section or store issued to, the cause, the requisition slip, the export order when the issue was for one, and each item's quantity in its own unit and in the base unit.
     key_columns: [IssueID, ItemCode]
     scope_column: Factory
+    freshness_columns: [IssueDate]
     columns:
       CompanyID: company code
       CompanyName: company name

@@ -602,3 +602,16 @@ def ago(then_iso: str, now: datetime) -> str:
     if (now.date() - then.date()).days == 1:
         return "yesterday"
     return f"{then.day} {then:%b %Y}"
+
+
+def slots_hint(agent: str) -> str:
+    """Phase V: what a not-found caption tells the user to add, in the domain agent's own words (its YAML's
+    `slots_hint:`, e.g. "a buyer, a file number such as FR-26-2493, a lot, or a date"); "" for none."""
+    if not agent:
+        return ""
+    try:
+        from ..domain_agents import load_agents
+        a = load_agents().get(agent)
+        return str(a.extra.get("slots_hint") or "").strip() if a is not None else ""
+    except Exception:
+        return ""

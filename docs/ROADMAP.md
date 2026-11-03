@@ -935,3 +935,54 @@ count capped like TOP); no row ever goes to the SQL model; nothing widens the us
 Deferred to Phase U (v1.16.0): saved conversations per user, "my / our" questions bound to the signed-in identity, a
 personal home page, and the phone layout. Left out on purpose: share-by-link (a viewer may have another scope), and a
 Stop that interrupts a running database query (Streamlit only stops at the next update).
+
+# Phase V — the PPC fabric & trims quality data, and an honest not-found → v1.18.0
+
+Asked for on 2026-11-03, after a live conversation: "Which modules and data do you have access to?" listed the PPC
+app's menu (a SQL query on `PPC.Feature`); "Show me yesterday's bowing test report", "Bowing test", "yarn count?" and
+"Goods Receipt yesterday" all ended in "System doesn't have the data." with a sentence the answer model made up
+("maintained by the quality department"). The owner: "you'll see that every data exists in the system… if the system
+has data but it can't show only that data, it requires more information like buyer, style… then the system will ask
+for it." What the code and the server showed (logs/sql_gen.csv, request ids `f64fc30c7c62`, `936f994cdadb`,
+`70b36fffeda1`, `f42de66cefd3`; read-only checks of the server):
+
+- The PPC quality system writes to the **Production** database, schema `PPC` (121 objects): fabric receipts
+  (`GoodsReceived`, the hub every test joins on `ReceiveID`), head cutting per roll with shade, shrinkage and **bowing as
+  columns of `PPC.HeadCutting`**, 4-point inspection, lab, GSM, yarn count (`FabricYernCount`, sic), twisting, trims AQL
+  inspection, metal detection and nickel tests. Production's catalog described PPM meetings only: no keyword, view,
+  synonym or note reached PPC, and the bowing columns sat past the 40-column prompt cap.
+- For bowing the SQL model wrote `SELECT 'System doesn''t have the data.'`, the guard refused it, ~10 s of reranking
+  IT-policy PDFs followed, and the answer model wrote the "where to look" sentence.
+- **The app's SQL Server is a copy restored from backups** (`msdb.dbo.restorehistory`): Production restored on
+  30 Oct 2026 (data to 29 Oct), Inventory 29 Oct (receipts to 28 Oct), BitopiSplint 5 Oct, PlanningTNA 24 Sep, HR 23 Sep.
+  "Yesterday" on these databases is empty by construction; only VistaQ is live.
+
+Decisions (reported, not asked): one catalog per database, so PPC goes into `production.yaml`; no cross-database SQL
+(buyer names come from the ERP as a companion query, `[D2]`); a missing **period** means the latest day on record, said
+in the answer; a missing **key** (buyer, file, lot, system) is asked for — Phase W; the sentence after the not-found line
+is always ours, never the model's. The guard, the citation check and the not-found rule do not move.
+
+- **V1** `config/catalog/production.yaml`: 11 virtual PPC views (`rag.vw_FabricReceipt`, `vw_FabricRoll`,
+  `vw_FabricVisualInspection`, `vw_FabricYarnCount`, `vw_FabricGSMTest`, `vw_FabricLabTest`, `vw_FabricTwistingTest`,
+  `vw_TrimsInspection`, `vw_MetalDetection`, `vw_NickelTest`, `vw_LotApproval`), each scoped on `Factory`; keywords,
+  synonyms, table notes, join hints, `max_rendered_columns: 70`; PlanningTNA's 7-row PPC test copies excluded.
+  `View.freshness_columns` (new): the date columns a "newest record" sentence may read.
+- **V2** `config/agents/fabric_quality.yaml` + charter; 18 fixed tools (`fabric_*`, `trims_*`) answered with no model
+  call; the buyer value index `values_ppc_buyers` (entity `ppc_buyer`, from PPC's own approval table) and `bind: code`;
+  a `type: file` parameter; `default: latest` for a window.
+- **V3** `data/freshness.py`: the newest record of a view (cached an hour, scoped, logged); an empty dated answer —
+  fixed tool or model-written over one view — says what was checked and how far the data goes, with a chip for that
+  day; a model's not-found sentence is replaced by the agent's `where:`; no document search when the SQL model gave up
+  on a domain question that names no document.
+- **V4** the capability reply names the PPC area and each agent's data horizon; "which modules / areas / systems"
+  phrasings are capability questions; PPC test phrases route to data with no model call.
+- **V5** unit tests (`tests/test_phase_v.py`), table-selection and leak cases, ten golden cases on fixed dates, the gate.
+
+# Phase W — guided questions: ask for the missing key, then answer → v1.19.0
+
+A fixed tool whose pattern matched but which needs a key the question does not give (a buyer, a file, a lot, the
+system meant by "goods receipt") asks for it once, with chips of values that have data, and the reply is merged into
+the question with no model call (the T6 mechanism, extended): `required:` / `ask:` / `choices:` on a tool parameter,
+raised as `ClarificationNeeded` from `answer_from_data` only (`match_fixed_tool` keeps its contract), new merge slots
+(buyer, file, lot, source), summary answers whose chips are the buyers or files in their own rows
+(`follow_ups_from_rows:`), and `config/clarify.yaml` rules for the ambiguous "goods receipt".

@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS conversation_user ON conversation (user, updated DESC
 """
 MAX_RESULTS_BYTES = 512 * 1024
 _META_KEYS = ("follow_ups", "refine_suggestions", "request_id", "seconds", "not_found", "error_kind", "route", "kind",
-              "scope", "clarify", "rewritten", "repeat_of", "prior_request_id", "page")
+              "scope", "clarify", "rewritten", "repeat_of", "prior_request_id", "page", "agent")
 
 
 def db_path() -> Path:

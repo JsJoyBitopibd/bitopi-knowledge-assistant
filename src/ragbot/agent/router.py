@@ -20,7 +20,14 @@ _DATA_HINT = re.compile(r"\b(EO\s*\d{2}-\d{4}|[A-Z]{2,4}-\d{2}-\d{2,5}(-\d+)?|FR
 # call. Deliberately narrower than _DATA_HINT (which includes bare "how many").
 _DATA_STRONG = re.compile(r"\b(EO\s*\d{2}-\d{4}|[A-Z]{2,4}-\d{2}-\d{2,5}(-\d+)?|FR-\d{2}-\d+|file\s*ref|lot\s*\d+|"
                           r"export orders?|pcd|ship date|ppm meeting|order status|status of (an? )?"
-                          r"(eo|order|file|export order))\b", re.I)
+                          r"(eo|order|file|export order)|"
+                          # Phase V: the PPC fabric and trims tests (Production, schema PPC). Test phrases only:
+                          # "bowing tolerance" may be a buyer standard in a PDF; "bowing test" is a record.
+                          r"bowing\s+(?:tests?|reports?|results?)|shrinkage\s+(?:tests?|reports?|results?)|"
+                          r"shade\s+(?:band|group|records?|tests?)|yarn\s+counts?|yern|gsm\s+tests?|head\s*cutting|"
+                          r"metal\s+detect\w*|nickel\s+tests?|fabric\s+receipts?|fabric\s+received|goods\s+received|"
+                          r"trims?\s+inspections?|4[\s-]?point|visual\s+inspections?|lab\s+tests?|twisting\s+tests?)\b",
+                          re.I)
 # Policy/IT nouns that appear in count-phrased questions the PDFs answer ("how many Kaspersky licences
 # does the Group have?", "how many laptops per employee?"). Without these, the router used to send such
 # questions to the database (the 83%->85% correctness gap).

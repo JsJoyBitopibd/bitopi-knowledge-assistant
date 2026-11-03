@@ -1,0 +1,26 @@
+# Fabric & trims quality agent (Phase V, 2026-11-03): the PPC quality system in the Production database (schema PPC)
+# — fabric received for inspection, head cutting per roll, shade, shrinkage, bowing, 4-point inspection, lab, GSM,
+# yarn-count and twisting tests, trims AQL inspection, metal detection and nickel tests. Tools: config/fixed_tools.yaml
+# `agent: fabric_quality`. Views: config/catalog/production.yaml (rag.vw_Fabric*, rag.vw_TrimsInspection, ...).
+name: fabric_quality
+title: Fabric & trims quality agent
+description: Fabric and trims inspection from the PPC quality system — fabric received for inspection, each roll's head cutting with shade, shrinkage and bowing, 4-point inspection results, lab, GSM, yarn count and twisting tests, trims and accessories AQL inspection, metal detection and nickel tests.
+stage: 1
+catalogs: [Production]
+keywords: [ppc, aql, trims, bowing, bow, skew, shrinkage, shrinkage test, shade, shade band, shading, gsm, gsm test, yarn, yarn count,
+           yern, epi, ppi, twisting, spirality, elongation, lab test, relaxation, head cutting, headcutting, blanket,
+           blanket wash, 4 point, four point, 4-point, visual inspection, dpphsy, fabric inspection, fabric test,
+           fabric tests, roll, rolls, lot, trims inspection, accessories inspection, trims aql, metal detection,
+           metal detector, nickel, nickel test, fabric receipt, fabric receipts, fabric received, lot approval,
+           roll approval]
+charter: agents/fabric_quality
+# The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
+where: 'Fabric and trims test records I can read are the PPC quality system''s — fabric received for inspection, head cutting with shade, shrinkage and bowing, 4-point inspection, lab, GSM, yarn-count and twisting tests, trims AQL inspection, metal detection and nickel tests; final garment AQL audits are not in any system yet.'
+# Words for the caption under a not-found answer: what to add to the question (app.py).
+slots_hint: 'a buyer, a file number such as FR-26-2493, a lot, or a date'
+# The view and column the capability reply reads "data on this server runs to …" from (agent/capabilities.py).
+freshness: { view: rag.vw_FabricRoll, column: HeadCuttingDate, database: Production }
+status: >-
+  Stage 1: fabric receipts, bowing, shrinkage, shade, 4-point inspection, yarn count, GSM, lab and twisting tests,
+  trims AQL inspection, metal detection and nickel tests answer from fixed tools with no model call. This server is
+  a copy of the PPC database restored from backup, so the newest records are from the day before the restore.

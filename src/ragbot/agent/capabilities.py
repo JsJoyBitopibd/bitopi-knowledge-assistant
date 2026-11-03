@@ -99,6 +99,20 @@ def _topic_agent(topic: str, agents: list[Any]) -> Optional[Any]:
     return best
 
 
+def _horizon(agent: Any, scope) -> str:
+    """Phase V: " Data on this server runs to 29 Oct 2026." for an agent whose YAML names a `freshness:` view (the
+    server is a copy restored from backup, data/freshness.py); "" when it names none or the read fails."""
+    spec = agent.extra.get("freshness") if agent is not None else None
+    if not isinstance(spec, dict) or not spec.get("view") or not spec.get("database"):
+        return ""
+    try:
+        from ..data.freshness import newest, show
+        d = newest(str(spec["database"]), str(spec["view"]), str(spec.get("column") or ""), scope=scope)
+    except Exception:
+        return ""
+    return f" Data on this server runs to {show(d)}." if d else ""
+
+
 def describe(topic: str, scope) -> tuple[str, list[str]]:
     """(the reply, up to three example questions as chips) for a question about what the assistant can tell."""
     agents, _ = _readable(scope)
@@ -106,7 +120,8 @@ def describe(topic: str, scope) -> tuple[str, list[str]]:
     if agent is not None:
         where = _plain(str(agent.extra.get("where") or ""))
         text = (prompt("meta_capability").strip().replace("{title}", agent.title)
-                .replace("{description}", _plain(agent.description)).replace("{where}", where))
+                .replace("{description}", _plain(agent.description) + _horizon(agent, scope)).replace("{where}", where))
         return re.sub(r"\n{3,}", "\n\n", text).strip(), examples(scope, agent.name)
-    lines = "\n".join(f"- **{a.title}** — {_plain(a.description)}" for a in agents if _plain(a.description))
+    lines = "\n".join(f"- **{a.title}** — {_plain(a.description)}{_horizon(a, scope)}" for a in agents
+                      if _plain(a.description))
     return prompt("meta_capability_all").strip().replace("{lines}", lines or "-"), examples(scope)

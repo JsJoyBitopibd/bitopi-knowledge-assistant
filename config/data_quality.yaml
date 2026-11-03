@@ -387,3 +387,40 @@ checks:
       FROM dbo.QualityInspection qi
       LEFT JOIN dbo.ProductionPlan p ON p.Id = qi.ProductionPlanId
       WHERE qi.InspectionDateOnly = (SELECT MAX(InspectionDateOnly) FROM dbo.QualityInspection)
+
+  # ---- Fabric & trims quality (PPC, Production database; Phase V)
+  - name: ppc_head_cutting_fresh
+    agent: fabric_quality
+    database: Production
+    kind: freshness
+    max_age_days: 3
+    what: Newest roll head-cut in the PPC quality system
+    fix: none expected on the live server; this server is a restored copy, so its age is the age of the last restore
+    sql: SELECT MAX(HeadCuttingDate) AS last_date FROM PPC.HeadCutting
+
+  - name: ppc_fabric_receipts_fresh
+    agent: fabric_quality
+    database: Production
+    kind: freshness
+    max_age_days: 3
+    what: Newest fabric receipt in the PPC quality system
+    fix: none expected on the live server; this server is a restored copy, so its age is the age of the last restore
+    sql: SELECT MAX(ReceiveDate) AS last_date FROM PPC.GoodsReceived
+
+  - name: ppc_visual_inspection_fresh
+    agent: fabric_quality
+    database: Production
+    kind: freshness
+    max_age_days: 3
+    what: Newest 4-point fabric inspection in the PPC quality system
+    fix: none expected on the live server; this server is a restored copy, so its age is the age of the last restore
+    sql: SELECT MAX(InspectionDate) AS last_date FROM PPC.VisualInspectionMaster
+
+  - name: ppc_trims_inspection_fresh
+    agent: fabric_quality
+    database: Production
+    kind: freshness
+    max_age_days: 3
+    what: Newest trims and accessories inspection in the PPC quality system
+    fix: none expected on the live server; this server is a restored copy, so its age is the age of the last restore
+    sql: SELECT MAX(DateAdded) AS last_date FROM PPC.TrimsAccsInspectionMaster

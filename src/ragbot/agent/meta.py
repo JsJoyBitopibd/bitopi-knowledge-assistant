@@ -41,8 +41,12 @@ _WRONG = re.compile(r"\byou\s+(?:showed|show|gave|give|sent|answered|returned|ar
                     r"|\bi\s+(?:asked|meant|wanted|said)\s+(?:for\s+|about\s+)?(?:the\s+)?(?P<asked2>[\w-]+)"
                     r"(?:,?\s+not\s+(?:the\s+)?(?P<shown2>[\w-]+))?", re.I)
 _CAPABILITY = re.compile(
-    r"\b(?:what|which)\s+(?:kind\s+of\s+|type\s+of\s+|sort\s+of\s+)?(?:information|info|data|databases?|access|"
-    r"questions?|reports?|things)\b(?:.*?\b(?:from|about|on|in)\s+(?:the\s+)?(?P<topic>[a-z][\w /&-]*?)\s*[?.!]*$)?"
+    r"\b(?:what|which)\s+(?:kind\s+of\s+|type\s+of\s+|sort\s+of\s+)?(?:information|info|datas?|databases?|access|"
+    # Phase V: "Which modules and datas you have access?" (asked live on 3 Nov 2026) ran SQL on the PPC menu table
+    r"questions?|reports?|things|modules?|areas?|systems?|sources?|subjects?|topics?)"
+    r"(?:\s+(?:and|or|&)\s+(?:datas?|information|info|access|databases?|reports?))?"
+    r"\b(?:.*?\b(?:from|about|on|in)\s+(?:the\s+)?(?P<topic>[a-z][\w /&-]*?)\s*[?.!]*$)?"
+    r"|\bwhat\s+(?:are\s+you|is\s+this(?:\s+assistant)?)\s+connected\s+to\b"
     r"|^\s*(?:tell\s+me\s+)?(?:about|what\s+(?:is|about))\s+(?:the\s+)?(?P<topic2>inventory|hr|hrms|quality|production|"
     r"orders?|lcs?|finance|sourcing|stores?|vistaq|planning)\s*(?:data|database|module)?\s*[?.!]*$"
     r"|\bwhat\s+can\s+(?:i|you)\s+(?:ask|get|find|tell|show|answer)\b(?:.*?\b(?:from|about|on|in)\s+(?:the\s+)?"

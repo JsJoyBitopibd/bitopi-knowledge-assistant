@@ -175,6 +175,10 @@ question uses, then to more keyword hits. The SQL model is shown the best `data.
 offers the most of the tables it names; bare table names are qualified with `dbo.` and `TOP (200)` is added. It
 is never rewritten and never scored on its words. No catalog offers its tables → "System doesn't have the data."
 
+Optional per view (Phase V): `freshness_columns: [DateCol, ...]` — the date columns whose newest value may be read for
+the "newest record on this server" sentence (the first is the default; each must be one of the view's `columns`). A
+fixed tool names which one with `freshness: <column>`. Only list columns where a `MAX()` over the view is cheap.
+
 ## 3. Fixed tools — `config/fixed_tools.yaml`
 
 Hand-written, parameterised SQL for frequent questions; no model-generated SQL. Matched by
@@ -230,6 +234,16 @@ regex on the (rewritten) question; parameters extracted by regex or asked back.
   that empty first try, never on the `both` route. If still nothing: "System doesn't have the data. I checked
   <system> for '<the user's own words>' and found no matching records…" — never a column, table or recorded
   value in the sentence; the recorded values are offered as questions to click.
+
+- When a dated answer is empty and the view's newest record is older than the period asked (Phase V3,
+  `src/ragbot/data/freshness.py`): "System doesn't have the data. I checked <system> on <day> and found no records;
+  the newest record on this server is from <date>, so ask about that day or earlier." — this server is a copy
+  restored from backups, so "yesterday" is often past its newest row. The newest date is read with one cached
+  `SELECT MAX(<column>)` over a view column listed in its `freshness_columns:`, under the user's scope. The same
+  question for that day is offered as a chip.
+- The sentence after "System doesn't have the data." is never the answer model's: when the model declines, the area's
+  `where:` sentence (config/agents/*.yaml) or prompts/not_found_general.txt replaces whatever it wrote (logged in
+  the turn's warnings).
 
 ## 5a. Cross-database questions (Phase P3) — every combination, decided
 

@@ -15,3 +15,7 @@
 {"q": "which companies are in the inventory system", "db": "Inventory", "accept": ["dbo.vwCompany_Info"]}
 {"q": "stock ledger transactions of an item", "db": "Inventory", "accept": ["dbo.StockMaster", "dbo.StockChild", "dbo.vw_StockTrans"]}
 {"q": "issues from the maintenance store this month", "db": "Inventory", "accept": ["dbo.IssueMaster", "dbo.IssueChild", "dbo.VWIssue", "dbo.UserDefined"]}
+{"q": "Show me yesterday's bowing test report", "db": "Production", "accept": ["PPC.HeadCutting", "PPC.VWHeadCutting"]}
+{"q": "yarn count of the fabric", "db": "Production", "accept": ["PPC.FabricYernCount"]}
+{"q": "fabric goods received in PPC yesterday", "db": "Production", "accept": ["PPC.GoodsReceived"]}
+{"q": "trims inspection AQL result", "db": "Production", "accept": ["PPC.TrimsAccsInspectionMaster"]}

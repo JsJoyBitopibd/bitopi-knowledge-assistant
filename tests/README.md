@@ -1,4 +1,4 @@
-- golden.jsonl: end-to-end cases for scripts/eval.py. Fields: id, kind (direct|paraphrase|code|table|data|both|not_found|refuse|follow_up),
+- golden.jsonl: end-to-end cases for scripts/eval.py. Fields: id, kind (direct|paraphrase|code|table|data|both|not_found|refuse|follow_up|chitchat|conversation),
   q, expected (short plain sentence), source+page (PDF cases), view (data cases), category (optional filter),
   expected_not_found (true for cases the system must decline). The seven rows here are TEMPLATES that
   reference an invented SOP; replace them with cases from your real PDFs and views before trusting the scores.

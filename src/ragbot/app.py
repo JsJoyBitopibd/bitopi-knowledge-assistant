@@ -733,9 +733,11 @@ def answer_body(t: dict, i: int, latest: bool, shown: int | None, a=None) -> Non
     refs, results = t.get("refs") or [], t.get("results") or []
     ui.result_tables(refs, results, t["text"], mark)
     if t.get("not_found"):
-        st.caption("Try one of the questions below, or add an order number, factory or date to your question."
+        # Phase V: the domain agent names what its questions need ("a buyer, a file number such as FR-26-2493, …")
+        what = view.slots_hint(t.get("agent") or "") or "an order number, factory or date"
+        st.caption(f"Try one of the questions below, or add {what} to your question."
                    if t.get("follow_ups") else
-                   "Adding an order number, factory or date to your question, or asking it another way, often helps.")
+                   f"Adding {what} to your question, or asking it another way, often helps.")
     with st.container(horizontal=True, key=f"actions_{cid}_{i}", vertical_alignment="center"):
         with st.popover("Copy", type="tertiary", icon=":material/content_copy:"):
             st.code(t["text"], language=None, wrap_lines=True)
@@ -872,7 +874,8 @@ def conversation(q: str | None, refresh: bool) -> None:
                     "follow_ups": a.follow_ups, "request_id": a.request_id, "seconds": secs,
                     "not_found": a.not_found, "error_kind": a.error_kind, "scope": scope.key(), "route": a.route,
                     "rewritten": a.rewritten_question, "kind": a.kind, "refine_suggestions": a.refine_suggestions,
-                    "clarify": a.clarify, "repeat_of": a.repeat_of, "prior_request_id": a.prior_request_id}
+                    "clarify": a.clarify, "repeat_of": a.repeat_of, "prior_request_id": a.prior_request_id,
+                    "agent": a.agent}
             prev = next((t for t in reversed(st.session_state.history)
                          if a.repeat_of and t.get("request_id") == a.repeat_of), None)
             if prev is not None:

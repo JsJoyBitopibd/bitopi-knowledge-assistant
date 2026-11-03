@@ -3,12 +3,12 @@ name: quality
 title: Quality agent
 description: Sewing-line quality live from VistaQ — pieces checked, defects, defective and rejected pieces, DHU, QC stages and corrective actions per line and factory.
 stage: 1
-catalogs: [VistaQ_Default_RHL, PlanningTNA, BiMob, Production]
+catalogs: [VistaQ_Default_RHL, PlanningTNA, BiMob]   # Production (PPC fabric & trims tests) belongs to fabric_quality since Phase V
 keywords: [dhu, defect, defects, defective, rejection, rejections, reject, rejected, rework, alteration, alterations,
            qc, quality, inspection, inspected, aql, audit, capa, corrective, first pass, vistaq]
 charter: agents/quality
 # The sentence after "System doesn't have the data." when a question looks like this agent's (agent/not_found.py).
-where: 'Quality data I can read is VistaQ''s live line inspections (defects, rejects, DHU, QC stages and corrective actions); AQL and buyer audit results are not in any system yet, so the QC department keeps them.'
+where: 'Quality data I can read is VistaQ''s live line inspections (defects, rejects, DHU, QC stages and corrective actions); fabric and trims tests, trims AQL included, are in the PPC quality system; final garment AQL and buyer audit results are not in any system yet, so the QC department keeps them.'
 status: >-
   Line quality is live from VistaQ for RHL, TAL and BGL (inspections since 22 May 2025, corrective actions since late
   July 2026). No AQL or final-audit results are in any database yet.

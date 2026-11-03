@@ -82,6 +82,11 @@ exclude_tables:
 # tool uses. Hidden for everyone; the 7 it does read are decided when the people-data rule is armed.
 - 'dbo.employeewiseskillinventory'
 - 'dbo.pnt_employee'
+# Phase V, 2026-11-03: a handful of test rows copied from the PPC quality system (the live tables are in
+# Production, schema PPC); offered here they steal "bowing test" / "visual inspection" questions.
+- 'dbo.ppc_*'
+- 'dbo.vwppcheadcutting'
+- 'dbo.visualinspection*'
 rules:
 - Use TOP (n), never LIMIT. Use half-open date ranges with literal dates (col >= '2026-09-01' AND col < '2026-10-01').
 - Today is {today}. "This week" = Monday of this week to next Monday; "next week" = next Monday to the following
