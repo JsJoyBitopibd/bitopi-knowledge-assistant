@@ -8,6 +8,12 @@ each phase is in `docs/ROADMAP.md`.
 
 ## [Unreleased]
 
+## [1.18.0] — 2026-11-03 — Phase V: the PPC fabric & trims quality data, and an honest not-found
+
+Gate: the golden set in three slices on 3 Nov after the quota reset — cases 1–100 against `20261030T1528` hit 85 → 96 %,
+correct 82 → 92 %, faithful, citations, not-found and refuse 100 %, no drop; cases 101–116 unchanged at 100 %; the ten
+new cases 100 %. Leak suite 65 cases, 0 leaks. 1,656 tests.
+
 ### Added
 - **The PPC fabric and trims quality data can be asked about** (Phase V). Bowing, shrinkage and shade per roll,
   4-point inspections, yarn count (EPI / PPI), GSM, lab and twisting tests, trims and accessories AQL inspections,
